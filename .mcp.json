@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "semantiq": {
+      "command": "/Users/nicolas/Desktop/adswizard/ai/Semantiq/target/release/semantiq",
+      "args": ["serve", "--project", "/Users/nicolas/Desktop/adswizard/ai/Semantiq"]
+    }
+  }
+}

@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Semantiq binary not found. Please run 'npm install' again."
+exit 1
