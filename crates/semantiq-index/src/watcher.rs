@@ -102,8 +102,6 @@ impl FileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn test_watcher_creation() {
