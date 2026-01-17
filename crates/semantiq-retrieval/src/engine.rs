@@ -5,15 +5,16 @@ use ignore::WalkBuilder;
 use semantiq_index::IndexStore;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct RetrievalEngine {
-    store: IndexStore,
+    store: Arc<IndexStore>,
     root_path: String,
 }
 
 impl RetrievalEngine {
-    pub fn new(store: IndexStore, root_path: &str) -> Self {
+    pub fn new(store: Arc<IndexStore>, root_path: &str) -> Self {
         Self {
             store,
             root_path: root_path.to_string(),
@@ -24,32 +25,35 @@ impl RetrievalEngine {
         let start = Instant::now();
         let query = Query::new(query_text);
 
+        // Cap limit to prevent excessive memory usage
+        let safe_limit = limit.min(500);
+
         let mut all_results = Vec::new();
 
-        // 1. Symbol search (FTS)
-        let symbol_results = self.search_symbols(&query, limit)?;
+        // 1. Symbol search (FTS) - prioritize symbol matches
+        let symbol_results = self.search_symbols(&query, safe_limit)?;
         all_results.extend(symbol_results);
 
-        // 2. Text search (grep-like)
-        let text_results = self.search_text(&query, limit)?;
-        all_results.extend(text_results);
+        // 2. Text search (grep-like) - only if we need more results
+        if all_results.len() < safe_limit {
+            let text_results = self.search_text(&query, safe_limit - all_results.len())?;
+            all_results.extend(text_results);
+        }
 
-        // Deduplicate and sort by score
+        // Sort by score (highest first), use total_cmp for safe NaN handling
         all_results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Remove duplicates based on file_path + start_line
+        // Remove duplicates based on file_path + start_line + content hash
         let mut seen = std::collections::HashSet::new();
         all_results.retain(|r| {
-            let key = format!("{}:{}", r.file_path, r.start_line);
+            let key = format!("{}:{}:{}", r.file_path, r.start_line, r.content.len());
             seen.insert(key)
         });
 
         // Limit results
-        all_results.truncate(limit);
+        all_results.truncate(safe_limit);
 
         let search_time = start.elapsed().as_millis() as u64;
         Ok(SearchResults::new(
@@ -201,13 +205,38 @@ impl RetrievalEngine {
                 let file_path = self.get_file_path(symbol.file_id)?;
                 let content = symbol.signature.clone().unwrap_or_else(|| symbol.name.clone());
 
-                let score = if symbol.name.to_lowercase() == term.to_lowercase() {
-                    1.0
-                } else if symbol.name.to_lowercase().starts_with(&term.to_lowercase()) {
-                    0.8
+                // Improved scoring algorithm
+                let name_lower = symbol.name.to_lowercase();
+                let term_lower = term.to_lowercase();
+
+                let mut score = if name_lower == term_lower {
+                    1.0 // Exact match
+                } else if name_lower.starts_with(&term_lower) {
+                    0.85 // Prefix match
+                } else if name_lower.contains(&term_lower) {
+                    0.7 // Contains match
                 } else {
-                    0.5
+                    0.5 // FTS match
                 };
+
+                // Boost score based on symbol kind (functions/methods are usually more important)
+                let kind_boost = match symbol.kind.as_str() {
+                    "function" | "method" => 1.15,
+                    "class" | "struct" | "trait" | "interface" => 1.1,
+                    "enum" | "type" => 1.05,
+                    "module" => 1.0,
+                    "constant" => 0.95,
+                    "variable" => 0.9,
+                    _ => 1.0,
+                };
+                score *= kind_boost;
+
+                // Slight boost for shorter names (more specific matches)
+                let length_factor = 1.0 + (1.0 / (symbol.name.len() as f32 + 5.0));
+                score *= length_factor;
+
+                // Cap score at 1.0
+                score = score.min(1.0);
 
                 results.push(
                     SearchResult::new(
@@ -294,19 +323,32 @@ impl RetrievalEngine {
 
         for (line_num, line) in content.lines().enumerate() {
             let line_lower = line.to_lowercase();
+            let line_trimmed = line.trim();
+
+            // Skip empty lines and comments
+            if line_trimmed.is_empty() || line_trimmed.starts_with("//") || line_trimmed.starts_with('#') {
+                continue;
+            }
 
             for term in &terms {
                 let term_lower = term.to_lowercase();
-                if line_lower.contains(&term_lower) {
-                    let score = if line_lower == term_lower {
-                        1.0
-                    } else if line_lower.starts_with(&term_lower) {
+                if let Some(pos) = line_lower.find(&term_lower) {
+                    // Improved scoring based on match quality
+                    let mut score = if line_lower.trim() == term_lower {
+                        0.9 // Exact line match (but lower than symbol matches)
+                    } else if pos == 0 || !line_lower.chars().nth(pos.saturating_sub(1)).map(|c| c.is_alphanumeric()).unwrap_or(false) {
+                        // Word boundary match (higher score)
                         0.7
                     } else {
+                        // Substring match
                         0.5
                     };
 
-                    matches.push((line_num + 1, line.trim().to_string(), score));
+                    // Boost if match is near the beginning of the line
+                    let position_factor = 1.0 - (pos as f32 / (line.len() as f32 + 10.0)) * 0.2;
+                    score *= position_factor;
+
+                    matches.push((line_num + 1, line_trimmed.to_string(), score));
                     break;
                 }
             }

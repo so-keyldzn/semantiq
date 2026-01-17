@@ -127,7 +127,7 @@ impl ImportExtractor {
             return None;
         }
 
-        path.split("::").last().map(String::from)
+        path.rsplit("::").next().map(String::from)
     }
 
     fn extract_ts_import(node: &Node, source: &str) -> Option<Import> {
@@ -147,13 +147,11 @@ impl ImportExtractor {
 
                 let kind = if path.starts_with('.') {
                     ImportKind::Local
-                } else if path.starts_with('@') || !path.contains('/') {
-                    ImportKind::External
                 } else {
                     ImportKind::External
                 };
 
-                let name = path.split('/').last().map(String::from);
+                let name = path.split('/').next_back().map(String::from);
 
                 return Some(Import {
                     path,
@@ -180,7 +178,7 @@ impl ImportExtractor {
                     if child.kind() == "dotted_name" {
                         let path = source[child.start_byte()..child.end_byte()].to_string();
                         let kind = Self::classify_python_import(&path);
-                        let name = path.split('.').last().map(String::from);
+                        let name = path.split('.').next_back().map(String::from);
 
                         return Some(Import {
                             path,
@@ -207,7 +205,7 @@ impl ImportExtractor {
                         } else {
                             Self::classify_python_import(&path)
                         };
-                        let name = path.split('.').last().map(String::from);
+                        let name = path.split('.').next_back().map(String::from);
 
                         return Some(Import {
                             path,
@@ -265,7 +263,7 @@ impl ImportExtractor {
                     ImportKind::Std
                 };
 
-                let name = path.split('/').last().map(String::from);
+                let name = path.split('/').next_back().map(String::from);
 
                 return Some(Import {
                     path,
@@ -300,7 +298,7 @@ impl ImportExtractor {
                     ImportKind::External
                 };
 
-                let name = path.split('.').last().map(String::from);
+                let name = path.split('.').next_back().map(String::from);
 
                 return Some(Import {
                     path,
@@ -330,7 +328,7 @@ impl ImportExtractor {
                 "string_literal" => {
                     let path_text = &source[child.start_byte()..child.end_byte()];
                     let path = path_text.trim_matches('"').to_string();
-                    let name = path.split('/').last().map(String::from);
+                    let name = path.split('/').next_back().map(String::from);
 
                     return Some(Import {
                         path,
@@ -343,7 +341,7 @@ impl ImportExtractor {
                 "system_lib_string" => {
                     let path_text = &source[child.start_byte()..child.end_byte()];
                     let path = path_text.trim_matches(|c| c == '<' || c == '>').to_string();
-                    let name = path.split('/').last().map(String::from);
+                    let name = path.split('/').next_back().map(String::from);
 
                     return Some(Import {
                         path,
@@ -374,7 +372,7 @@ impl ImportExtractor {
 
         // Parse "use Namespace\Class;" or "use Namespace\Class as Alias;"
         let path = Self::parse_php_use_path(text)?;
-        let name = path.split('\\').last().map(String::from);
+        let name = path.split('\\').next_back().map(String::from);
 
         // PHP doesn't have a standard library in the same sense, most are external
         let kind = ImportKind::External;
