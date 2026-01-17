@@ -1,0 +1,25 @@
+[package]
+name = "semantiq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "semantiq"
+path = "src/main.rs"
+
+[dependencies]
+semantiq-mcp = { path = "../semantiq-mcp" }
+semantiq-index = { path = "../semantiq-index" }
+semantiq-parser = { path = "../semantiq-parser" }
+semantiq-retrieval = { path = "../semantiq-retrieval" }
+
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rmcp.workspace = true
+ignore.workspace = true

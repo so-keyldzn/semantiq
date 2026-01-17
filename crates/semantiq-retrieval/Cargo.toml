@@ -1,0 +1,19 @@
+[package]
+name = "semantiq-retrieval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+semantiq-index = { path = "../semantiq-index" }
+semantiq-parser = { path = "../semantiq-parser" }
+semantiq-embeddings = { path = "../semantiq-embeddings" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ignore.workspace = true
+glob.workspace = true

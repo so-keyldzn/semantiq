@@ -1,0 +1,19 @@
+[package]
+name = "semantiq-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+semantiq-index = { path = "../semantiq-index" }
+semantiq-retrieval = { path = "../semantiq-retrieval" }
+semantiq-parser = { path = "../semantiq-parser" }
+semantiq-embeddings = { path = "../semantiq-embeddings" }
+
+rmcp.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
