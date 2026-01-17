@@ -22,11 +22,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicololau/semantiq.git"
+    "url": "git+https://github.com/so-keyldzn/semantiq.git"
   },
-  "homepage": "https://github.com/nicololau/semantiq",
+  "homepage": "https://github.com/so-keyldzn/semantiq",
   "bugs": {
-    "url": "https://github.com/nicololau/semantiq/issues"
+    "url": "https://github.com/so-keyldzn/semantiq/issues"
   },
   "engines": {
     "node": ">=16"
