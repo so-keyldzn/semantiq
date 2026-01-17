@@ -1,0 +1,23 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+.semantiq.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ONNX models (download separately)
+models/
+*.onnx
