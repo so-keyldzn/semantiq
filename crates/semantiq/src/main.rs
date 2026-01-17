@@ -119,6 +119,9 @@ async fn serve(project: Option<PathBuf>, database: Option<PathBuf>) -> Result<()
 
     let server = SemantiqServer::new(&db_path, project_root.to_str().unwrap())?;
 
+    // Start auto-indexer in background
+    server.start_auto_indexer();
+
     // Run MCP server on stdio
     let service = server.serve(rmcp::transport::stdio()).await?;
 

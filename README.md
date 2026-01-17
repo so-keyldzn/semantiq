@@ -7,14 +7,7 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 ## Installation
 
 ```bash
-# Homebrew (macOS/Linux)
-brew install so-keyldzn/tap/semantiq
-
-# npm (cross-platform)
-npm i -g semantiq-mcp
-
-# Cargo (Rust)
-cargo install semantiq
+npm install -g semantiq-mcp
 ```
 
 ## Setup (30 seconds)

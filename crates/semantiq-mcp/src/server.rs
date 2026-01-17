@@ -4,16 +4,19 @@ use rmcp::{
     tool,
     ServerHandler,
 };
-use semantiq_index::IndexStore;
+use semantiq_index::{AutoIndexer, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::info;
 
 #[derive(Clone)]
 pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
+    auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
 }
 
 impl SemantiqServer {
@@ -28,7 +31,22 @@ impl SemantiqServer {
             project_root,
         ));
 
-        Ok(Self { engine, store })
+        // Initialize auto-indexer
+        let auto_indexer = match AutoIndexer::new(
+            Arc::new(IndexStore::open(db_path)?),
+            PathBuf::from(project_root),
+        ) {
+            Ok(indexer) => {
+                info!("Auto-indexing enabled");
+                Some(Arc::new(Mutex::new(indexer)))
+            }
+            Err(e) => {
+                info!("Auto-indexing disabled: {}", e);
+                None
+            }
+        };
+
+        Ok(Self { engine, store, auto_indexer })
     }
 
     pub fn store(&self) -> &Arc<IndexStore> {
@@ -37,6 +55,28 @@ impl SemantiqServer {
 
     pub fn engine(&self) -> &Arc<RetrievalEngine> {
         &self.engine
+    }
+
+    /// Start the auto-indexing background task
+    pub fn start_auto_indexer(&self) {
+        if let Some(ref auto_indexer) = self.auto_indexer {
+            let indexer = Arc::clone(auto_indexer);
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(2));
+
+                loop {
+                    interval.tick().await;
+
+                    let indexer = indexer.lock().await;
+                    if let Err(e) = indexer.process_events() {
+                        tracing::error!("Auto-indexer error: {}", e);
+                    }
+                }
+            });
+
+            info!("Auto-indexer background task started");
+        }
     }
 }
 
