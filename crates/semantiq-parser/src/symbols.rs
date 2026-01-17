@@ -124,6 +124,7 @@ impl SymbolExtractor {
             Language::Go => Self::go_symbol_kind(node_kind),
             Language::Java => Self::java_symbol_kind(node_kind),
             Language::C | Language::Cpp => Self::c_symbol_kind(node_kind),
+            Language::Php => Self::php_symbol_kind(node_kind),
         }
     }
 
@@ -203,6 +204,21 @@ impl SymbolExtractor {
         }
     }
 
+    fn php_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function_definition" => Some(SymbolKind::Function),
+            "method_declaration" => Some(SymbolKind::Method),
+            "class_declaration" => Some(SymbolKind::Class),
+            "interface_declaration" => Some(SymbolKind::Interface),
+            "trait_declaration" => Some(SymbolKind::Trait),
+            "enum_declaration" => Some(SymbolKind::Enum),
+            "namespace_definition" => Some(SymbolKind::Module),
+            "const_declaration" => Some(SymbolKind::Constant),
+            "namespace_use_declaration" => Some(SymbolKind::Import),
+            _ => None,
+        }
+    }
+
     fn extract_name(node: &Node, source: &str, language: Language) -> Option<String> {
         // Try to find the identifier child
         let name_field = match language {
@@ -212,6 +228,7 @@ impl SymbolExtractor {
             Language::Go => "name",
             Language::Java => "name",
             Language::C | Language::Cpp => "declarator",
+            Language::Php => "name",
         };
 
         if let Some(name_node) = node.child_by_field_name(name_field) {
