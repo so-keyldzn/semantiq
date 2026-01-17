@@ -1,0 +1,18 @@
+[package]
+name = "semantiq-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+semantiq-parser = { path = "../semantiq-parser" }
+
+rusqlite.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+notify.workspace = true
+ignore.workspace = true
