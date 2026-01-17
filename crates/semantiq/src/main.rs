@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ignore::WalkBuilder;
 use rmcp::ServiceExt;
@@ -429,8 +429,9 @@ async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Result<
         anyhow::bail!("Database not found: {:?}. Run 'semantiq index' first.", db_path);
     }
 
-    let store = IndexStore::open(&db_path)?;
-    let engine = semantiq_retrieval::RetrievalEngine::new(store, cwd.to_str().unwrap());
+    let store = std::sync::Arc::new(IndexStore::open(&db_path)?);
+    let cwd_str = cwd.to_str().context("Current directory path contains invalid UTF-8")?;
+    let engine = semantiq_retrieval::RetrievalEngine::new(store, cwd_str);
 
     let results = engine.search(query, limit)?;
 
