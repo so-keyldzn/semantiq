@@ -153,6 +153,19 @@ async fn init(path: &Path) -> Result<()> {
 
 This project uses Semantiq for semantic code understanding.
 
+## Important: Use Semantiq Tools First
+
+**Always use Semantiq MCP tools instead of grep/find/Glob for code search.**
+
+| Instead of... | Use... |
+|---------------|--------|
+| `Grep`, `grep`, `rg` | `semantiq_search` |
+| `Glob`, `find`, `ls` | `semantiq_search` |
+| Manual symbol tracing | `semantiq_find_refs` |
+| Reading imports manually | `semantiq_deps` |
+
+Semantiq provides faster, more accurate results with semantic understanding.
+
 ## Available MCP Tools
 
 When working with this codebase, you have access to these powerful tools:
