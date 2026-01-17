@@ -6,7 +6,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const VERSION = require('../package.json').version;
-const REPO = 'nicololau/semantiq';
+const REPO = 'so-keyldzn/semantiq';
 
 function getPlatform() {
   const platform = process.platform;
@@ -91,7 +91,7 @@ async function install() {
     console.error('Failed to install Semantiq:', error.message);
     console.error('');
     console.error('Alternative installation methods:');
-    console.error('  brew install nicololau/tap/semantiq');
+    console.error('  brew install so-keyldzn/tap/semantiq');
     console.error('  cargo install semantiq');
     process.exit(1);
   }

@@ -21,3 +21,6 @@ Thumbs.db
 # ONNX models (download separately)
 models/
 *.onnx
+
+# Documentation (private)
+docs/
