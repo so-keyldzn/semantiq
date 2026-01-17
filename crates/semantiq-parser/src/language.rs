@@ -13,6 +13,7 @@ pub enum Language {
     Java,
     C,
     Cpp,
+    Php,
 }
 
 impl Language {
@@ -26,6 +27,7 @@ impl Language {
             "java" => Some(Language::Java),
             "c" | "h" => Some(Language::C),
             "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Some(Language::Cpp),
+            "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => Some(Language::Php),
             _ => None,
         }
     }
@@ -46,6 +48,7 @@ impl Language {
             Language::Java => "java",
             Language::C => "c",
             Language::Cpp => "cpp",
+            Language::Php => "php",
         }
     }
 
@@ -59,6 +62,7 @@ impl Language {
             Language::Java => &["java"],
             Language::C => &["c", "h"],
             Language::Cpp => &["cpp", "cc", "cxx", "hpp", "hxx", "hh"],
+            Language::Php => &["php", "phtml", "php3", "php4", "php5", "php7", "phps"],
         }
     }
 }
@@ -80,6 +84,7 @@ impl LanguageSupport {
         Self::add_parser(&mut parsers, Language::Java, tree_sitter_java::LANGUAGE.into())?;
         Self::add_parser(&mut parsers, Language::C, tree_sitter_c::LANGUAGE.into())?;
         Self::add_parser(&mut parsers, Language::Cpp, tree_sitter_cpp::LANGUAGE.into())?;
+        Self::add_parser(&mut parsers, Language::Php, tree_sitter_php::LANGUAGE_PHP.into())?;
 
         Ok(Self { parsers })
     }
@@ -114,6 +119,7 @@ impl LanguageSupport {
             Language::Java,
             Language::C,
             Language::Cpp,
+            Language::Php,
         ]
     }
 }

@@ -133,6 +133,10 @@ impl ChunkExtractor {
                 kind,
                 "function_definition" | "struct_specifier" | "class_specifier"
             ),
+            Language::Php => matches!(
+                kind,
+                "function_definition" | "method_declaration" | "class_declaration" | "interface_declaration" | "trait_declaration"
+            ),
         }
     }
 
