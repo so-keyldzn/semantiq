@@ -1,0 +1,22 @@
+[package]
+name = "semantiq-embeddings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Optional ONNX dependencies
+ort = { version = "2.0.0-rc.9", optional = true }
+tokenizers = { version = "0.21", optional = true }
+ndarray = { version = "0.16", optional = true }
