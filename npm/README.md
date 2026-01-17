@@ -1,4 +1,4 @@
-# Semantiq
+# Semantiq MCP
 
 **One MCP Server. Every AI Coding Tool.**
 
@@ -7,19 +7,12 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 ## Installation
 
 ```bash
-# Homebrew (macOS/Linux)
-brew install so-keyldzn/tap/semantiq
-
-# npm (cross-platform)
-npm i -g semantiq-mcp
-
-# Cargo (Rust)
-cargo install semantiq
+npm install -g semantiq-mcp
 ```
 
-## Setup (30 seconds)
+## Setup
 
-Add to your MCP config:
+Add to your MCP config (Claude Code, Cursor, etc.):
 
 ```json
 {
@@ -59,6 +52,16 @@ semantiq search "authentication handler"
 semantiq stats
 ```
 
+## Supported Languages
+
+- Rust
+- TypeScript / JavaScript
+- Python
+- Go
+- Java
+- C / C++
+- PHP
+
 ## Compatibility
 
 Works with all MCP-compatible tools:
@@ -69,6 +72,11 @@ Works with all MCP-compatible tools:
 - JetBrains IDEs (2025.2+)
 - VS Code
 - Codex CLI / Aider
+
+## Links
+
+- [GitHub Repository](https://github.com/so-keyldzn/semantiq)
+- [Report Issues](https://github.com/so-keyldzn/semantiq/issues)
 
 ## License
 
