@@ -231,15 +231,22 @@ impl SymbolExtractor {
             Language::Php => "name",
         };
 
+        let source_bytes = source.as_bytes();
+
         if let Some(name_node) = node.child_by_field_name(name_field) {
-            return Some(source[name_node.start_byte()..name_node.end_byte()].to_string());
+            // Use utf8_text for safe UTF-8 handling
+            if let Ok(text) = name_node.utf8_text(source_bytes) {
+                return Some(text.to_string());
+            }
         }
 
         // Fallback: look for identifier child
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "identifier" || child.kind() == "type_identifier" {
-                return Some(source[child.start_byte()..child.end_byte()].to_string());
+                if let Ok(text) = child.utf8_text(source_bytes) {
+                    return Some(text.to_string());
+                }
             }
         }
 
@@ -247,13 +254,16 @@ impl SymbolExtractor {
     }
 
     fn extract_signature(node: &Node, source: &str, _language: Language) -> Option<String> {
-        // Get the first line of the node as a simple signature
-        let text = &source[node.start_byte()..node.end_byte()];
+        let source_bytes = source.as_bytes();
+
+        // Get the first line of the node as a simple signature using safe UTF-8 handling
+        let text = node.utf8_text(source_bytes).ok()?;
         let first_line = text.lines().next()?;
 
-        // Truncate if too long
-        let sig = if first_line.len() > 200 {
-            format!("{}...", &first_line[..200])
+        // Truncate if too long (handle multi-byte chars safely)
+        let sig = if first_line.chars().count() > 200 {
+            let truncated: String = first_line.chars().take(200).collect();
+            format!("{}...", truncated)
         } else {
             first_line.to_string()
         };
@@ -262,14 +272,17 @@ impl SymbolExtractor {
     }
 
     fn extract_doc_comment(node: &Node, source: &str) -> Option<String> {
+        let source_bytes = source.as_bytes();
+
         // Look for preceding comment siblings
         let mut prev = node.prev_sibling();
         let mut comments = Vec::new();
 
         while let Some(sibling) = prev {
             if sibling.kind().contains("comment") {
-                let comment = &source[sibling.start_byte()..sibling.end_byte()];
-                comments.push(comment.to_string());
+                if let Ok(comment) = sibling.utf8_text(source_bytes) {
+                    comments.push(comment.to_string());
+                }
                 prev = sibling.prev_sibling();
             } else {
                 break;

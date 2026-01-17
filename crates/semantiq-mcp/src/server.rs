@@ -25,15 +25,16 @@ impl SemantiqServer {
         info!("Database path: {:?}", db_path);
         info!("Project root: {}", project_root);
 
+        // Share a single IndexStore instance across all components
         let store = Arc::new(IndexStore::open(db_path)?);
         let engine = Arc::new(RetrievalEngine::new(
-            IndexStore::open(db_path)?,
+            Arc::clone(&store),
             project_root,
         ));
 
-        // Initialize auto-indexer
+        // Initialize auto-indexer with the same shared store
         let auto_indexer = match AutoIndexer::new(
-            Arc::new(IndexStore::open(db_path)?),
+            Arc::clone(&store),
             PathBuf::from(project_root),
         ) {
             Ok(indexer) => {
