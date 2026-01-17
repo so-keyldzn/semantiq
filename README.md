@@ -7,7 +7,11 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 ## Installation
 
 ```bash
+# npm
 npm install -g semantiq-mcp
+
+# Cargo (from source)
+cargo install --git https://github.com/so-keyldzn/semantiq.git
 ```
 
 ## Quick Start (10 seconds)
