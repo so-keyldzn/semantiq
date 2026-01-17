@@ -69,6 +69,7 @@ impl ImportExtractor {
             Language::Go => Self::extract_go_import(node, source),
             Language::Java => Self::extract_java_import(node, source),
             Language::C | Language::Cpp => Self::extract_c_import(node, source),
+            Language::Php => Self::extract_php_import(node, source),
         }
     }
 
@@ -357,6 +358,50 @@ impl ImportExtractor {
         }
 
         None
+    }
+
+    fn extract_php_import(node: &Node, source: &str) -> Option<Import> {
+        // Handle "use" statements (namespace imports)
+        if node.kind() != "namespace_use_declaration" {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        // Get the full text of the use statement
+        let text = &source[node.start_byte()..node.end_byte()];
+
+        // Parse "use Namespace\Class;" or "use Namespace\Class as Alias;"
+        let path = Self::parse_php_use_path(text)?;
+        let name = path.split('\\').last().map(String::from);
+
+        // PHP doesn't have a standard library in the same sense, most are external
+        let kind = ImportKind::External;
+
+        Some(Import {
+            path,
+            name,
+            kind,
+            start_line,
+            end_line,
+        })
+    }
+
+    fn parse_php_use_path(text: &str) -> Option<String> {
+        let text = text.trim();
+        // Remove "use " prefix and ";" suffix
+        let text = text.strip_prefix("use ")?.trim();
+        let text = text.strip_suffix(';').unwrap_or(text).trim();
+
+        // Handle "as Alias" clause
+        let path = if let Some(idx) = text.find(" as ") {
+            &text[..idx]
+        } else {
+            text
+        };
+
+        Some(path.trim().to_string())
     }
 }
 
