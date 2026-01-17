@@ -8,7 +8,7 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 
 ```bash
 # Homebrew (macOS/Linux)
-brew install nicololau/tap/semantiq
+brew install so-keyldzn/tap/semantiq
 
 # npm (cross-platform)
 npm i -g semantiq
