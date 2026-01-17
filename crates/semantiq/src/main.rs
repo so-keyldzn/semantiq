@@ -4,7 +4,7 @@ use ignore::WalkBuilder;
 use rmcp::ServiceExt;
 use semantiq_index::IndexStore;
 use semantiq_mcp::SemantiqServer;
-use semantiq_parser::{ChunkExtractor, Language, LanguageSupport, SymbolExtractor};
+use semantiq_parser::{ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
@@ -148,6 +148,7 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
     let mut file_count = 0;
     let mut symbol_count = 0;
     let mut chunk_count = 0;
+    let mut dep_count = 0;
 
     // Walk the directory
     let walker = WalkBuilder::new(&project_root)
@@ -222,11 +223,25 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
                 store.insert_chunks(file_id, &chunks)?;
                 chunk_count += chunks.len();
 
+                // Extract imports and store as dependencies
+                let imports = ImportExtractor::extract(&tree, &content, language)?;
+                store.delete_dependencies(file_id)?;
+                for import in &imports {
+                    store.insert_dependency(
+                        file_id,
+                        &import.path,
+                        import.name.as_deref(),
+                        import.kind.as_str(),
+                    )?;
+                }
+                dep_count += imports.len();
+
                 debug!(
-                    "Indexed {}: {} symbols, {} chunks",
+                    "Indexed {}: {} symbols, {} chunks, {} deps",
                     rel_path,
                     symbols.len(),
-                    chunks.len()
+                    chunks.len(),
+                    imports.len()
                 );
             }
             Err(e) => {
@@ -248,6 +263,7 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
     info!("  Files: {}", file_count);
     info!("  Symbols: {}", symbol_count);
     info!("  Chunks: {}", chunk_count);
+    info!("  Dependencies: {}", dep_count);
     info!("  Time: {:.2}s", elapsed.as_secs_f64());
 
     Ok(())

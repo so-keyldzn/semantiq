@@ -264,6 +264,7 @@ impl SemantiqServer {
     }
 }
 
+#[tool(tool_box)]
 impl ServerHandler for SemantiqServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {

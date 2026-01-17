@@ -172,7 +172,10 @@ impl IndexStore {
              LIMIT ?2",
         )?;
 
-        let fts_query = format!("{}*", query);
+        // Escape special FTS5 characters by quoting the query
+        // FTS5 treats - as NOT, + as AND, etc.
+        let escaped_query = query.replace('"', "\"\"");
+        let fts_query = format!("\"{}\"*", escaped_query);
         let results = stmt
             .query_map(params![fts_query, limit as i64], |row| {
                 Ok(SymbolRecord {
@@ -350,6 +353,15 @@ impl IndexStore {
             params![source_file_id, target_path, import_name, kind],
         )?;
 
+        Ok(())
+    }
+
+    pub fn delete_dependencies(&self, file_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM dependencies WHERE source_file_id = ?1",
+            [file_id],
+        )?;
         Ok(())
     }
 
