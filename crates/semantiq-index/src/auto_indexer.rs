@@ -1,6 +1,7 @@
 use crate::watcher::{FileEvent, FileWatcher};
 use crate::IndexStore;
 use anyhow::Result;
+use semantiq_embeddings::{create_embedding_model, EmbeddingModel};
 use semantiq_parser::{ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ pub struct AutoIndexer {
     project_root: PathBuf,
     language_support: Mutex<LanguageSupport>,
     chunk_extractor: ChunkExtractor,
+    embedding_model: Box<dyn EmbeddingModel>,
 }
 
 impl AutoIndexer {
@@ -24,6 +26,10 @@ impl AutoIndexer {
         let language_support = LanguageSupport::new()?;
         let chunk_extractor = ChunkExtractor::new();
 
+        // Initialize embedding model (downloads if needed)
+        let embedding_model = create_embedding_model(None)?;
+        info!("Embedding model initialized (dim={})", embedding_model.dimension());
+
         info!("AutoIndexer initialized for {:?}", project_root);
 
         Ok(Self {
@@ -32,6 +38,7 @@ impl AutoIndexer {
             project_root,
             language_support: Mutex::new(language_support),
             chunk_extractor,
+            embedding_model,
         })
     }
 
@@ -133,9 +140,24 @@ impl AutoIndexer {
                 let symbols = SymbolExtractor::extract(&tree, &content, language)?;
                 self.store.insert_symbols(file_id, &symbols)?;
 
-                // Extract chunks
+                // Extract chunks and generate embeddings
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
                 self.store.insert_chunks(file_id, &chunks)?;
+
+                // Generate embeddings for chunks
+                let chunks_to_embed = self.store.get_chunks_by_file(file_id)?;
+                for chunk in chunks_to_embed {
+                    match self.embedding_model.embed(&chunk.content) {
+                        Ok(embedding) => {
+                            if let Err(e) = self.store.update_chunk_embedding(chunk.id, &embedding) {
+                                debug!("Failed to store embedding for chunk {}: {}", chunk.id, e);
+                            }
+                        }
+                        Err(e) => {
+                            debug!("Failed to generate embedding for chunk {}: {}", chunk.id, e);
+                        }
+                    }
+                }
 
                 // Extract imports and store as dependencies
                 let imports = ImportExtractor::extract(&tree, &content, language)?;
