@@ -2,22 +2,38 @@ use crate::query::Query;
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use anyhow::Result;
 use ignore::WalkBuilder;
+use semantiq_embeddings::{create_embedding_model, EmbeddingModel};
 use semantiq_index::IndexStore;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::debug;
 
 pub struct RetrievalEngine {
     store: Arc<IndexStore>,
     root_path: String,
+    embedding_model: Option<Box<dyn EmbeddingModel>>,
 }
 
 impl RetrievalEngine {
     pub fn new(store: Arc<IndexStore>, root_path: &str) -> Self {
+        // Try to load embedding model
+        let embedding_model = match create_embedding_model(None) {
+            Ok(model) => {
+                debug!("Embedding model loaded (dim={})", model.dimension());
+                Some(model)
+            }
+            Err(e) => {
+                debug!("Failed to load embedding model: {}", e);
+                None
+            }
+        };
+
         Self {
             store,
             root_path: root_path.to_string(),
+            embedding_model,
         }
     }
 
@@ -30,11 +46,17 @@ impl RetrievalEngine {
 
         let mut all_results = Vec::new();
 
-        // 1. Symbol search (FTS) - prioritize symbol matches
+        // 1. Semantic search (vector similarity) - highest priority
+        if self.embedding_model.is_some() {
+            let semantic_results = self.search_semantic(query_text, safe_limit)?;
+            all_results.extend(semantic_results);
+        }
+
+        // 2. Symbol search (FTS) - prioritize symbol matches
         let symbol_results = self.search_symbols(&query, safe_limit)?;
         all_results.extend(symbol_results);
 
-        // 2. Text search (grep-like) - only if we need more results
+        // 3. Text search (grep-like) - only if we need more results
         if all_results.len() < safe_limit {
             let text_results = self.search_text(&query, safe_limit - all_results.len())?;
             all_results.extend(text_results);
@@ -61,6 +83,65 @@ impl RetrievalEngine {
             all_results,
             search_time,
         ))
+    }
+
+    fn search_semantic(&self, query_text: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let model = match &self.embedding_model {
+            Some(m) => m,
+            None => return Ok(Vec::new()),
+        };
+
+        // Generate query embedding
+        let query_embedding = model.embed(query_text)?;
+
+        // Get all chunks with embeddings
+        let chunks_with_embeddings = self.store.get_chunks_with_embeddings()?;
+
+        if chunks_with_embeddings.is_empty() {
+            debug!("No chunks with embeddings found");
+            return Ok(Vec::new());
+        }
+
+        debug!("Searching {} chunks with embeddings", chunks_with_embeddings.len());
+
+        // Calculate cosine similarity for each chunk
+        let mut scored_chunks: Vec<(f32, &semantiq_index::ChunkRecord)> = chunks_with_embeddings
+            .iter()
+            .map(|(chunk, embedding)| {
+                let score = cosine_similarity(&query_embedding, embedding);
+                (score, chunk)
+            })
+            .collect();
+
+        // Sort by score descending
+        scored_chunks.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take top results and convert to SearchResult
+        let results: Vec<SearchResult> = scored_chunks
+            .into_iter()
+            .take(limit)
+            .filter(|(score, _)| *score > 0.3) // Only include results with reasonable similarity
+            .filter_map(|(score, chunk)| {
+                let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
+
+                Some(SearchResult::new(
+                    SearchResultKind::SemanticMatch,
+                    file_path,
+                    chunk.start_line as usize,
+                    chunk.end_line as usize,
+                    chunk.content.clone(),
+                    score,
+                ).with_metadata(SearchResultMetadata {
+                    symbol_name: chunk.symbols.first().cloned(),
+                    symbol_kind: None,
+                    match_type: Some("semantic".to_string()),
+                    context: None,
+                }))
+            })
+            .collect();
+
+        debug!("Found {} semantic matches", results.len());
+        Ok(results)
     }
 
     pub fn find_references(&self, symbol_name: &str, limit: usize) -> Result<SearchResults> {
@@ -413,6 +494,23 @@ pub struct SymbolDefinition {
     pub doc_comment: Option<String>,
 }
 
+/// Calculate cosine similarity between two vectors
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+
+    dot_product / (norm_a * norm_b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +520,16 @@ mod tests {
         assert!(RetrievalEngine::is_code_file(Path::new("test.rs")));
         assert!(RetrievalEngine::is_code_file(Path::new("app.tsx")));
         assert!(!RetrievalEngine::is_code_file(Path::new("readme.md")));
+    }
+
+    #[test]
+    fn test_cosine_similarity() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 0.0001);
+
+        let c = vec![1.0, 0.0, 0.0];
+        let d = vec![0.0, 1.0, 0.0];
+        assert!((cosine_similarity(&c, &d)).abs() < 0.0001);
     }
 }
