@@ -321,7 +321,11 @@ mod tests {
         // Check no duplicates
         let mut seen = std::collections::HashSet::new();
         for term in &expanded {
-            assert!(seen.insert(term.to_lowercase()), "Duplicate found: {}", term);
+            assert!(
+                seen.insert(term.to_lowercase()),
+                "Duplicate found: {}",
+                term
+            );
         }
     }
 

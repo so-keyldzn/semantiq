@@ -1,6 +1,6 @@
 pub mod model;
 
-pub use model::{EmbeddingModel, EmbeddingConfig, create_embedding_model, StubEmbeddingModel};
+pub use model::{EmbeddingConfig, EmbeddingModel, StubEmbeddingModel, create_embedding_model};
 
 #[cfg(feature = "onnx")]
 pub use model::ensure_models_downloaded;

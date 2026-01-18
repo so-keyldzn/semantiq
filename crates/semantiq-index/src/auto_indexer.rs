@@ -1,9 +1,11 @@
+use crate::IndexStore;
 use crate::exclusions::should_exclude;
 use crate::watcher::{FileEvent, FileWatcher};
-use crate::IndexStore;
 use anyhow::Result;
-use semantiq_embeddings::{create_embedding_model, EmbeddingModel};
-use semantiq_parser::{ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor};
+use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
+use semantiq_parser::{
+    ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,7 +31,10 @@ impl AutoIndexer {
 
         // Initialize embedding model (downloads if needed)
         let embedding_model = create_embedding_model(None)?;
-        info!("Embedding model initialized (dim={})", embedding_model.dimension());
+        info!(
+            "Embedding model initialized (dim={})",
+            embedding_model.dimension()
+        );
 
         info!("AutoIndexer initialized for {:?}", project_root);
 
@@ -156,7 +161,8 @@ impl AutoIndexer {
                 for chunk in chunks_to_embed {
                     match self.embedding_model.embed(&chunk.content) {
                         Ok(embedding) => {
-                            if let Err(e) = self.store.update_chunk_embedding(chunk.id, &embedding) {
+                            if let Err(e) = self.store.update_chunk_embedding(chunk.id, &embedding)
+                            {
                                 debug!("Failed to store embedding for chunk {}: {}", chunk.id, e);
                             }
                         }

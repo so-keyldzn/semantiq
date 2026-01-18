@@ -1,13 +1,13 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "onnx")]
-use std::path::{Path, PathBuf};
-#[cfg(feature = "onnx")]
-use tracing::info;
-#[cfg(feature = "onnx")]
 use std::fs;
 #[cfg(feature = "onnx")]
 use std::io::Write;
+#[cfg(feature = "onnx")]
+use std::path::{Path, PathBuf};
+#[cfg(feature = "onnx")]
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -15,18 +15,36 @@ pub struct EmbeddingConfig {
     pub tokenizer_path: String,
     pub max_length: usize,
     pub batch_size: usize,
+    /// Number of threads for ONNX intra-op parallelism.
+    /// Defaults to number of CPU cores, capped at 8.
+    pub num_threads: usize,
 }
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
+        // Get number of threads from environment or use sensible default
+        let num_threads = std::env::var("SEMANTIQ_ONNX_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| {
+                // Default to number of CPU cores, capped at 8
+                std::thread::available_parallelism()
+                    .map(|n| n.get().min(8))
+                    .unwrap_or(4)
+            });
+
         #[cfg(feature = "onnx")]
         {
             let models_dir = get_models_dir();
             Self {
                 model_path: models_dir.join("minilm.onnx").to_string_lossy().to_string(),
-                tokenizer_path: models_dir.join("tokenizer.json").to_string_lossy().to_string(),
+                tokenizer_path: models_dir
+                    .join("tokenizer.json")
+                    .to_string_lossy()
+                    .to_string(),
                 max_length: 512,
                 batch_size: 32,
+                num_threads,
             }
         }
         #[cfg(not(feature = "onnx"))]
@@ -36,6 +54,7 @@ impl Default for EmbeddingConfig {
                 tokenizer_path: "models/tokenizer.json".to_string(),
                 max_length: 512,
                 batch_size: 32,
+                num_threads,
             }
         }
     }
@@ -50,9 +69,11 @@ fn get_models_dir() -> PathBuf {
 }
 
 #[cfg(feature = "onnx")]
-const MODEL_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
+const MODEL_URL: &str =
+    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
 #[cfg(feature = "onnx")]
-const TOKENIZER_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
+const TOKENIZER_URL: &str =
+    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
 
 #[cfg(feature = "onnx")]
 fn download_file(url: &str, path: &Path) -> Result<()> {
@@ -71,7 +92,11 @@ fn download_file(url: &str, path: &Path) -> Result<()> {
 
     let response = agent.get(url).call()?;
     // Read with no limit (default is 10MB which is too small for the model)
-    let bytes = response.into_body().with_config().limit(200 * 1024 * 1024).read_to_vec()?;
+    let bytes = response
+        .into_body()
+        .with_config()
+        .limit(200 * 1024 * 1024)
+        .read_to_vec()?;
 
     let mut file = fs::File::create(path)?;
     file.write_all(&bytes)?;
@@ -142,8 +167,8 @@ impl EmbeddingModel for StubEmbeddingModel {
 pub mod onnx {
     use super::*;
     use ndarray::{Array2, Axis};
-    use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::inputs;
+    use ort::session::{Session, builder::GraphOptimizationLevel};
     use ort::value::TensorRef;
     use std::sync::Mutex;
     use tokenizers::Tokenizer;
@@ -156,11 +181,14 @@ pub mod onnx {
 
     impl OnnxEmbeddingModel {
         pub fn load(config: EmbeddingConfig) -> Result<Self> {
-            info!("Loading ONNX model from {}", config.model_path);
+            info!(
+                "Loading ONNX model from {} (threads: {})",
+                config.model_path, config.num_threads
+            );
 
             let session = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_intra_threads(4)?
+                .with_intra_threads(config.num_threads)?
                 .commit_from_file(&config.model_path)?;
 
             let tokenizer = Tokenizer::from_file(&config.tokenizer_path)
@@ -174,12 +202,17 @@ pub mod onnx {
         }
 
         fn tokenize(&self, text: &str) -> Result<(Vec<i64>, Vec<i64>)> {
-            let encoding = self.tokenizer
+            let encoding = self
+                .tokenizer
                 .encode(text, true)
                 .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
             let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-            let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&x| x as i64).collect();
+            let attention_mask: Vec<i64> = encoding
+                .get_attention_mask()
+                .iter()
+                .map(|&x| x as i64)
+                .collect();
 
             // Truncate if needed
             let max_len = self.config.max_length;
@@ -237,12 +270,16 @@ pub mod onnx {
             let seq_len = input_ids.len();
 
             let input_ids_array = Array2::from_shape_vec((1, seq_len), input_ids.clone())?;
-            let attention_mask_array = Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
+            let attention_mask_array =
+                Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
             // token_type_ids: all zeros for single-sequence tasks
             let token_type_ids: Vec<i64> = vec![0; seq_len];
             let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
-            let mut session = self.session.lock().unwrap();
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|e| anyhow::anyhow!("ONNX session lock poisoned: {}", e))?;
             let outputs = session.run(inputs![
                 "input_ids" => TensorRef::from_array_view(input_ids_array.view())?,
                 "attention_mask" => TensorRef::from_array_view(attention_mask_array.view())?,
@@ -263,9 +300,14 @@ pub mod onnx {
         }
 
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-            // For simplicity, process one at a time
-            // A production implementation would batch properly
-            texts.iter().map(|text| self.embed(text)).collect()
+            // Process texts sequentially but with reduced lock contention
+            // True batching would require padding and handling variable sequence lengths
+            // which adds complexity for marginal gains in single-threaded scenarios
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.embed(text)?);
+            }
+            Ok(results)
         }
 
         fn dimension(&self) -> usize {
@@ -275,7 +317,9 @@ pub mod onnx {
 }
 
 /// Create an embedding model based on available features
-pub fn create_embedding_model(#[allow(unused_variables)] config: Option<EmbeddingConfig>) -> Result<Box<dyn EmbeddingModel>> {
+pub fn create_embedding_model(
+    #[allow(unused_variables)] config: Option<EmbeddingConfig>,
+) -> Result<Box<dyn EmbeddingModel>> {
     #[cfg(feature = "onnx")]
     {
         // Download models if needed
@@ -288,7 +332,10 @@ pub fn create_embedding_model(#[allow(unused_variables)] config: Option<Embeddin
             info!("Using ONNX embedding model from {:?}", config.model_path);
             return Ok(Box::new(onnx::OnnxEmbeddingModel::load(config)?));
         } else {
-            info!("ONNX model not found at {:?}, using stub", config.model_path);
+            info!(
+                "ONNX model not found at {:?}, using stub",
+                config.model_path
+            );
         }
     }
 

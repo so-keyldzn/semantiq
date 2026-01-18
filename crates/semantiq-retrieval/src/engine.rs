@@ -2,7 +2,7 @@ use crate::query::Query;
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use anyhow::Result;
 use ignore::WalkBuilder;
-use semantiq_embeddings::{create_embedding_model, EmbeddingModel};
+use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_index::IndexStore;
 use std::fs;
 use std::path::Path;
@@ -64,7 +64,9 @@ impl RetrievalEngine {
 
         // Sort by score (highest first), use total_cmp for safe NaN handling
         all_results.sort_by(|a, b| {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Remove duplicates based on file_path + start_line + content hash
@@ -102,7 +104,10 @@ impl RetrievalEngine {
             return Ok(Vec::new());
         }
 
-        debug!("Searching {} chunks with embeddings", chunks_with_embeddings.len());
+        debug!(
+            "Searching {} chunks with embeddings",
+            chunks_with_embeddings.len()
+        );
 
         // Calculate cosine similarity for each chunk
         let mut scored_chunks: Vec<(f32, &semantiq_index::ChunkRecord)> = chunks_with_embeddings
@@ -124,19 +129,22 @@ impl RetrievalEngine {
             .filter_map(|(score, chunk)| {
                 let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
 
-                Some(SearchResult::new(
-                    SearchResultKind::SemanticMatch,
-                    file_path,
-                    chunk.start_line as usize,
-                    chunk.end_line as usize,
-                    chunk.content.clone(),
-                    score,
-                ).with_metadata(SearchResultMetadata {
-                    symbol_name: chunk.symbols.first().cloned(),
-                    symbol_kind: None,
-                    match_type: Some("semantic".to_string()),
-                    context: None,
-                }))
+                Some(
+                    SearchResult::new(
+                        SearchResultKind::SemanticMatch,
+                        file_path,
+                        chunk.start_line as usize,
+                        chunk.end_line as usize,
+                        chunk.content.clone(),
+                        score,
+                    )
+                    .with_metadata(SearchResultMetadata {
+                        symbol_name: chunk.symbols.first().cloned(),
+                        symbol_kind: None,
+                        match_type: Some("semantic".to_string()),
+                        context: None,
+                    }),
+                )
             })
             .collect();
 
@@ -152,22 +160,32 @@ impl RetrievalEngine {
         let symbols = self.store.find_symbol_by_name(symbol_name)?;
 
         for symbol in &symbols {
-            if let Some(file) = self.store.get_file_by_path(&self.get_file_path(symbol.file_id)?)? {
-                let content = self.read_file_lines(&file.path, symbol.start_line as usize, symbol.end_line as usize)?;
-
-                results.push(SearchResult::new(
-                    SearchResultKind::Symbol,
-                    file.path.clone(),
+            if let Some(file) = self
+                .store
+                .get_file_by_path(&self.get_file_path(symbol.file_id)?)?
+            {
+                let content = self.read_file_lines(
+                    &file.path,
                     symbol.start_line as usize,
                     symbol.end_line as usize,
-                    content,
-                    1.0,
-                ).with_metadata(SearchResultMetadata {
-                    symbol_name: Some(symbol.name.clone()),
-                    symbol_kind: Some(symbol.kind.clone()),
-                    match_type: Some("definition".to_string()),
-                    context: symbol.signature.clone(),
-                }));
+                )?;
+
+                results.push(
+                    SearchResult::new(
+                        SearchResultKind::Symbol,
+                        file.path.clone(),
+                        symbol.start_line as usize,
+                        symbol.end_line as usize,
+                        content,
+                        1.0,
+                    )
+                    .with_metadata(SearchResultMetadata {
+                        symbol_name: Some(symbol.name.clone()),
+                        symbol_kind: Some(symbol.kind.clone()),
+                        match_type: Some("definition".to_string()),
+                        context: symbol.signature.clone(),
+                    }),
+                );
             }
         }
 
@@ -284,7 +302,10 @@ impl RetrievalEngine {
 
             for symbol in symbols {
                 let file_path = self.get_file_path(symbol.file_id)?;
-                let content = symbol.signature.clone().unwrap_or_else(|| symbol.name.clone());
+                let content = symbol
+                    .signature
+                    .clone()
+                    .unwrap_or_else(|| symbol.name.clone());
 
                 // Improved scoring algorithm
                 let name_lower = symbol.name.to_lowercase();
@@ -407,7 +428,10 @@ impl RetrievalEngine {
             let line_trimmed = line.trim();
 
             // Skip empty lines and comments
-            if line_trimmed.is_empty() || line_trimmed.starts_with("//") || line_trimmed.starts_with('#') {
+            if line_trimmed.is_empty()
+                || line_trimmed.starts_with("//")
+                || line_trimmed.starts_with('#')
+            {
                 continue;
             }
 
@@ -417,7 +441,13 @@ impl RetrievalEngine {
                     // Improved scoring based on match quality
                     let mut score = if line_lower.trim() == term_lower {
                         0.9 // Exact line match (but lower than symbol matches)
-                    } else if pos == 0 || !line_lower.chars().nth(pos.saturating_sub(1)).map(|c| c.is_alphanumeric()).unwrap_or(false) {
+                    } else if pos == 0
+                        || !line_lower
+                            .chars()
+                            .nth(pos.saturating_sub(1))
+                            .map(|c| c.is_alphanumeric())
+                            .unwrap_or(false)
+                    {
                         // Word boundary match (higher score)
                         0.7
                     } else {
@@ -457,8 +487,8 @@ impl RetrievalEngine {
 
     fn is_code_file(path: &Path) -> bool {
         let code_extensions = [
-            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "c", "cpp", "cc", "h", "hpp",
-            "rb", "php", "cs", "swift", "kt", "scala", "vue", "svelte",
+            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "c", "cpp", "cc", "h", "hpp", "rb",
+            "php", "cs", "swift", "kt", "scala", "vue", "svelte",
         ];
 
         path.extension()
