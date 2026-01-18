@@ -17,3 +17,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+# Version check
+ureq = "3"
+dirs = "5.0"

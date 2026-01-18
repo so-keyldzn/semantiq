@@ -12,6 +12,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::info;
 
+use crate::version_check::{check_for_update, notify_update, VersionCheckConfig};
+
 #[derive(Clone)]
 pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
@@ -51,7 +53,23 @@ impl SemantiqServer {
             }
         };
 
+        // Spawn background version check (non-blocking)
+        Self::spawn_version_check();
+
         Ok(Self { engine, store, auto_indexer })
+    }
+
+    fn spawn_version_check() {
+        tokio::spawn(async {
+            tokio::task::spawn_blocking(|| {
+                let config = VersionCheckConfig::from_env();
+                if let Some(info) = check_for_update(env!("CARGO_PKG_VERSION"), &config) {
+                    notify_update(&info);
+                }
+            })
+            .await
+            .ok();
+        });
     }
 
     pub fn store(&self) -> &Arc<IndexStore> {
