@@ -1720,6 +1720,7 @@ name = "semantiq-mcp"
 version = "0.2.6"
 dependencies = [
  "anyhow",
+ "dirs",
  "rmcp",
  "semantiq-embeddings",
  "semantiq-index",
@@ -1730,6 +1731,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "ureq",
 ]
 
 [[package]]
