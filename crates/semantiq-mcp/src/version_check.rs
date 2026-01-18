@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
 
@@ -7,6 +8,20 @@ const GITHUB_API_URL: &str = "https://api.github.com/repos/so-keyldzn/semantiq/r
 const CACHE_FILE: &str = "version_cache.json";
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_CACHE_HOURS: u64 = 24;
+
+/// Thread-safe flag to disable update checks without using unsafe env vars
+static UPDATE_CHECK_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// Disable update checks in a thread-safe manner.
+/// This should be called at startup before any version checks are performed.
+pub fn disable_update_check() {
+    UPDATE_CHECK_DISABLED.store(true, Ordering::SeqCst);
+}
+
+/// Check if update checks are disabled via the thread-safe flag
+fn is_update_check_disabled() -> bool {
+    UPDATE_CHECK_DISABLED.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Clone)]
 pub struct VersionCheckConfig {
@@ -27,9 +42,11 @@ impl Default for VersionCheckConfig {
 
 impl VersionCheckConfig {
     pub fn from_env() -> Self {
-        let enabled = std::env::var("SEMANTIQ_UPDATE_CHECK")
-            .map(|v| v != "0" && v.to_lowercase() != "false")
-            .unwrap_or(true);
+        // Check both the thread-safe flag and the environment variable
+        let enabled = !is_update_check_disabled()
+            && std::env::var("SEMANTIQ_UPDATE_CHECK")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true);
 
         let cache_hours: u64 = std::env::var("SEMANTIQ_UPDATE_CACHE_HOURS")
             .ok()

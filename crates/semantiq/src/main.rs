@@ -3,9 +3,11 @@ use clap::{Parser, Subcommand};
 use ignore::WalkBuilder;
 use rmcp::ServiceExt;
 use semantiq_embeddings::create_embedding_model;
-use semantiq_index::{IndexStore, should_exclude_entry, MAX_FILE_SIZE};
-use semantiq_mcp::SemantiqServer;
-use semantiq_parser::{ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor};
+use semantiq_index::{IndexStore, MAX_FILE_SIZE, should_exclude_entry};
+use semantiq_mcp::{SemantiqServer, disable_update_check};
+use semantiq_parser::{
+    ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
@@ -104,21 +106,23 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Commands::Init { path } => {
-            init(&path).await
-        }
-        Commands::Serve { project, database, no_update_check } => {
-            serve(project, database, no_update_check).await
-        }
-        Commands::Index { path, database, force } => {
-            index(&path, database, force).await
-        }
-        Commands::Stats { database } => {
-            stats(database).await
-        }
-        Commands::Search { query, database, limit } => {
-            search(&query, database, limit).await
-        }
+        Commands::Init { path } => init(&path).await,
+        Commands::Serve {
+            project,
+            database,
+            no_update_check,
+        } => serve(project, database, no_update_check).await,
+        Commands::Index {
+            path,
+            database,
+            force,
+        } => index(&path, database, force).await,
+        Commands::Stats { database } => stats(database).await,
+        Commands::Search {
+            query,
+            database,
+            limit,
+        } => search(&query, database, limit).await,
     }
 }
 
@@ -225,15 +229,16 @@ The index updates automatically when files change. No manual reindexing needed.
     if gitignore_path.exists() {
         let content = fs::read_to_string(&gitignore_path)?;
         if !content.contains(gitignore_entry) {
-            let mut file = fs::OpenOptions::new()
-                .append(true)
-                .open(&gitignore_path)?;
+            let mut file = fs::OpenOptions::new().append(true).open(&gitignore_path)?;
             use std::io::Write;
             writeln!(file, "\n# Semantiq\n{}", gitignore_entry)?;
             println!("Added .semantiq.db to .gitignore");
         }
     } else {
-        fs::write(&gitignore_path, format!("# Semantiq\n{}\n", gitignore_entry))?;
+        fs::write(
+            &gitignore_path,
+            format!("# Semantiq\n{}\n", gitignore_entry),
+        )?;
         println!("Created .gitignore");
     }
 
@@ -249,15 +254,20 @@ The index updates automatically when files change. No manual reindexing needed.
     Ok(())
 }
 
-async fn serve(project: Option<PathBuf>, database: Option<PathBuf>, no_update_check: bool) -> Result<()> {
-    // Disable update check if flag is set
+async fn serve(
+    project: Option<PathBuf>,
+    database: Option<PathBuf>,
+    no_update_check: bool,
+) -> Result<()> {
+    // Disable update check if flag is set (thread-safe, no unsafe needed)
     if no_update_check {
-        // SAFETY: We're setting this env var at startup before any other threads read it
-        unsafe { std::env::set_var("SEMANTIQ_UPDATE_CHECK", "false") };
+        disable_update_check();
     }
 
-    let project_root = project
-        .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
+    let project_root = match project {
+        Some(p) => p,
+        None => std::env::current_dir().context("Failed to get current directory")?,
+    };
 
     let db_path = database.unwrap_or_else(|| project_root.join(DEFAULT_DB_NAME));
 
@@ -265,7 +275,10 @@ async fn serve(project: Option<PathBuf>, database: Option<PathBuf>, no_update_ch
     info!("Project root: {:?}", project_root);
     info!("Database: {:?}", db_path);
 
-    let server = SemantiqServer::new(&db_path, project_root.to_str().unwrap())?;
+    let project_root_str = project_root
+        .to_str()
+        .context("Project root path contains invalid UTF-8")?;
+    let server = SemantiqServer::new(&db_path, project_root_str)?;
 
     // Start auto-indexer in background
     server.start_auto_indexer();
@@ -308,7 +321,10 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
             Some(model)
         }
         Err(e) => {
-            warn!("Could not load embedding model: {}. Embeddings will not be generated.", e);
+            warn!(
+                "Could not load embedding model: {}. Embeddings will not be generated.",
+                e
+            );
             None
         }
     };
@@ -405,8 +421,21 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
                 if let Some(ref model) = embedding_model {
                     let stored_chunks = store.get_chunks_by_file(file_id)?;
                     for chunk in stored_chunks {
-                        if let Ok(embedding) = model.embed(&chunk.content) {
-                            let _ = store.update_chunk_embedding(chunk.id, &embedding);
+                        match model.embed(&chunk.content) {
+                            Ok(embedding) => {
+                                if let Err(e) = store.update_chunk_embedding(chunk.id, &embedding) {
+                                    warn!(
+                                        "Failed to store embedding for chunk {}: {}",
+                                        chunk.id, e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                debug!(
+                                    "Failed to generate embedding for chunk {}: {}",
+                                    chunk.id, e
+                                );
+                            }
                         }
                     }
                 }
@@ -458,14 +487,18 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
 }
 
 async fn stats(database: Option<PathBuf>) -> Result<()> {
-    let db_path = database.unwrap_or_else(|| {
-        std::env::current_dir()
-            .expect("Failed to get current directory")
-            .join(DEFAULT_DB_NAME)
-    });
+    let db_path = match database {
+        Some(p) => p,
+        None => std::env::current_dir()
+            .context("Failed to get current directory")?
+            .join(DEFAULT_DB_NAME),
+    };
 
     if !db_path.exists() {
-        anyhow::bail!("Database not found: {:?}. Run 'semantiq index' first.", db_path);
+        anyhow::bail!(
+            "Database not found: {:?}. Run 'semantiq index' first.",
+            db_path
+        );
     }
 
     let store = IndexStore::open(&db_path)?;
@@ -487,16 +520,24 @@ async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Result<
     let db_path = database.unwrap_or_else(|| cwd.join(DEFAULT_DB_NAME));
 
     if !db_path.exists() {
-        anyhow::bail!("Database not found: {:?}. Run 'semantiq index' first.", db_path);
+        anyhow::bail!(
+            "Database not found: {:?}. Run 'semantiq index' first.",
+            db_path
+        );
     }
 
     let store = std::sync::Arc::new(IndexStore::open(&db_path)?);
-    let cwd_str = cwd.to_str().context("Current directory path contains invalid UTF-8")?;
+    let cwd_str = cwd
+        .to_str()
+        .context("Current directory path contains invalid UTF-8")?;
     let engine = semantiq_retrieval::RetrievalEngine::new(store, cwd_str);
 
     let results = engine.search(query, limit)?;
 
-    println!("Search results for '{}' ({} ms)", query, results.search_time_ms);
+    println!(
+        "Search results for '{}' ({} ms)",
+        query, results.search_time_ms
+    );
     println!("Found {} results\n", results.total_count);
 
     for result in &results.results {
@@ -506,7 +547,11 @@ async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Result<
         );
 
         if let Some(ref name) = result.metadata.symbol_name {
-            println!("   Symbol: {} ({})", name, result.metadata.symbol_kind.as_deref().unwrap_or(""));
+            println!(
+                "   Symbol: {} ({})",
+                name,
+                result.metadata.symbol_kind.as_deref().unwrap_or("")
+            );
         }
 
         let snippet: String = result.content.chars().take(100).collect();
