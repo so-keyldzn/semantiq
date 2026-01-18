@@ -62,12 +62,17 @@ fn download_file(url: &str, path: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let response = reqwest::blocking::get(url)?;
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to download {}: {}", url, response.status());
-    }
+    // Use an agent with no body size limit (model is ~90MB)
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .http_status_as_error(true)
+            .build(),
+    );
 
-    let bytes = response.bytes()?;
+    let response = agent.get(url).call()?;
+    // Read with no limit (default is 10MB which is too small for the model)
+    let bytes = response.into_body().with_config().limit(200 * 1024 * 1024).read_to_vec()?;
+
     let mut file = fs::File::create(path)?;
     file.write_all(&bytes)?;
 
@@ -233,11 +238,15 @@ pub mod onnx {
 
             let input_ids_array = Array2::from_shape_vec((1, seq_len), input_ids.clone())?;
             let attention_mask_array = Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
+            // token_type_ids: all zeros for single-sequence tasks
+            let token_type_ids: Vec<i64> = vec![0; seq_len];
+            let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
             let mut session = self.session.lock().unwrap();
             let outputs = session.run(inputs![
                 "input_ids" => TensorRef::from_array_view(input_ids_array.view())?,
                 "attention_mask" => TensorRef::from_array_view(attention_mask_array.view())?,
+                "token_type_ids" => TensorRef::from_array_view(token_type_ids_array.view())?,
             ])?;
 
             let embeddings = outputs[0].try_extract_array::<f32>()?;
