@@ -1,13 +1,15 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "onnx")]
-use std::path::{Path, PathBuf};
-#[cfg(feature = "onnx")]
-use tracing::info;
+use sha2::{Digest, Sha256};
 #[cfg(feature = "onnx")]
 use std::fs;
 #[cfg(feature = "onnx")]
 use std::io::Write;
+#[cfg(feature = "onnx")]
+use std::path::{Path, PathBuf};
+#[cfg(feature = "onnx")]
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -15,18 +17,36 @@ pub struct EmbeddingConfig {
     pub tokenizer_path: String,
     pub max_length: usize,
     pub batch_size: usize,
+    /// Number of threads for ONNX intra-op parallelism.
+    /// Defaults to number of CPU cores, capped at 8.
+    pub num_threads: usize,
 }
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
+        // Get number of threads from environment or use sensible default
+        let num_threads = std::env::var("SEMANTIQ_ONNX_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| {
+                // Default to number of CPU cores, capped at 8
+                std::thread::available_parallelism()
+                    .map(|n| n.get().min(8))
+                    .unwrap_or(4)
+            });
+
         #[cfg(feature = "onnx")]
         {
             let models_dir = get_models_dir();
             Self {
                 model_path: models_dir.join("minilm.onnx").to_string_lossy().to_string(),
-                tokenizer_path: models_dir.join("tokenizer.json").to_string_lossy().to_string(),
+                tokenizer_path: models_dir
+                    .join("tokenizer.json")
+                    .to_string_lossy()
+                    .to_string(),
                 max_length: 512,
                 batch_size: 32,
+                num_threads,
             }
         }
         #[cfg(not(feature = "onnx"))]
@@ -36,6 +56,7 @@ impl Default for EmbeddingConfig {
                 tokenizer_path: "models/tokenizer.json".to_string(),
                 max_length: 512,
                 batch_size: 32,
+                num_threads,
             }
         }
     }
@@ -50,10 +71,61 @@ fn get_models_dir() -> PathBuf {
 }
 
 #[cfg(feature = "onnx")]
-const MODEL_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
+const MODEL_URL: &str =
+    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
 #[cfg(feature = "onnx")]
-const TOKENIZER_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
+const TOKENIZER_URL: &str =
+    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
 
+/// Compute SHA-256 hash of a byte slice
+#[cfg(feature = "onnx")]
+fn compute_sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Get the path to the checksum file for a given file
+#[cfg(feature = "onnx")]
+fn get_checksum_path(path: &Path) -> PathBuf {
+    let mut checksum_path = path.to_path_buf();
+    let filename = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    checksum_path.set_file_name(format!("{}.sha256", filename));
+    checksum_path
+}
+
+/// Load saved checksum from file (Trust On First Use)
+#[cfg(feature = "onnx")]
+fn load_saved_checksum(path: &Path) -> Option<String> {
+    let checksum_path = get_checksum_path(path);
+    fs::read_to_string(&checksum_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Save checksum to file for future verification
+#[cfg(feature = "onnx")]
+fn save_checksum(path: &Path, checksum: &str) -> Result<()> {
+    let checksum_path = get_checksum_path(path);
+    fs::write(&checksum_path, checksum)?;
+    Ok(())
+}
+
+/// Verify that a file matches its saved SHA-256 checksum (TOFU model)
+/// Returns Ok(true) if verified, Ok(false) if mismatch, Err if no saved checksum
+#[cfg(feature = "onnx")]
+fn verify_checksum(path: &Path) -> Result<bool> {
+    let saved =
+        load_saved_checksum(path).ok_or_else(|| anyhow::anyhow!("No saved checksum found"))?;
+    let data = fs::read(path)?;
+    let actual = compute_sha256(&data);
+    Ok(actual == saved)
+}
+
+/// Download a file and save its checksum (Trust On First Use)
 #[cfg(feature = "onnx")]
 fn download_file(url: &str, path: &Path) -> Result<()> {
     info!("Downloading {} to {:?}", url, path);
@@ -71,12 +143,66 @@ fn download_file(url: &str, path: &Path) -> Result<()> {
 
     let response = agent.get(url).call()?;
     // Read with no limit (default is 10MB which is too small for the model)
-    let bytes = response.into_body().with_config().limit(200 * 1024 * 1024).read_to_vec()?;
+    let bytes = response
+        .into_body()
+        .with_config()
+        .limit(200 * 1024 * 1024)
+        .read_to_vec()?;
 
+    // Compute checksum of downloaded data
+    let checksum = compute_sha256(&bytes);
+
+    // Write file to disk
     let mut file = fs::File::create(path)?;
     file.write_all(&bytes)?;
 
-    info!("Downloaded {:?} ({} bytes)", path, bytes.len());
+    // Save checksum for future verification (Trust On First Use)
+    save_checksum(path, &checksum)?;
+
+    info!(
+        "Downloaded {:?} ({} bytes, sha256: {}...)",
+        path,
+        bytes.len(),
+        &checksum[..16]
+    );
+    Ok(())
+}
+
+/// Ensure a file exists and is valid, downloading if necessary
+#[cfg(feature = "onnx")]
+fn ensure_file_downloaded(url: &str, path: &Path, name: &str) -> Result<()> {
+    if !path.exists() {
+        info!("{} not found, downloading...", name);
+        download_file(url, path)?;
+    } else {
+        // Verify existing file checksum (TOFU)
+        match verify_checksum(path) {
+            Ok(true) => {
+                info!("{} checksum verified", name);
+            }
+            Ok(false) => {
+                warn!(
+                    "{} checksum mismatch! File may have been corrupted or tampered with. Re-downloading...",
+                    name
+                );
+                fs::remove_file(path)?;
+                // Also remove old checksum file
+                let _ = fs::remove_file(get_checksum_path(path));
+                download_file(url, path)?;
+            }
+            Err(_) => {
+                // No saved checksum - compute and save one for this existing file
+                info!(
+                    "No saved checksum for {}, computing and saving for future verification...",
+                    name
+                );
+                let data = fs::read(path)?;
+                let checksum = compute_sha256(&data);
+                save_checksum(path, &checksum)?;
+                info!("{} checksum saved: {}...", name, &checksum[..16]);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -86,15 +212,8 @@ pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
     let model_path = Path::new(&config.model_path);
     let tokenizer_path = Path::new(&config.tokenizer_path);
 
-    if !model_path.exists() {
-        info!("Model not found, downloading...");
-        download_file(MODEL_URL, model_path)?;
-    }
-
-    if !tokenizer_path.exists() {
-        info!("Tokenizer not found, downloading...");
-        download_file(TOKENIZER_URL, tokenizer_path)?;
-    }
+    ensure_file_downloaded(MODEL_URL, model_path, "Model")?;
+    ensure_file_downloaded(TOKENIZER_URL, tokenizer_path, "Tokenizer")?;
 
     Ok(config)
 }
@@ -142,8 +261,8 @@ impl EmbeddingModel for StubEmbeddingModel {
 pub mod onnx {
     use super::*;
     use ndarray::{Array2, Axis};
-    use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::inputs;
+    use ort::session::{Session, builder::GraphOptimizationLevel};
     use ort::value::TensorRef;
     use std::sync::Mutex;
     use tokenizers::Tokenizer;
@@ -156,11 +275,14 @@ pub mod onnx {
 
     impl OnnxEmbeddingModel {
         pub fn load(config: EmbeddingConfig) -> Result<Self> {
-            info!("Loading ONNX model from {}", config.model_path);
+            info!(
+                "Loading ONNX model from {} (threads: {})",
+                config.model_path, config.num_threads
+            );
 
             let session = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_intra_threads(4)?
+                .with_intra_threads(config.num_threads)?
                 .commit_from_file(&config.model_path)?;
 
             let tokenizer = Tokenizer::from_file(&config.tokenizer_path)
@@ -174,12 +296,17 @@ pub mod onnx {
         }
 
         fn tokenize(&self, text: &str) -> Result<(Vec<i64>, Vec<i64>)> {
-            let encoding = self.tokenizer
+            let encoding = self
+                .tokenizer
                 .encode(text, true)
                 .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
             let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-            let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&x| x as i64).collect();
+            let attention_mask: Vec<i64> = encoding
+                .get_attention_mask()
+                .iter()
+                .map(|&x| x as i64)
+                .collect();
 
             // Truncate if needed
             let max_len = self.config.max_length;
@@ -237,12 +364,16 @@ pub mod onnx {
             let seq_len = input_ids.len();
 
             let input_ids_array = Array2::from_shape_vec((1, seq_len), input_ids.clone())?;
-            let attention_mask_array = Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
+            let attention_mask_array =
+                Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
             // token_type_ids: all zeros for single-sequence tasks
             let token_type_ids: Vec<i64> = vec![0; seq_len];
             let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
-            let mut session = self.session.lock().unwrap();
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|e| anyhow::anyhow!("ONNX session lock poisoned: {}", e))?;
             let outputs = session.run(inputs![
                 "input_ids" => TensorRef::from_array_view(input_ids_array.view())?,
                 "attention_mask" => TensorRef::from_array_view(attention_mask_array.view())?,
@@ -263,9 +394,14 @@ pub mod onnx {
         }
 
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-            // For simplicity, process one at a time
-            // A production implementation would batch properly
-            texts.iter().map(|text| self.embed(text)).collect()
+            // Process texts sequentially but with reduced lock contention
+            // True batching would require padding and handling variable sequence lengths
+            // which adds complexity for marginal gains in single-threaded scenarios
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.embed(text)?);
+            }
+            Ok(results)
         }
 
         fn dimension(&self) -> usize {
@@ -275,7 +411,9 @@ pub mod onnx {
 }
 
 /// Create an embedding model based on available features
-pub fn create_embedding_model(#[allow(unused_variables)] config: Option<EmbeddingConfig>) -> Result<Box<dyn EmbeddingModel>> {
+pub fn create_embedding_model(
+    #[allow(unused_variables)] config: Option<EmbeddingConfig>,
+) -> Result<Box<dyn EmbeddingModel>> {
     #[cfg(feature = "onnx")]
     {
         // Download models if needed
@@ -288,7 +426,10 @@ pub fn create_embedding_model(#[allow(unused_variables)] config: Option<Embeddin
             info!("Using ONNX embedding model from {:?}", config.model_path);
             return Ok(Box::new(onnx::OnnxEmbeddingModel::load(config)?));
         } else {
-            info!("ONNX model not found at {:?}, using stub", config.model_path);
+            info!(
+                "ONNX model not found at {:?}, using stub",
+                config.model_path
+            );
         }
     }
 

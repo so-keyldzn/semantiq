@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -76,15 +76,43 @@ impl LanguageSupport {
         let mut parsers = std::collections::HashMap::new();
 
         // Initialize parsers for each language
-        Self::add_parser(&mut parsers, Language::Rust, tree_sitter_rust::LANGUAGE.into())?;
-        Self::add_parser(&mut parsers, Language::TypeScript, tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())?;
-        Self::add_parser(&mut parsers, Language::JavaScript, tree_sitter_javascript::LANGUAGE.into())?;
-        Self::add_parser(&mut parsers, Language::Python, tree_sitter_python::LANGUAGE.into())?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Rust,
+            tree_sitter_rust::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::TypeScript,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::JavaScript,
+            tree_sitter_javascript::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Python,
+            tree_sitter_python::LANGUAGE.into(),
+        )?;
         Self::add_parser(&mut parsers, Language::Go, tree_sitter_go::LANGUAGE.into())?;
-        Self::add_parser(&mut parsers, Language::Java, tree_sitter_java::LANGUAGE.into())?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Java,
+            tree_sitter_java::LANGUAGE.into(),
+        )?;
         Self::add_parser(&mut parsers, Language::C, tree_sitter_c::LANGUAGE.into())?;
-        Self::add_parser(&mut parsers, Language::Cpp, tree_sitter_cpp::LANGUAGE.into())?;
-        Self::add_parser(&mut parsers, Language::Php, tree_sitter_php::LANGUAGE_PHP.into())?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Cpp,
+            tree_sitter_cpp::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Php,
+            tree_sitter_php::LANGUAGE_PHP.into(),
+        )?;
 
         Ok(Self { parsers })
     }
@@ -95,17 +123,21 @@ impl LanguageSupport {
         grammar: tree_sitter::Language,
     ) -> Result<()> {
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&grammar)
+        parser
+            .set_language(&grammar)
             .map_err(|e| anyhow!("Failed to set {} language: {}", lang.name(), e))?;
         parsers.insert(lang, parser);
         Ok(())
     }
 
     pub fn parse(&mut self, lang: Language, source: &str) -> Result<tree_sitter::Tree> {
-        let parser = self.parsers.get_mut(&lang)
+        let parser = self
+            .parsers
+            .get_mut(&lang)
             .ok_or_else(|| anyhow!("No parser for language: {:?}", lang))?;
 
-        parser.parse(source, None)
+        parser
+            .parse(source, None)
             .ok_or_else(|| anyhow!("Failed to parse source"))
     }
 
@@ -124,11 +156,9 @@ impl LanguageSupport {
     }
 }
 
-impl Default for LanguageSupport {
-    fn default() -> Self {
-        Self::new().expect("Failed to initialize language support")
-    }
-}
+// Note: We intentionally do NOT implement Default for LanguageSupport
+// because parser initialization can fail (e.g., tree-sitter errors).
+// Use LanguageSupport::new() which returns Result<Self> for proper error handling.
 
 #[cfg(test)]
 mod tests {
@@ -194,9 +224,18 @@ mod tests {
 
     #[test]
     fn test_language_from_path() {
-        assert_eq!(Language::from_path(Path::new("src/main.rs")), Some(Language::Rust));
-        assert_eq!(Language::from_path(Path::new("app/index.tsx")), Some(Language::TypeScript));
-        assert_eq!(Language::from_path(Path::new("script.py")), Some(Language::Python));
+        assert_eq!(
+            Language::from_path(Path::new("src/main.rs")),
+            Some(Language::Rust)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("app/index.tsx")),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("script.py")),
+            Some(Language::Python)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
         assert_eq!(Language::from_path(Path::new("noextension")), None);
     }
@@ -218,7 +257,10 @@ mod tests {
     fn test_language_file_extensions() {
         assert_eq!(Language::Rust.file_extensions(), &["rs"]);
         assert_eq!(Language::TypeScript.file_extensions(), &["ts", "tsx"]);
-        assert_eq!(Language::JavaScript.file_extensions(), &["js", "jsx", "mjs", "cjs"]);
+        assert_eq!(
+            Language::JavaScript.file_extensions(),
+            &["js", "jsx", "mjs", "cjs"]
+        );
         assert_eq!(Language::Python.file_extensions(), &["py", "pyi"]);
         assert_eq!(Language::Go.file_extensions(), &["go"]);
         assert_eq!(Language::Java.file_extensions(), &["java"]);
@@ -234,56 +276,81 @@ mod tests {
     #[test]
     fn test_parse_typescript() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::TypeScript, "function hello(): string { return 'hi'; }").unwrap();
+        let tree = support
+            .parse(
+                Language::TypeScript,
+                "function hello(): string { return 'hi'; }",
+            )
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_javascript() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::JavaScript, "const x = () => console.log('hello');").unwrap();
+        let tree = support
+            .parse(
+                Language::JavaScript,
+                "const x = () => console.log('hello');",
+            )
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_python() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::Python, "def hello():\n    print('hello')").unwrap();
+        let tree = support
+            .parse(Language::Python, "def hello():\n    print('hello')")
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_go() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::Go, "package main\n\nfunc main() {}").unwrap();
+        let tree = support
+            .parse(Language::Go, "package main\n\nfunc main() {}")
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_java() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::Java, "public class Main { public static void main(String[] args) {} }").unwrap();
+        let tree = support
+            .parse(
+                Language::Java,
+                "public class Main { public static void main(String[] args) {} }",
+            )
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_c() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::C, "int main() { return 0; }").unwrap();
+        let tree = support
+            .parse(Language::C, "int main() { return 0; }")
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_cpp() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::Cpp, "int main() { return 0; }").unwrap();
+        let tree = support
+            .parse(Language::Cpp, "int main() { return 0; }")
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
     #[test]
     fn test_parse_php() {
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(Language::Php, "<?php function hello() { echo 'hello'; }").unwrap();
+        let tree = support
+            .parse(Language::Php, "<?php function hello() { echo 'hello'; }")
+            .unwrap();
         assert!(!tree.root_node().has_error());
     }
 
@@ -303,9 +370,9 @@ mod tests {
     }
 
     #[test]
-    fn test_language_support_default() {
-        let support = LanguageSupport::default();
-        // Should not panic
+    fn test_language_support_new() {
+        // Test that LanguageSupport::new() succeeds and initializes properly
+        let support = LanguageSupport::new().expect("Failed to create LanguageSupport");
         assert!(LanguageSupport::supported_languages().len() > 0);
         drop(support);
     }

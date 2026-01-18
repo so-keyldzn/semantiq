@@ -61,7 +61,13 @@ impl ChunkExtractor {
 
                 if content_size >= self.chunk_size && !current_symbols.is_empty() {
                     // Create a chunk
-                    let chunk = self.create_chunk(source, &lines, current_start, boundary_line, &current_symbols);
+                    let chunk = self.create_chunk(
+                        source,
+                        &lines,
+                        current_start,
+                        boundary_line,
+                        &current_symbols,
+                    );
                     chunks.push(chunk);
                     current_start = boundary_line.saturating_sub(OVERLAP_LINES);
                     current_symbols.clear();
@@ -73,14 +79,20 @@ impl ChunkExtractor {
 
         // Handle remaining content
         if current_start < lines.len() {
-            let chunk = self.create_chunk(source, &lines, current_start, lines.len(), &current_symbols);
+            let chunk =
+                self.create_chunk(source, &lines, current_start, lines.len(), &current_symbols);
             chunks.push(chunk);
         }
 
         Ok(chunks)
     }
 
-    fn find_semantic_boundaries(&self, node: &tree_sitter::Node, source: &str, language: Language) -> Vec<SemanticBoundary> {
+    fn find_semantic_boundaries(
+        &self,
+        node: &tree_sitter::Node,
+        source: &str,
+        language: Language,
+    ) -> Vec<SemanticBoundary> {
         let mut boundaries = Vec::new();
         self.collect_boundaries(node, source, language, &mut boundaries);
         boundaries.sort_by_key(|b| b.start_line);
@@ -114,11 +126,19 @@ impl ChunkExtractor {
         match language {
             Language::Rust => matches!(
                 kind,
-                "function_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item" | "mod_item"
+                "function_item"
+                    | "struct_item"
+                    | "enum_item"
+                    | "trait_item"
+                    | "impl_item"
+                    | "mod_item"
             ),
             Language::TypeScript | Language::JavaScript => matches!(
                 kind,
-                "function_declaration" | "class_declaration" | "interface_declaration" | "method_definition"
+                "function_declaration"
+                    | "class_declaration"
+                    | "interface_declaration"
+                    | "method_definition"
             ),
             Language::Python => matches!(kind, "function_definition" | "class_definition"),
             Language::Go => matches!(
@@ -135,7 +155,11 @@ impl ChunkExtractor {
             ),
             Language::Php => matches!(
                 kind,
-                "function_definition" | "method_declaration" | "class_declaration" | "interface_declaration" | "trait_declaration"
+                "function_definition"
+                    | "method_declaration"
+                    | "class_declaration"
+                    | "interface_declaration"
+                    | "trait_declaration"
             ),
         }
     }
@@ -351,7 +375,9 @@ class Calculator {
 "#;
         let tree = support.parse(Language::TypeScript, source).unwrap();
         let extractor = ChunkExtractor::new().with_chunk_size(50);
-        let chunks = extractor.extract(&tree, source, Language::TypeScript).unwrap();
+        let chunks = extractor
+            .extract(&tree, source, Language::TypeScript)
+            .unwrap();
 
         assert!(!chunks.is_empty());
     }

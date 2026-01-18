@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rmcp::{
-    model::{ServerCapabilities, Implementation, ServerInfo},
-    tool,
     ServerHandler,
+    model::{Implementation, ServerCapabilities, ServerInfo},
+    tool,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::version_check::{check_for_update, notify_update, VersionCheckConfig};
+use crate::version_check::{VersionCheckConfig, check_for_update, notify_update};
 
 #[derive(Clone)]
 pub struct SemantiqServer {
@@ -33,16 +33,10 @@ impl SemantiqServer {
         // Check if parser version changed and prepare for full reindex if needed
         let _ = store.check_and_prepare_for_reindex()?;
 
-        let engine = Arc::new(RetrievalEngine::new(
-            Arc::clone(&store),
-            project_root,
-        ));
+        let engine = Arc::new(RetrievalEngine::new(Arc::clone(&store), project_root));
 
         // Initialize auto-indexer with the same shared store
-        let auto_indexer = match AutoIndexer::new(
-            Arc::clone(&store),
-            PathBuf::from(project_root),
-        ) {
+        let auto_indexer = match AutoIndexer::new(Arc::clone(&store), PathBuf::from(project_root)) {
             Ok(indexer) => {
                 info!("Auto-indexing enabled");
                 Some(Arc::new(Mutex::new(indexer)))
@@ -56,7 +50,11 @@ impl SemantiqServer {
         // Spawn background version check (non-blocking)
         Self::spawn_version_check();
 
-        Ok(Self { engine, store, auto_indexer })
+        Ok(Self {
+            engine,
+            store,
+            auto_indexer,
+        })
     }
 
     fn spawn_version_check() {
@@ -126,10 +124,7 @@ impl SemantiqServer {
                 for result in &results.results {
                     output.push_str(&format!(
                         "📄 {}\n   Lines {}-{} | Score: {:.2}\n",
-                        result.file_path,
-                        result.start_line,
-                        result.end_line,
-                        result.score
+                        result.file_path, result.start_line, result.end_line, result.score
                     ));
 
                     if let Some(ref symbol_name) = result.metadata.symbol_name {
@@ -216,10 +211,7 @@ impl SemantiqServer {
                     }
 
                     if usages.len() > 20 {
-                        output.push_str(&format!(
-                            "... and {} more usages\n",
-                            usages.len() - 20
-                        ));
+                        output.push_str(&format!("... and {} more usages\n", usages.len() - 20));
                     }
                 }
 
@@ -233,10 +225,7 @@ impl SemantiqServer {
         name = "semantiq_deps",
         description = "Analyze the dependency graph for a file. Shows what the file imports and what other files import it."
     )]
-    pub async fn semantiq_deps(
-        &self,
-        #[tool(param)] file_path: String,
-    ) -> Result<String, String> {
+    pub async fn semantiq_deps(&self, #[tool(param)] file_path: String) -> Result<String, String> {
         let mut output = format!("Dependency analysis for '{}'\n\n", file_path);
 
         match self.engine.get_dependencies(&file_path) {
@@ -275,10 +264,7 @@ impl SemantiqServer {
         name = "semantiq_explain",
         description = "Get a detailed explanation of a symbol including its definition, documentation, usage patterns, and related symbols."
     )]
-    pub async fn semantiq_explain(
-        &self,
-        #[tool(param)] symbol: String,
-    ) -> Result<String, String> {
+    pub async fn semantiq_explain(&self, #[tool(param)] symbol: String) -> Result<String, String> {
         match self.engine.explain_symbol(&symbol) {
             Ok(explanation) => {
                 if !explanation.found {
@@ -294,11 +280,7 @@ impl SemantiqServer {
                 ));
 
                 for (i, def) in explanation.definitions.iter().enumerate() {
-                    output.push_str(&format!(
-                        "## Definition {} ({})\n",
-                        i + 1,
-                        def.kind
-                    ));
+                    output.push_str(&format!("## Definition {} ({})\n", i + 1, def.kind));
                     output.push_str(&format!(
                         "📄 {}:{}-{}\n\n",
                         def.file_path, def.start_line, def.end_line

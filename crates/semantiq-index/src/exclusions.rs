@@ -85,9 +85,13 @@ mod tests {
 
     #[test]
     fn test_should_exclude_dependency_dirs() {
-        assert!(should_exclude_path(Path::new("node_modules/package/index.js")));
+        assert!(should_exclude_path(Path::new(
+            "node_modules/package/index.js"
+        )));
         assert!(should_exclude_path(Path::new("target/debug/main")));
-        assert!(should_exclude_path(Path::new("vendor/github.com/pkg/file.go")));
+        assert!(should_exclude_path(Path::new(
+            "vendor/github.com/pkg/file.go"
+        )));
     }
 
     #[test]
