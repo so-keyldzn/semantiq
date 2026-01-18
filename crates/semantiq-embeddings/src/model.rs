@@ -1,13 +1,15 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "onnx")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "onnx")]
 use std::fs;
 #[cfg(feature = "onnx")]
 use std::io::Write;
 #[cfg(feature = "onnx")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "onnx")]
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -75,8 +77,35 @@ const MODEL_URL: &str =
 const TOKENIZER_URL: &str =
     "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
 
+/// SHA-256 checksum for the ONNX model file (all-MiniLM-L6-v2)
+/// This ensures the downloaded model hasn't been tampered with.
+/// To update: download the model and run `sha256sum model.onnx`
 #[cfg(feature = "onnx")]
-fn download_file(url: &str, path: &Path) -> Result<()> {
+const MODEL_SHA256: &str = "d6b91687a3af978cd760d08f8ff62925ab7db6d01cd1cfe4cebe1e9e2e702400";
+
+/// SHA-256 checksum for the tokenizer file
+/// To update: download the tokenizer and run `sha256sum tokenizer.json`
+#[cfg(feature = "onnx")]
+const TOKENIZER_SHA256: &str = "d8ad65f9922f40ac0b8fbbc32f9a87be6017bf07766e48d04e4b73c9d1839e95";
+
+/// Compute SHA-256 hash of a byte slice
+#[cfg(feature = "onnx")]
+fn compute_sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Verify that a file matches the expected SHA-256 checksum
+#[cfg(feature = "onnx")]
+fn verify_checksum(path: &Path, expected: &str) -> Result<bool> {
+    let data = fs::read(path)?;
+    let actual = compute_sha256(&data);
+    Ok(actual == expected)
+}
+
+#[cfg(feature = "onnx")]
+fn download_file(url: &str, path: &Path, expected_sha256: &str) -> Result<()> {
     info!("Downloading {} to {:?}", url, path);
 
     if let Some(parent) = path.parent() {
@@ -98,10 +127,26 @@ fn download_file(url: &str, path: &Path) -> Result<()> {
         .limit(200 * 1024 * 1024)
         .read_to_vec()?;
 
+    // Verify checksum before writing to disk
+    let actual_sha256 = compute_sha256(&bytes);
+    if actual_sha256 != expected_sha256 {
+        anyhow::bail!(
+            "Checksum verification failed for {:?}.\nExpected: {}\nActual: {}\nThe file may have been corrupted or tampered with.",
+            path,
+            expected_sha256,
+            actual_sha256
+        );
+    }
+
     let mut file = fs::File::create(path)?;
     file.write_all(&bytes)?;
 
-    info!("Downloaded {:?} ({} bytes)", path, bytes.len());
+    info!(
+        "Downloaded and verified {:?} ({} bytes, sha256: {})",
+        path,
+        bytes.len(),
+        &actual_sha256[..16]
+    );
     Ok(())
 }
 
@@ -111,14 +156,55 @@ pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
     let model_path = Path::new(&config.model_path);
     let tokenizer_path = Path::new(&config.tokenizer_path);
 
+    // Check and download model if needed
     if !model_path.exists() {
         info!("Model not found, downloading...");
-        download_file(MODEL_URL, model_path)?;
+        download_file(MODEL_URL, model_path, MODEL_SHA256)?;
+    } else {
+        // Verify existing model checksum
+        match verify_checksum(model_path, MODEL_SHA256) {
+            Ok(true) => {
+                info!("Model checksum verified");
+            }
+            Ok(false) => {
+                warn!(
+                    "Model checksum mismatch, re-downloading. \
+                    This may happen if the model was updated upstream."
+                );
+                fs::remove_file(model_path)?;
+                download_file(MODEL_URL, model_path, MODEL_SHA256)?;
+            }
+            Err(e) => {
+                warn!("Could not verify model checksum: {}. Continuing anyway.", e);
+            }
+        }
     }
 
+    // Check and download tokenizer if needed
     if !tokenizer_path.exists() {
         info!("Tokenizer not found, downloading...");
-        download_file(TOKENIZER_URL, tokenizer_path)?;
+        download_file(TOKENIZER_URL, tokenizer_path, TOKENIZER_SHA256)?;
+    } else {
+        // Verify existing tokenizer checksum
+        match verify_checksum(tokenizer_path, TOKENIZER_SHA256) {
+            Ok(true) => {
+                info!("Tokenizer checksum verified");
+            }
+            Ok(false) => {
+                warn!(
+                    "Tokenizer checksum mismatch, re-downloading. \
+                    This may happen if the tokenizer was updated upstream."
+                );
+                fs::remove_file(tokenizer_path)?;
+                download_file(TOKENIZER_URL, tokenizer_path, TOKENIZER_SHA256)?;
+            }
+            Err(e) => {
+                warn!(
+                    "Could not verify tokenizer checksum: {}. Continuing anyway.",
+                    e
+                );
+            }
+        }
     }
 
     Ok(config)
