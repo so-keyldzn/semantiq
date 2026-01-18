@@ -97,9 +97,16 @@ Works with all MCP-compatible tools:
 - VS Code
 - Codex CLI / Aider
 
-## Changelog
+## Known Limitations
 
-See [CHANGELOG.md](CHANGELOG.md) for version history.
+- **`semantiq_explain`**: Works best with functions, classes, structs, and interfaces. Some exported variables (e.g., `export const fadeInUp = {...}`) may not be indexed as symbols. Use `semantiq_search` as a fallback.
+- **Embedding model**: Downloaded automatically on first run (~90MB from HuggingFace).
+- **macOS Intel**: Not supported (ONNX Runtime limitation).
+
+## Documentation
+
+- **[MCP Setup Guide](docs/MCP-SETUP-GUIDE.md)** - Configuration détaillée pour Claude Code, Cursor, VS Code, etc.
+- [CHANGELOG.md](CHANGELOG.md) - Historique des versions
 
 ## License
 
