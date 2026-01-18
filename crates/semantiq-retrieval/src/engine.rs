@@ -479,8 +479,14 @@ impl RetrievalEngine {
         let content = fs::read_to_string(full_path)?;
         let lines: Vec<&str> = content.lines().collect();
 
-        let start_idx = start.saturating_sub(1);
+        // Safely compute indices, ensuring start_idx <= end_idx <= lines.len()
+        let start_idx = start.saturating_sub(1).min(lines.len());
         let end_idx = end.min(lines.len());
+
+        // Handle case where start > end (can happen if file was truncated after indexing)
+        if start_idx >= end_idx {
+            return Ok(String::new());
+        }
 
         Ok(lines[start_idx..end_idx].join("\n"))
     }
