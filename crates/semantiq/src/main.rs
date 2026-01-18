@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ignore::WalkBuilder;
 use rmcp::ServiceExt;
-use semantiq_index::IndexStore;
+use semantiq_embeddings::create_embedding_model;
+use semantiq_index::{IndexStore, should_exclude_entry, MAX_FILE_SIZE};
 use semantiq_mcp::SemantiqServer;
 use semantiq_parser::{ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor};
 use std::fs;
@@ -285,15 +286,31 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
     let mut language_support = LanguageSupport::new()?;
     let chunk_extractor = ChunkExtractor::new();
 
+    // Initialize embedding model
+    let embedding_model = match create_embedding_model(None) {
+        Ok(model) => {
+            info!("Embedding model loaded (dim={})", model.dimension());
+            Some(model)
+        }
+        Err(e) => {
+            warn!("Could not load embedding model: {}. Embeddings will not be generated.", e);
+            None
+        }
+    };
+
     let mut file_count = 0;
     let mut symbol_count = 0;
     let mut chunk_count = 0;
     let mut dep_count = 0;
 
-    // Walk the directory
+    // Walk the directory, excluding hidden dirs and dependency folders
     let walker = WalkBuilder::new(&project_root)
-        .hidden(false)
+        .hidden(true) // Exclude hidden directories (.git, .claude, etc.)
         .git_ignore(true)
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            !should_exclude_entry(&name)
+        })
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -341,6 +358,12 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
+        // Skip large files
+        if size > MAX_FILE_SIZE as i64 {
+            debug!("Skipping {} (too large: {} bytes)", rel_path, size);
+            continue;
+        }
+
         // Insert file record
         let file_id = store.insert_file(
             &rel_path,
@@ -362,6 +385,16 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
                 let chunks = chunk_extractor.extract(&tree, &content, language)?;
                 store.insert_chunks(file_id, &chunks)?;
                 chunk_count += chunks.len();
+
+                // Generate embeddings for chunks
+                if let Some(ref model) = embedding_model {
+                    let stored_chunks = store.get_chunks_by_file(file_id)?;
+                    for chunk in stored_chunks {
+                        if let Ok(embedding) = model.embed(&chunk.content) {
+                            let _ = store.update_chunk_embedding(chunk.id, &embedding);
+                        }
+                    }
+                }
 
                 // Extract imports and store as dependencies
                 let imports = ImportExtractor::extract(&tree, &content, language)?;
