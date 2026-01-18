@@ -389,6 +389,85 @@ impl IndexStore {
         })
     }
 
+    pub fn get_chunks_by_file(&self, file_id: i64) -> Result<Vec<ChunkRecord>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, file_id, content, start_line, end_line, start_byte, end_byte, symbols_json
+                 FROM chunks WHERE file_id = ?1",
+            )?;
+
+            let results = stmt
+                .query_map([file_id], |row| {
+                    let symbols_json: String = row.get(7)?;
+                    let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
+
+                    Ok(ChunkRecord {
+                        id: row.get(0)?,
+                        file_id: row.get(1)?,
+                        content: row.get(2)?,
+                        start_line: row.get(3)?,
+                        end_line: row.get(4)?,
+                        start_byte: row.get(5)?,
+                        end_byte: row.get(6)?,
+                        symbols,
+                        embedding: None,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(results)
+        })
+    }
+
+    pub fn get_chunks_with_embeddings(&self) -> Result<Vec<(ChunkRecord, Vec<f32>)>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT c.id, c.file_id, c.content, c.start_line, c.end_line, c.start_byte, c.end_byte, c.symbols_json, c.embedding, f.path
+                 FROM chunks c
+                 JOIN files f ON c.file_id = f.id
+                 WHERE c.embedding IS NOT NULL",
+            )?;
+
+            let results = stmt
+                .query_map([], |row| {
+                    let symbols_json: String = row.get(7)?;
+                    let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
+                    let embedding_bytes: Vec<u8> = row.get(8)?;
+
+                    // Convert bytes back to f32
+                    let embedding: Vec<f32> = embedding_bytes
+                        .chunks(4)
+                        .map(|chunk| {
+                            let bytes: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
+                            f32::from_le_bytes(bytes)
+                        })
+                        .collect();
+
+                    let chunk = ChunkRecord {
+                        id: row.get(0)?,
+                        file_id: row.get(1)?,
+                        content: row.get(2)?,
+                        start_line: row.get(3)?,
+                        end_line: row.get(4)?,
+                        start_byte: row.get(5)?,
+                        end_byte: row.get(6)?,
+                        symbols,
+                        embedding: Some(embedding.clone()),
+                    };
+
+                    Ok((chunk, embedding))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            Ok(results)
+        })
+    }
+
+    pub fn get_chunk_file_path(&self, file_id: i64) -> Result<Option<String>> {
+        self.get_file_path_by_id(file_id)
+    }
+
     // Dependency operations
 
     pub fn insert_dependency(
