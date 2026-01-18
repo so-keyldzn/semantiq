@@ -283,6 +283,11 @@ async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()
 
     let start = Instant::now();
     let store = IndexStore::open(&db_path)?;
+
+    // Check if parser version changed and prepare for full reindex if needed
+    let needs_full_reindex = store.check_and_prepare_for_reindex()?;
+    let force = force || needs_full_reindex;
+
     let mut language_support = LanguageSupport::new()?;
     let chunk_extractor = ChunkExtractor::new();
 
