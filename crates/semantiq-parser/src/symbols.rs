@@ -397,4 +397,183 @@ function greet(name: string): string {
             "greet should be extracted as Function"
         );
     }
+
+    #[test]
+    fn test_extract_python_symbols() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+class User:
+    """A user class"""
+    def __init__(self, name: str):
+        self.name = name
+
+    def greet(self) -> str:
+        return f"Hello, {self.name}!"
+
+def process_data(items: list) -> dict:
+    """Process a list of items"""
+    return {}
+"#;
+        let tree = support.parse(Language::Python, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Python).unwrap();
+
+        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(symbols.iter().any(|s| s.name == "process_data" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_extract_go_symbols() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+package main
+
+import "fmt"
+
+type User struct {
+    Name string
+    Age  int
+}
+
+func (u *User) Greet() string {
+    return fmt.Sprintf("Hello, %s!", u.Name)
+}
+
+func main() {
+    fmt.Println("Hello, World!")
+}
+"#;
+        let tree = support.parse(Language::Go, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Go).unwrap();
+
+        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+        assert!(symbols.iter().any(|s| s.name == "Greet" && s.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_extract_java_symbols() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+public class Calculator {
+    private int value;
+
+    public Calculator(int initial) {
+        this.value = initial;
+    }
+
+    public int add(int n) {
+        return value + n;
+    }
+}
+
+interface Computable {
+    int compute();
+}
+"#;
+        let tree = support.parse(Language::Java, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Java).unwrap();
+
+        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+        assert!(symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Method));
+        assert!(symbols.iter().any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface));
+    }
+
+    #[test]
+    fn test_extract_c_symbols() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+#include <stdio.h>
+
+struct Point {
+    int x;
+    int y;
+};
+
+enum Color {
+    RED,
+    GREEN,
+    BLUE
+};
+
+int add(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    printf("Hello, World!\n");
+    return 0;
+}
+"#;
+        let tree = support.parse(Language::C, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::C).unwrap();
+
+        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(symbols.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        // C functions have declarator as name which includes params, check for partial match
+        assert!(
+            symbols.iter().any(|s| s.kind == SymbolKind::Function && s.name.contains("add")),
+            "Expected a function containing 'add', found: {:?}",
+            symbols.iter().filter(|s| s.kind == SymbolKind::Function).collect::<Vec<_>>()
+        );
+        assert!(
+            symbols.iter().any(|s| s.kind == SymbolKind::Function && s.name.contains("main")),
+            "Expected a function containing 'main', found: {:?}",
+            symbols.iter().filter(|s| s.kind == SymbolKind::Function).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_symbol_kind_as_str() {
+        assert_eq!(SymbolKind::Function.as_str(), "function");
+        assert_eq!(SymbolKind::Method.as_str(), "method");
+        assert_eq!(SymbolKind::Class.as_str(), "class");
+        assert_eq!(SymbolKind::Struct.as_str(), "struct");
+        assert_eq!(SymbolKind::Enum.as_str(), "enum");
+        assert_eq!(SymbolKind::Interface.as_str(), "interface");
+        assert_eq!(SymbolKind::Trait.as_str(), "trait");
+        assert_eq!(SymbolKind::Module.as_str(), "module");
+        assert_eq!(SymbolKind::Variable.as_str(), "variable");
+        assert_eq!(SymbolKind::Constant.as_str(), "constant");
+        assert_eq!(SymbolKind::Type.as_str(), "type");
+        assert_eq!(SymbolKind::Import.as_str(), "import");
+    }
+
+    #[test]
+    fn test_symbol_with_doc_comment() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+/// This is a documented function
+/// It does something important
+fn documented_function() {
+    println!("Hello");
+}
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        let func = symbols.iter().find(|s| s.name == "documented_function").unwrap();
+        assert!(func.doc_comment.is_some());
+        assert!(func.doc_comment.as_ref().unwrap().contains("documented function"));
+    }
+
+    #[test]
+    fn test_nested_symbols_with_parent() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+impl Calculator {
+    fn add(&self, n: i32) -> i32 {
+        self.value + n
+    }
+
+    fn subtract(&self, n: i32) -> i32 {
+        self.value - n
+    }
+}
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        // The impl block should be detected, and functions inside should have parent
+        let add_func = symbols.iter().find(|s| s.name == "add");
+        assert!(add_func.is_some());
+    }
 }

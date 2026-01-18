@@ -133,6 +133,7 @@ impl Default for LanguageSupport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_language_from_extension() {
@@ -143,9 +144,169 @@ mod tests {
     }
 
     #[test]
+    fn test_language_from_extension_case_insensitive() {
+        assert_eq!(Language::from_extension("RS"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("Ts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("PY"), Some(Language::Python));
+    }
+
+    #[test]
+    fn test_language_from_extension_all_languages() {
+        // Rust
+        assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
+
+        // TypeScript
+        assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
+
+        // JavaScript
+        assert_eq!(Language::from_extension("js"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("jsx"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("mjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("cjs"), Some(Language::JavaScript));
+
+        // Python
+        assert_eq!(Language::from_extension("py"), Some(Language::Python));
+        assert_eq!(Language::from_extension("pyi"), Some(Language::Python));
+
+        // Go
+        assert_eq!(Language::from_extension("go"), Some(Language::Go));
+
+        // Java
+        assert_eq!(Language::from_extension("java"), Some(Language::Java));
+
+        // C
+        assert_eq!(Language::from_extension("c"), Some(Language::C));
+        assert_eq!(Language::from_extension("h"), Some(Language::C));
+
+        // C++
+        assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cc"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cxx"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hxx"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hh"), Some(Language::Cpp));
+
+        // PHP
+        assert_eq!(Language::from_extension("php"), Some(Language::Php));
+        assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
+    }
+
+    #[test]
+    fn test_language_from_path() {
+        assert_eq!(Language::from_path(Path::new("src/main.rs")), Some(Language::Rust));
+        assert_eq!(Language::from_path(Path::new("app/index.tsx")), Some(Language::TypeScript));
+        assert_eq!(Language::from_path(Path::new("script.py")), Some(Language::Python));
+        assert_eq!(Language::from_path(Path::new("README.md")), None);
+        assert_eq!(Language::from_path(Path::new("noextension")), None);
+    }
+
+    #[test]
+    fn test_language_name() {
+        assert_eq!(Language::Rust.name(), "rust");
+        assert_eq!(Language::TypeScript.name(), "typescript");
+        assert_eq!(Language::JavaScript.name(), "javascript");
+        assert_eq!(Language::Python.name(), "python");
+        assert_eq!(Language::Go.name(), "go");
+        assert_eq!(Language::Java.name(), "java");
+        assert_eq!(Language::C.name(), "c");
+        assert_eq!(Language::Cpp.name(), "cpp");
+        assert_eq!(Language::Php.name(), "php");
+    }
+
+    #[test]
+    fn test_language_file_extensions() {
+        assert_eq!(Language::Rust.file_extensions(), &["rs"]);
+        assert_eq!(Language::TypeScript.file_extensions(), &["ts", "tsx"]);
+        assert_eq!(Language::JavaScript.file_extensions(), &["js", "jsx", "mjs", "cjs"]);
+        assert_eq!(Language::Python.file_extensions(), &["py", "pyi"]);
+        assert_eq!(Language::Go.file_extensions(), &["go"]);
+        assert_eq!(Language::Java.file_extensions(), &["java"]);
+    }
+
+    #[test]
     fn test_parse_rust() {
         let mut support = LanguageSupport::new().unwrap();
         let tree = support.parse(Language::Rust, "fn main() {}").unwrap();
         assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_typescript() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::TypeScript, "function hello(): string { return 'hi'; }").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_javascript() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::JavaScript, "const x = () => console.log('hello');").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_python() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Python, "def hello():\n    print('hello')").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_go() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Go, "package main\n\nfunc main() {}").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_java() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Java, "public class Main { public static void main(String[] args) {} }").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_c() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::C, "int main() { return 0; }").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_cpp() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Cpp, "int main() { return 0; }").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_parse_php() {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Php, "<?php function hello() { echo 'hello'; }").unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_supported_languages() {
+        let languages = LanguageSupport::supported_languages();
+        assert_eq!(languages.len(), 9);
+        assert!(languages.contains(&Language::Rust));
+        assert!(languages.contains(&Language::TypeScript));
+        assert!(languages.contains(&Language::JavaScript));
+        assert!(languages.contains(&Language::Python));
+        assert!(languages.contains(&Language::Go));
+        assert!(languages.contains(&Language::Java));
+        assert!(languages.contains(&Language::C));
+        assert!(languages.contains(&Language::Cpp));
+        assert!(languages.contains(&Language::Php));
+    }
+
+    #[test]
+    fn test_language_support_default() {
+        let support = LanguageSupport::default();
+        // Should not panic
+        assert!(LanguageSupport::supported_languages().len() > 0);
+        drop(support);
     }
 }
