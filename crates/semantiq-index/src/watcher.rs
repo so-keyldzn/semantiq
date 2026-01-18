@@ -1,3 +1,4 @@
+use crate::exclusions::should_exclude_path;
 use anyhow::Result;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
@@ -74,6 +75,12 @@ impl FileWatcher {
         for path in event.paths {
             // Skip non-files
             if path.is_dir() {
+                continue;
+            }
+
+            // Skip excluded paths (hidden dirs, node_modules, etc.)
+            if should_exclude_path(&path) {
+                debug!("Skipping excluded path event: {:?}", path);
                 continue;
             }
 
