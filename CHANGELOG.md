@@ -2,7 +2,7 @@
 
 All notable changes to Semantiq will be documented in this file.
 
-## [0.2.5] - 2026-01-18
+## [0.2.6] - 2026-01-18
 
 ### Added
 - Automatic reindexation when parser version changes (no more manual `--force` needed)
@@ -13,6 +13,9 @@ All notable changes to Semantiq will be documented in this file.
 ### Changed
 - Version detection uses atomic transactions to prevent race conditions
 - Documentation updated with known limitations and setup guides
+
+### Fixed
+- Filter out verbose ONNX Runtime logs during indexing
 
 ## [0.2.4] - 2026-01-18
 
