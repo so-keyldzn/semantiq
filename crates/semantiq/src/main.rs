@@ -87,11 +87,11 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Setup logging
+    // Setup logging - filter out verbose ONNX Runtime logs
     let filter = if cli.verbose {
         EnvFilter::new("debug")
     } else {
-        EnvFilter::new("info")
+        EnvFilter::new("info,ort=warn")
     };
 
     tracing_subscriber::fmt()
