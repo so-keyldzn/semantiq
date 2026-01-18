@@ -453,4 +453,122 @@ import { helper } from './utils';
         assert_eq!(imports[2].path, "./utils");
         assert_eq!(imports[2].kind, ImportKind::Local);
     }
+
+    #[test]
+    fn test_extract_python_imports() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+import os
+import json
+from collections import defaultdict
+from .local_module import helper
+"#;
+        let tree = support.parse(Language::Python, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Python).unwrap();
+
+        assert!(imports.iter().any(|i| i.path == "os" && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path == "json" && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path == "collections" && i.kind == ImportKind::Std));
+    }
+
+    #[test]
+    fn test_extract_go_imports() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+package main
+
+import (
+    "fmt"
+    "github.com/pkg/errors"
+)
+"#;
+        let tree = support.parse(Language::Go, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Go).unwrap();
+
+        assert!(imports.iter().any(|i| i.path == "fmt" && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path == "github.com/pkg/errors" && i.kind == ImportKind::External));
+    }
+
+    #[test]
+    fn test_extract_java_imports() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+import java.util.List;
+import java.util.ArrayList;
+import com.google.gson.Gson;
+"#;
+        let tree = support.parse(Language::Java, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Java).unwrap();
+
+        assert!(imports.iter().any(|i| i.path.starts_with("java.util") && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path.starts_with("com.google") && i.kind == ImportKind::External));
+    }
+
+    #[test]
+    fn test_extract_c_imports() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include "myheader.h"
+"#;
+        let tree = support.parse(Language::C, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::C).unwrap();
+
+        assert!(imports.iter().any(|i| i.path == "stdio.h" && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path == "stdlib.h" && i.kind == ImportKind::Std));
+        assert!(imports.iter().any(|i| i.path == "myheader.h" && i.kind == ImportKind::Local));
+    }
+
+    #[test]
+    fn test_import_kind_as_str() {
+        assert_eq!(ImportKind::Std.as_str(), "std");
+        assert_eq!(ImportKind::External.as_str(), "external");
+        assert_eq!(ImportKind::Local.as_str(), "local");
+    }
+
+    #[test]
+    fn test_rust_import_with_braces() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use std::collections::{HashMap, HashSet};
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1);
+        // Import with braces should have no specific name
+        assert!(imports[0].name.is_none());
+    }
+
+    #[test]
+    fn test_rust_super_import() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use super::parent_module;
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].kind, ImportKind::Local);
+    }
+
+    #[test]
+    fn test_import_line_numbers() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use std::io;
+
+fn main() {}
+
+use std::fs;
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].start_line, 2);
+        assert_eq!(imports[1].start_line, 6);
+    }
 }

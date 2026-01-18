@@ -205,4 +205,148 @@ mod tests {
         let query = Query::new("get_user");
         assert!(query.expanded_terms.contains(&"getUser".to_string()));
     }
+
+    #[test]
+    fn test_snake_to_pascal() {
+        let expander = QueryExpander::new();
+        assert_eq!(expander.snake_to_pascal("hello_world"), "HelloWorld");
+        assert_eq!(expander.snake_to_pascal("get_user"), "GetUser");
+    }
+
+    #[test]
+    fn test_pascal_to_camel() {
+        let expander = QueryExpander::new();
+        assert_eq!(expander.pascal_to_camel("HelloWorld"), "helloWorld");
+        assert_eq!(expander.pascal_to_camel("GetUser"), "getUser");
+    }
+
+    #[test]
+    fn test_kebab_to_camel() {
+        let expander = QueryExpander::new();
+        assert_eq!(expander.kebab_to_camel("hello-world"), "helloWorld");
+        assert_eq!(expander.kebab_to_camel("get-user-by-id"), "getUserById");
+    }
+
+    #[test]
+    fn test_is_camel_case() {
+        let expander = QueryExpander::new();
+        assert!(expander.is_camel_case("helloWorld"));
+        assert!(expander.is_camel_case("getUser"));
+        assert!(!expander.is_camel_case("HelloWorld")); // PascalCase
+        assert!(!expander.is_camel_case("hello")); // All lowercase
+        assert!(!expander.is_camel_case("HELLO")); // All uppercase
+    }
+
+    #[test]
+    fn test_is_pascal_case() {
+        let expander = QueryExpander::new();
+        assert!(expander.is_pascal_case("HelloWorld"));
+        assert!(expander.is_pascal_case("GetUser"));
+        assert!(!expander.is_pascal_case("helloWorld")); // camelCase
+    }
+
+    #[test]
+    fn test_query_new() {
+        let query = Query::new("search_term");
+        assert_eq!(query.text, "search_term");
+        assert!(!query.filters.include_tests);
+        assert!(query.filters.languages.is_empty());
+    }
+
+    #[test]
+    fn test_query_with_filters() {
+        let filters = QueryFilters {
+            languages: vec!["rust".to_string(), "python".to_string()],
+            file_patterns: vec!["*.rs".to_string()],
+            symbol_kinds: vec!["function".to_string()],
+            include_tests: true,
+        };
+
+        let query = Query::new("test").with_filters(filters);
+        assert_eq!(query.filters.languages.len(), 2);
+        assert!(query.filters.include_tests);
+    }
+
+    #[test]
+    fn test_query_all_terms() {
+        let query = Query::new("get_user");
+        let terms = query.all_terms();
+
+        // Should include original term
+        assert!(terms.contains(&"get_user"));
+        // Should include expanded terms
+        assert!(terms.len() >= 1);
+    }
+
+    #[test]
+    fn test_case_variations_snake_case() {
+        let expander = QueryExpander::new();
+        let variations = expander.case_variations("hello_world");
+
+        assert!(variations.contains(&"helloWorld".to_string()));
+        assert!(variations.contains(&"HelloWorld".to_string()));
+    }
+
+    #[test]
+    fn test_case_variations_camel_case() {
+        let expander = QueryExpander::new();
+        let variations = expander.case_variations("helloWorld");
+
+        assert!(variations.contains(&"hello_world".to_string()));
+    }
+
+    #[test]
+    fn test_case_variations_pascal_case() {
+        let expander = QueryExpander::new();
+        let variations = expander.case_variations("HelloWorld");
+
+        assert!(variations.contains(&"hello_world".to_string()));
+        assert!(variations.contains(&"helloWorld".to_string()));
+    }
+
+    #[test]
+    fn test_case_variations_kebab_case() {
+        let expander = QueryExpander::new();
+        let variations = expander.case_variations("hello-world");
+
+        assert!(variations.contains(&"hello_world".to_string()));
+        assert!(variations.contains(&"helloWorld".to_string()));
+    }
+
+    #[test]
+    fn test_expand_removes_duplicates() {
+        let expander = QueryExpander::new();
+        let expanded = expander.expand("test");
+
+        // Check no duplicates
+        let mut seen = std::collections::HashSet::new();
+        for term in &expanded {
+            assert!(seen.insert(term.to_lowercase()), "Duplicate found: {}", term);
+        }
+    }
+
+    #[test]
+    fn test_expand_does_not_include_original() {
+        let expander = QueryExpander::new();
+        let expanded = expander.expand("get_user");
+
+        // Should not include the original term itself
+        assert!(!expanded.iter().any(|t| t.to_lowercase() == "get_user"));
+    }
+
+    #[test]
+    fn test_query_filters_default() {
+        let filters = QueryFilters::default();
+        assert!(filters.languages.is_empty());
+        assert!(filters.file_patterns.is_empty());
+        assert!(filters.symbol_kinds.is_empty());
+        assert!(!filters.include_tests);
+    }
+
+    #[test]
+    fn test_query_expander_default() {
+        let expander = QueryExpander::default();
+        // Should work the same as new()
+        assert_eq!(expander.snake_to_camel("test_case"), "testCase");
+    }
 }

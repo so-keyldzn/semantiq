@@ -257,4 +257,145 @@ fn baz() {
 
         assert!(!chunks.is_empty());
     }
+
+    #[test]
+    fn test_chunk_extractor_default() {
+        let extractor = ChunkExtractor::default();
+        // Should use DEFAULT_CHUNK_SIZE = 1500
+        assert_eq!(extractor.chunk_size, 1500);
+    }
+
+    #[test]
+    fn test_chunk_extractor_with_chunk_size() {
+        let extractor = ChunkExtractor::new().with_chunk_size(500);
+        assert_eq!(extractor.chunk_size, 500);
+    }
+
+    #[test]
+    fn test_chunk_has_correct_line_numbers() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"fn main() {
+    println!("Hello");
+}
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        assert!(!chunks.is_empty());
+        // Line numbers should be 1-indexed
+        assert!(chunks[0].start_line >= 1);
+    }
+
+    #[test]
+    fn test_chunk_contains_symbols() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+fn hello_world() {
+    println!("Hello, World!");
+}
+
+fn goodbye_world() {
+    println!("Goodbye, World!");
+}
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new().with_chunk_size(50);
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        // At least some chunks should contain symbol names
+        let has_symbols = chunks.iter().any(|c| !c.symbols.is_empty());
+        assert!(has_symbols || chunks.len() == 1); // Either has symbols or single chunk
+    }
+
+    #[test]
+    fn test_chunk_byte_positions() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "fn test() {}";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        assert!(!chunks.is_empty());
+        // Byte positions should be valid
+        assert!(chunks[0].start_byte <= chunks[0].end_byte);
+        assert!(chunks[0].end_byte <= source.len());
+    }
+
+    #[test]
+    fn test_line_based_chunking_fallback() {
+        let mut support = LanguageSupport::new().unwrap();
+        // Source without semantic boundaries
+        let source = "// Just a comment\n// Another comment\n// More comments\n";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new().with_chunk_size(20);
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        // Should fall back to line-based chunking
+        assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_extraction_typescript() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+function greet(name: string): string {
+    return `Hello, ${name}!`;
+}
+
+class Calculator {
+    add(a: number, b: number): number {
+        return a + b;
+    }
+}
+"#;
+        let tree = support.parse(Language::TypeScript, source).unwrap();
+        let extractor = ChunkExtractor::new().with_chunk_size(50);
+        let chunks = extractor.extract(&tree, source, Language::TypeScript).unwrap();
+
+        assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_extraction_python() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+def greet(name):
+    return f"Hello, {name}!"
+
+class Calculator:
+    def add(self, a, b):
+        return a + b
+"#;
+        let tree = support.parse(Language::Python, source).unwrap();
+        let extractor = ChunkExtractor::new().with_chunk_size(50);
+        let chunks = extractor.extract(&tree, source, Language::Python).unwrap();
+
+        assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_content_matches_source() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "fn main() {\n    println!(\"Hello\");\n}";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        assert!(!chunks.is_empty());
+        // The chunk content should be a substring of the source
+        assert!(source.contains(&chunks[0].content) || chunks[0].content.contains("fn main"));
+    }
+
+    #[test]
+    fn test_empty_source() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        // Empty source should produce no or empty chunks
+        assert!(chunks.is_empty() || chunks[0].content.is_empty());
+    }
 }

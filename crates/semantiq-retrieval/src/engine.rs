@@ -523,6 +523,53 @@ mod tests {
     }
 
     #[test]
+    fn test_is_code_file_all_extensions() {
+        // Rust
+        assert!(RetrievalEngine::is_code_file(Path::new("lib.rs")));
+
+        // TypeScript/JavaScript
+        assert!(RetrievalEngine::is_code_file(Path::new("app.ts")));
+        assert!(RetrievalEngine::is_code_file(Path::new("app.tsx")));
+        assert!(RetrievalEngine::is_code_file(Path::new("index.js")));
+        assert!(RetrievalEngine::is_code_file(Path::new("component.jsx")));
+
+        // Python
+        assert!(RetrievalEngine::is_code_file(Path::new("script.py")));
+
+        // Go
+        assert!(RetrievalEngine::is_code_file(Path::new("main.go")));
+
+        // Java
+        assert!(RetrievalEngine::is_code_file(Path::new("Main.java")));
+
+        // C/C++
+        assert!(RetrievalEngine::is_code_file(Path::new("main.c")));
+        assert!(RetrievalEngine::is_code_file(Path::new("main.cpp")));
+        assert!(RetrievalEngine::is_code_file(Path::new("header.h")));
+        assert!(RetrievalEngine::is_code_file(Path::new("header.hpp")));
+
+        // PHP
+        assert!(RetrievalEngine::is_code_file(Path::new("index.php")));
+
+        // Other supported
+        assert!(RetrievalEngine::is_code_file(Path::new("app.rb")));
+        assert!(RetrievalEngine::is_code_file(Path::new("app.swift")));
+        assert!(RetrievalEngine::is_code_file(Path::new("app.kt")));
+        assert!(RetrievalEngine::is_code_file(Path::new("app.vue")));
+        assert!(RetrievalEngine::is_code_file(Path::new("app.svelte")));
+    }
+
+    #[test]
+    fn test_is_not_code_file() {
+        assert!(!RetrievalEngine::is_code_file(Path::new("readme.md")));
+        assert!(!RetrievalEngine::is_code_file(Path::new("data.json")));
+        assert!(!RetrievalEngine::is_code_file(Path::new("config.yaml")));
+        assert!(!RetrievalEngine::is_code_file(Path::new("image.png")));
+        assert!(!RetrievalEngine::is_code_file(Path::new("document.pdf")));
+        assert!(!RetrievalEngine::is_code_file(Path::new("noextension")));
+    }
+
+    #[test]
     fn test_cosine_similarity() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];
@@ -531,5 +578,110 @@ mod tests {
         let c = vec![1.0, 0.0, 0.0];
         let d = vec![0.0, 1.0, 0.0];
         assert!((cosine_similarity(&c, &d)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_cosine_similarity_opposite_vectors() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![-1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&a, &b) + 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_cosine_similarity_same_direction() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![2.0, 4.0, 6.0];
+        // Same direction vectors should have similarity of 1.0
+        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_cosine_similarity_empty_vectors() {
+        let a: Vec<f32> = vec![];
+        let b: Vec<f32> = vec![];
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_different_lengths() {
+        let a = vec![1.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        // Different lengths should return 0
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_zero_vector() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_dependency_info_struct() {
+        let dep = DependencyInfo {
+            target_path: "src/utils.rs".to_string(),
+            import_name: Some("utils".to_string()),
+            kind: "local".to_string(),
+        };
+
+        assert_eq!(dep.target_path, "src/utils.rs");
+        assert_eq!(dep.import_name, Some("utils".to_string()));
+        assert_eq!(dep.kind, "local");
+    }
+
+    #[test]
+    fn test_symbol_definition_struct() {
+        let def = SymbolDefinition {
+            file_path: "src/lib.rs".to_string(),
+            kind: "function".to_string(),
+            start_line: 10,
+            end_line: 20,
+            signature: Some("fn process_data()".to_string()),
+            doc_comment: Some("/// Process data".to_string()),
+        };
+
+        assert_eq!(def.file_path, "src/lib.rs");
+        assert_eq!(def.kind, "function");
+        assert_eq!(def.start_line, 10);
+        assert_eq!(def.end_line, 20);
+    }
+
+    #[test]
+    fn test_symbol_explanation_not_found() {
+        let explanation = SymbolExplanation {
+            name: "unknown_symbol".to_string(),
+            found: false,
+            definitions: Vec::new(),
+            usage_count: 0,
+            related_symbols: Vec::new(),
+        };
+
+        assert!(!explanation.found);
+        assert!(explanation.definitions.is_empty());
+        assert_eq!(explanation.usage_count, 0);
+    }
+
+    #[test]
+    fn test_symbol_explanation_found() {
+        let explanation = SymbolExplanation {
+            name: "process_data".to_string(),
+            found: true,
+            definitions: vec![SymbolDefinition {
+                file_path: "src/lib.rs".to_string(),
+                kind: "function".to_string(),
+                start_line: 10,
+                end_line: 20,
+                signature: Some("fn process_data()".to_string()),
+                doc_comment: None,
+            }],
+            usage_count: 5,
+            related_symbols: vec!["helper".to_string(), "utils".to_string()],
+        };
+
+        assert!(explanation.found);
+        assert_eq!(explanation.definitions.len(), 1);
+        assert_eq!(explanation.usage_count, 5);
+        assert_eq!(explanation.related_symbols.len(), 2);
     }
 }
