@@ -2,6 +2,18 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.2.5] - 2026-01-18
+
+### Added
+- Automatic reindexation when parser version changes (no more manual `--force` needed)
+- `PARSER_VERSION` constant to track parser logic changes
+- Support for `const`/`let` variable extraction in TypeScript/JavaScript
+- GitHub Sponsors funding configuration
+
+### Changed
+- Version detection uses atomic transactions to prevent race conditions
+- Documentation updated with known limitations and setup guides
+
 ## [0.2.4] - 2026-01-18
 
 ### Fixed
