@@ -850,4 +850,313 @@ mod tests {
         let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
         assert!(!needs_reindex);
     }
+
+    #[test]
+    fn test_insert_and_get_chunks() {
+        use semantiq_parser::CodeChunk;
+
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn main() {}\nfn foo() {}", 25, 1000)
+            .unwrap();
+
+        let chunks = vec![
+            CodeChunk {
+                content: "fn main() {}".to_string(),
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 12,
+                symbols: vec!["main".to_string()],
+            },
+            CodeChunk {
+                content: "fn foo() {}".to_string(),
+                start_line: 2,
+                end_line: 2,
+                start_byte: 13,
+                end_byte: 24,
+                symbols: vec!["foo".to_string()],
+            },
+        ];
+
+        store.insert_chunks(file_id, &chunks).unwrap();
+
+        let retrieved = store.get_chunks_by_file(file_id).unwrap();
+        assert_eq!(retrieved.len(), 2);
+        assert_eq!(retrieved[0].content, "fn main() {}");
+        assert_eq!(retrieved[1].content, "fn foo() {}");
+    }
+
+    #[test]
+    fn test_chunks_without_embeddings() {
+        use semantiq_parser::CodeChunk;
+
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        let chunks = vec![CodeChunk {
+            content: "fn main() {}".to_string(),
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 12,
+            symbols: vec!["main".to_string()],
+        }];
+
+        store.insert_chunks(file_id, &chunks).unwrap();
+
+        let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
+        assert_eq!(without_embeddings.len(), 1);
+    }
+
+    #[test]
+    fn test_update_chunk_embedding() {
+        use semantiq_parser::CodeChunk;
+
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        let chunks = vec![CodeChunk {
+            content: "fn main() {}".to_string(),
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 12,
+            symbols: vec!["main".to_string()],
+        }];
+
+        store.insert_chunks(file_id, &chunks).unwrap();
+
+        let chunks = store.get_chunks_by_file(file_id).unwrap();
+        let chunk_id = chunks[0].id;
+
+        let embedding: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
+        store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+
+        // After updating, should no longer appear in "without embeddings"
+        let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
+        assert!(without_embeddings.is_empty());
+    }
+
+    #[test]
+    fn test_insert_and_get_dependencies() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+            .unwrap();
+
+        store
+            .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+            .unwrap();
+        store
+            .insert_dependency(file_id, "std::io", Some("io"), "std")
+            .unwrap();
+
+        let deps = store.get_dependencies(file_id).unwrap();
+        assert_eq!(deps.len(), 2);
+        assert!(deps.iter().any(|d| d.target_path == "crate::utils"));
+        assert!(deps.iter().any(|d| d.target_path == "std::io"));
+    }
+
+    #[test]
+    fn test_get_dependents() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+            .unwrap();
+
+        store
+            .insert_dependency(file_id, "src/utils.rs", Some("utils"), "local")
+            .unwrap();
+
+        let dependents = store.get_dependents("utils.rs").unwrap();
+        assert_eq!(dependents.len(), 1);
+        assert_eq!(dependents[0].source_file_id, file_id);
+    }
+
+    #[test]
+    fn test_delete_dependencies() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+            .unwrap();
+
+        store
+            .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+            .unwrap();
+
+        let deps = store.get_dependencies(file_id).unwrap();
+        assert_eq!(deps.len(), 1);
+
+        store.delete_dependencies(file_id).unwrap();
+
+        let deps = store.get_dependencies(file_id).unwrap();
+        assert_eq!(deps.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_file() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        assert!(store.get_file_by_path("test.rs").unwrap().is_some());
+
+        store.delete_file("test.rs").unwrap();
+
+        assert!(store.get_file_by_path("test.rs").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_needs_reindex_same_content() {
+        let store = IndexStore::open_in_memory().unwrap();
+        let content = "fn main() {}";
+
+        store
+            .insert_file("test.rs", Some("rust"), content, 12, 1000)
+            .unwrap();
+
+        // Same content should not need reindex
+        assert!(!store.needs_reindex("test.rs", content).unwrap());
+    }
+
+    #[test]
+    fn test_needs_reindex_different_content() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        // Different content should need reindex
+        assert!(store.needs_reindex("test.rs", "fn main() { println!(\"hello\"); }").unwrap());
+    }
+
+    #[test]
+    fn test_needs_reindex_new_file() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        // Non-existent file should need indexing
+        assert!(store.needs_reindex("new_file.rs", "content").unwrap());
+    }
+
+    #[test]
+    fn test_get_symbols_by_file() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn hello() {}\nfn world() {}", 27, 1000)
+            .unwrap();
+
+        let symbols = vec![
+            Symbol {
+                name: "hello".to_string(),
+                kind: SymbolKind::Function,
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 13,
+                signature: Some("fn hello()".to_string()),
+                doc_comment: None,
+                parent: None,
+            },
+            Symbol {
+                name: "world".to_string(),
+                kind: SymbolKind::Function,
+                start_line: 2,
+                end_line: 2,
+                start_byte: 14,
+                end_byte: 27,
+                signature: Some("fn world()".to_string()),
+                doc_comment: None,
+                parent: None,
+            },
+        ];
+
+        store.insert_symbols(file_id, &symbols).unwrap();
+
+        let retrieved = store.get_symbols_by_file(file_id).unwrap();
+        assert_eq!(retrieved.len(), 2);
+        // Should be ordered by start_line
+        assert_eq!(retrieved[0].name, "hello");
+        assert_eq!(retrieved[1].name, "world");
+    }
+
+    #[test]
+    fn test_search_symbols_fts() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn calculate_total() {}", 23, 1000)
+            .unwrap();
+
+        let symbols = vec![Symbol {
+            name: "calculate_total".to_string(),
+            kind: SymbolKind::Function,
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 23,
+            signature: Some("fn calculate_total()".to_string()),
+            doc_comment: None,
+            parent: None,
+        }];
+
+        store.insert_symbols(file_id, &symbols).unwrap();
+
+        // FTS search should find the symbol
+        let results = store.search_symbols("calculate", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "calculate_total");
+    }
+
+    #[test]
+    fn test_get_stats() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 0);
+        assert_eq!(stats.symbol_count, 0);
+        assert_eq!(stats.chunk_count, 0);
+        assert_eq!(stats.dependency_count, 0);
+
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        let symbols = vec![Symbol {
+            name: "main".to_string(),
+            kind: SymbolKind::Function,
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 12,
+            signature: None,
+            doc_comment: None,
+            parent: None,
+        }];
+        store.insert_symbols(file_id, &symbols).unwrap();
+
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 1);
+        assert_eq!(stats.symbol_count, 1);
+    }
+
+    #[test]
+    fn test_db_path() {
+        let store = IndexStore::open_in_memory().unwrap();
+        assert_eq!(store.db_path().to_string_lossy(), ":memory:");
+    }
 }
