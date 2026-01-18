@@ -44,6 +44,10 @@ enum Commands {
         /// Path to the database file (default: .semantiq.db in project root)
         #[arg(short, long)]
         database: Option<PathBuf>,
+
+        /// Disable automatic update check
+        #[arg(long)]
+        no_update_check: bool,
     },
 
     /// Index a project directory
@@ -103,8 +107,8 @@ async fn main() -> Result<()> {
         Commands::Init { path } => {
             init(&path).await
         }
-        Commands::Serve { project, database } => {
-            serve(project, database).await
+        Commands::Serve { project, database, no_update_check } => {
+            serve(project, database, no_update_check).await
         }
         Commands::Index { path, database, force } => {
             index(&path, database, force).await
@@ -245,7 +249,13 @@ The index updates automatically when files change. No manual reindexing needed.
     Ok(())
 }
 
-async fn serve(project: Option<PathBuf>, database: Option<PathBuf>) -> Result<()> {
+async fn serve(project: Option<PathBuf>, database: Option<PathBuf>, no_update_check: bool) -> Result<()> {
+    // Disable update check if flag is set
+    if no_update_check {
+        // SAFETY: We're setting this env var at startup before any other threads read it
+        unsafe { std::env::set_var("SEMANTIQ_UPDATE_CHECK", "false") };
+    }
+
     let project_root = project
         .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
 
