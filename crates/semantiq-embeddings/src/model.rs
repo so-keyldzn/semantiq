@@ -1,9 +1,13 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "onnx")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "onnx")]
 use tracing::info;
+#[cfg(feature = "onnx")]
+use std::fs;
+#[cfg(feature = "onnx")]
+use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -15,13 +19,79 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
-        Self {
-            model_path: "models/minilm.onnx".to_string(),
-            tokenizer_path: "models/tokenizer.json".to_string(),
-            max_length: 512,
-            batch_size: 32,
+        #[cfg(feature = "onnx")]
+        {
+            let models_dir = get_models_dir();
+            Self {
+                model_path: models_dir.join("minilm.onnx").to_string_lossy().to_string(),
+                tokenizer_path: models_dir.join("tokenizer.json").to_string_lossy().to_string(),
+                max_length: 512,
+                batch_size: 32,
+            }
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            Self {
+                model_path: "models/minilm.onnx".to_string(),
+                tokenizer_path: "models/tokenizer.json".to_string(),
+                max_length: 512,
+                batch_size: 32,
+            }
         }
     }
+}
+
+#[cfg(feature = "onnx")]
+fn get_models_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("semantiq")
+        .join("models")
+}
+
+#[cfg(feature = "onnx")]
+const MODEL_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
+#[cfg(feature = "onnx")]
+const TOKENIZER_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
+
+#[cfg(feature = "onnx")]
+fn download_file(url: &str, path: &Path) -> Result<()> {
+    info!("Downloading {} to {:?}", url, path);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let response = reqwest::blocking::get(url)?;
+    if !response.status().is_success() {
+        anyhow::bail!("Failed to download {}: {}", url, response.status());
+    }
+
+    let bytes = response.bytes()?;
+    let mut file = fs::File::create(path)?;
+    file.write_all(&bytes)?;
+
+    info!("Downloaded {:?} ({} bytes)", path, bytes.len());
+    Ok(())
+}
+
+#[cfg(feature = "onnx")]
+pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
+    let config = EmbeddingConfig::default();
+    let model_path = Path::new(&config.model_path);
+    let tokenizer_path = Path::new(&config.tokenizer_path);
+
+    if !model_path.exists() {
+        info!("Model not found, downloading...");
+        download_file(MODEL_URL, model_path)?;
+    }
+
+    if !tokenizer_path.exists() {
+        info!("Tokenizer not found, downloading...");
+        download_file(TOKENIZER_URL, tokenizer_path)?;
+    }
+
+    Ok(config)
 }
 
 /// Trait for embedding models
@@ -66,12 +136,15 @@ impl EmbeddingModel for StubEmbeddingModel {
 #[cfg(feature = "onnx")]
 pub mod onnx {
     use super::*;
-    use ndarray::{Array1, Array2, Axis};
-    use ort::{GraphOptimizationLevel, Session};
+    use ndarray::{Array2, Axis};
+    use ort::session::{builder::GraphOptimizationLevel, Session};
+    use ort::inputs;
+    use ort::value::TensorRef;
+    use std::sync::Mutex;
     use tokenizers::Tokenizer;
 
     pub struct OnnxEmbeddingModel {
-        session: Session,
+        session: Mutex<Session>,
         tokenizer: Tokenizer,
         config: EmbeddingConfig,
     }
@@ -89,7 +162,7 @@ pub mod onnx {
                 .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
             Ok(Self {
-                session,
+                session: Mutex::new(session),
                 tokenizer,
                 config,
             })
@@ -161,17 +234,21 @@ pub mod onnx {
             let input_ids_array = Array2::from_shape_vec((1, seq_len), input_ids.clone())?;
             let attention_mask_array = Array2::from_shape_vec((1, seq_len), attention_mask.clone())?;
 
-            let outputs = self.session.run(ort::inputs![
-                "input_ids" => input_ids_array,
-                "attention_mask" => attention_mask_array,
-            ]?)?;
+            let mut session = self.session.lock().unwrap();
+            let outputs = session.run(inputs![
+                "input_ids" => TensorRef::from_array_view(input_ids_array.view())?,
+                "attention_mask" => TensorRef::from_array_view(attention_mask_array.view())?,
+            ])?;
 
-            let embeddings = outputs[0].try_extract_tensor::<f32>()?;
-            let embeddings = embeddings.view();
+            let embeddings = outputs[0].try_extract_array::<f32>()?;
 
-            // Get first batch item
+            // Get first batch item (shape: [1, seq_len, hidden_size])
             let token_embeddings = embeddings.index_axis(Axis(0), 0);
-            let token_embeddings = token_embeddings.to_owned();
+            // Convert from dynamic dimension to Array2
+            let shape = token_embeddings.shape();
+            let token_embeddings = token_embeddings
+                .to_owned()
+                .into_shape_with_order((shape[0], shape[1]))?;
 
             Ok(self.mean_pooling(&token_embeddings, &attention_mask))
         }
@@ -192,10 +269,17 @@ pub mod onnx {
 pub fn create_embedding_model(#[allow(unused_variables)] config: Option<EmbeddingConfig>) -> Result<Box<dyn EmbeddingModel>> {
     #[cfg(feature = "onnx")]
     {
-        let config = config.unwrap_or_default();
+        // Download models if needed
+        let config = match config {
+            Some(c) => c,
+            None => ensure_models_downloaded()?,
+        };
+
         if Path::new(&config.model_path).exists() {
-            info!("Using ONNX embedding model");
+            info!("Using ONNX embedding model from {:?}", config.model_path);
             return Ok(Box::new(onnx::OnnxEmbeddingModel::load(config)?));
+        } else {
+            info!("ONNX model not found at {:?}, using stub", config.model_path);
         }
     }
 

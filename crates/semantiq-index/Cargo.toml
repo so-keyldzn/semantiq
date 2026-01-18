@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 semantiq-parser = { path = "../semantiq-parser" }
+semantiq-embeddings = { path = "../semantiq-embeddings" }
 
 rusqlite.workspace = true
 tokio.workspace = true
