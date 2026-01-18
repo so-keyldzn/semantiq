@@ -9,9 +9,15 @@ All notable changes to Semantiq will be documented in this file.
 - Automatic model download on first run
 - Cosine similarity search for vector matching
 - Alternative installation via `cargo install --git`
+- CHANGELOG.md for version history
 
 ### Changed
 - Embeddings now generated automatically during auto-indexing
+- Switch from OpenSSL to rustls for better cross-compilation support
+- Use ort download-binaries for automatic ONNX Runtime provisioning
+
+### Removed
+- macOS Intel (x86_64-apple-darwin) binary - ONNX Runtime does not support this target
 
 ## [0.2.2] - 2026-01-17
 
