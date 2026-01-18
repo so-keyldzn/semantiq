@@ -9,6 +9,34 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
+/// Parse symbols JSON with logging on error
+fn parse_symbols_json(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_else(|e| {
+        if !json.is_empty() && json != "[]" {
+            warn!("Failed to parse symbols JSON: {} (json: {})", e, json);
+        }
+        Vec::new()
+    })
+}
+
+/// Convert embedding bytes to f32 vector with validation
+fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
+    if bytes.len() % 4 != 0 {
+        warn!(
+            "Invalid embedding bytes length: {} (not divisible by 4)",
+            bytes.len()
+        );
+        return Vec::new();
+    }
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| {
+            let bytes: [u8; 4] = chunk.try_into().expect("chunks_exact guarantees 4 bytes");
+            f32::from_le_bytes(bytes)
+        })
+        .collect()
+}
+
 pub struct IndexStore {
     conn: Arc<Mutex<Connection>>,
     db_path: PathBuf,
@@ -373,7 +401,7 @@ impl IndexStore {
             let results = stmt
                 .query_map([limit as i64], |row| {
                     let symbols_json: String = row.get(7)?;
-                    let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
+                    let symbols = parse_symbols_json(&symbols_json);
 
                     Ok(ChunkRecord {
                         id: row.get(0)?,
@@ -403,7 +431,7 @@ impl IndexStore {
             let results = stmt
                 .query_map([file_id], |row| {
                     let symbols_json: String = row.get(7)?;
-                    let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
+                    let symbols = parse_symbols_json(&symbols_json);
 
                     Ok(ChunkRecord {
                         id: row.get(0)?,
@@ -435,17 +463,9 @@ impl IndexStore {
             let results = stmt
                 .query_map([], |row| {
                     let symbols_json: String = row.get(7)?;
-                    let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
+                    let symbols = parse_symbols_json(&symbols_json);
                     let embedding_bytes: Vec<u8> = row.get(8)?;
-
-                    // Convert bytes back to f32
-                    let embedding: Vec<f32> = embedding_bytes
-                        .chunks(4)
-                        .map(|chunk| {
-                            let bytes: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
-                            f32::from_le_bytes(bytes)
-                        })
-                        .collect();
+                    let embedding = parse_embedding_bytes(&embedding_bytes);
 
                     let chunk = ChunkRecord {
                         id: row.get(0)?,
@@ -461,7 +481,9 @@ impl IndexStore {
 
                     Ok((chunk, embedding))
                 })?
-                .filter_map(|r| r.ok())
+                .filter_map(|r| {
+                    r.map_err(|e| warn!("Failed to load chunk with embedding: {}", e)).ok()
+                })
                 .collect();
 
             Ok(results)
