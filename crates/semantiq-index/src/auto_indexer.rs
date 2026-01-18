@@ -1,3 +1,4 @@
+use crate::exclusions::should_exclude;
 use crate::watcher::{FileEvent, FileWatcher};
 use crate::IndexStore;
 use anyhow::Result;
@@ -88,6 +89,12 @@ impl AutoIndexer {
 
     /// Index a single file
     fn index_file(&self, path: &Path) -> Result<()> {
+        // Skip excluded paths (hidden dirs, node_modules, large files, etc.)
+        if should_exclude(path) {
+            debug!("Skipping excluded path: {:?}", path);
+            return Ok(());
+        }
+
         // Check if this is a supported language
         let language = match Language::from_path(path) {
             Some(lang) => lang,
