@@ -153,7 +153,8 @@ impl SymbolExtractor {
             "enum_declaration" => Some(SymbolKind::Enum),
             "type_alias_declaration" => Some(SymbolKind::Type),
             "import_statement" => Some(SymbolKind::Import),
-            "variable_declaration" => Some(SymbolKind::Variable),
+            // variable_declaration = var, lexical_declaration = const/let
+            "variable_declaration" | "lexical_declaration" => Some(SymbolKind::Variable),
             _ => None,
         }
     }
@@ -237,6 +238,33 @@ impl SymbolExtractor {
             // Use utf8_text for safe UTF-8 handling
             if let Ok(text) = name_node.utf8_text(source_bytes) {
                 return Some(text.to_string());
+            }
+        }
+
+        // Handle lexical_declaration / variable_declaration in TS/JS
+        // Structure: lexical_declaration -> variable_declarator -> identifier
+        if matches!(
+            node.kind(),
+            "lexical_declaration" | "variable_declaration"
+        ) {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "variable_declarator" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        if let Ok(text) = name_node.utf8_text(source_bytes) {
+                            return Some(text.to_string());
+                        }
+                    }
+                    // Fallback: look for identifier in variable_declarator
+                    let mut inner_cursor = child.walk();
+                    for inner_child in child.children(&mut inner_cursor) {
+                        if inner_child.kind() == "identifier" {
+                            if let Ok(text) = inner_child.utf8_text(source_bytes) {
+                                return Some(text.to_string());
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -328,5 +356,45 @@ impl User {
 
         assert!(symbols.iter().any(|s| s.name == "hello" && s.kind == SymbolKind::Function));
         assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+    }
+
+    #[test]
+    fn test_extract_typescript_const_variables() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+// Animation variants
+export const fadeInUp = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0 }
+};
+
+const config = { debug: true };
+
+let counter = 0;
+
+function greet(name: string): string {
+    return `Hello, ${name}!`;
+}
+"#;
+        let tree = support.parse(Language::TypeScript, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::TypeScript).unwrap();
+
+        // Check that const/let variables are extracted
+        assert!(
+            symbols.iter().any(|s| s.name == "fadeInUp" && s.kind == SymbolKind::Variable),
+            "fadeInUp should be extracted as Variable"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "config" && s.kind == SymbolKind::Variable),
+            "config should be extracted as Variable"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "counter" && s.kind == SymbolKind::Variable),
+            "counter should be extracted as Variable"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function),
+            "greet should be extracted as Function"
+        );
     }
 }
