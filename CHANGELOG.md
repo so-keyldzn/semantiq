@@ -2,6 +2,18 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.2.7] - 2026-01-18
+
+### Added
+- Automatic version update notification at server startup
+- Non-blocking background check using GitHub Releases API
+- Local cache (24h) to avoid repeated API calls
+- `--no-update-check` CLI flag to disable update notifications
+- `SEMANTIQ_UPDATE_CHECK` environment variable for configuration
+
+### Changed
+- Updated author info to keyldzn
+
 ## [0.2.6] - 2026-01-18
 
 ### Added
