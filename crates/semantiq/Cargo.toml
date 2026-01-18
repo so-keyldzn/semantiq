@@ -20,6 +20,7 @@ semantiq-mcp = { path = "../semantiq-mcp" }
 semantiq-index = { path = "../semantiq-index" }
 semantiq-parser = { path = "../semantiq-parser" }
 semantiq-retrieval = { path = "../semantiq-retrieval" }
+semantiq-embeddings = { path = "../semantiq-embeddings" }
 
 clap.workspace = true
 tokio.workspace = true
