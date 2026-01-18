@@ -51,7 +51,10 @@ impl AutoIndexer {
     /// Process pending file events and reindex changed files
     pub fn process_events(&self) -> Result<ProcessResult> {
         let events = {
-            let watcher = self.watcher.lock().unwrap();
+            let watcher = self
+                .watcher
+                .lock()
+                .map_err(|e| anyhow::anyhow!("FileWatcher lock poisoned: {}", e))?;
             watcher.poll_events()
         };
 
@@ -145,7 +148,10 @@ impl AutoIndexer {
         )?;
 
         // Parse and extract symbols
-        let mut language_support = self.language_support.lock().unwrap();
+        let mut language_support = self
+            .language_support
+            .lock()
+            .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
         match language_support.parse(language, &content) {
             Ok(tree) => {
                 // Extract symbols
