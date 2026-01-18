@@ -10,9 +10,24 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 npm install -g semantiq-mcp
 ```
 
-## Setup
+## Quick Start (10 seconds)
 
-Add to your MCP config (Claude Code, Cursor, etc.):
+```bash
+cd /path/to/your/project
+semantiq init
+```
+
+This automatically:
+- Creates `.claude/settings.json` with MCP configuration
+- Creates `CLAUDE.md` with tool instructions
+- Updates `.gitignore` to exclude the index database
+- Indexes your entire project
+
+Restart Claude Code and you're ready to go!
+
+## Manual Setup
+
+If you prefer manual configuration, add to your MCP config (Claude Code, Cursor, etc.):
 
 ```json
 {
@@ -25,7 +40,9 @@ Add to your MCP config (Claude Code, Cursor, etc.):
 }
 ```
 
-That's it. Semantiq auto-detects your project and starts indexing.
+## Auto-Indexing
+
+Semantiq automatically watches your project for file changes and updates the index in real-time. No manual reindexing needed.
 
 ## MCP Tools
 
@@ -39,7 +56,10 @@ That's it. Semantiq auto-detects your project and starts indexing.
 ## CLI Commands
 
 ```bash
-# Index a project
+# Initialize Semantiq for a project (recommended)
+semantiq init
+
+# Index a project manually
 semantiq index /path/to/project
 
 # Start MCP server
@@ -76,6 +96,7 @@ Works with all MCP-compatible tools:
 ## Links
 
 - [GitHub Repository](https://github.com/so-keyldzn/semantiq)
+- [Changelog](https://github.com/so-keyldzn/semantiq/blob/main/CHANGELOG.md)
 - [Report Issues](https://github.com/so-keyldzn/semantiq/issues)
 
 ## License
