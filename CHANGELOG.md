@@ -2,6 +2,19 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.2.4] - 2026-01-18
+
+### Fixed
+- Model download failing in async Tokio context (replaced `reqwest::blocking` with `ureq`)
+- Download size limit too small for 90MB ONNX model (increased to 200MB)
+- ONNX inference crash due to missing `token_type_ids` input
+- Embeddings not generated during `semantiq index` command
+
+### Changed
+- `semantiq index` now generates embeddings for all chunks
+- Centralized file exclusion logic into `exclusions.rs` module
+- Auto-indexer and FileWatcher now use shared exclusion patterns
+
 ## [0.2.3] - 2026-01-18
 
 ### Added
