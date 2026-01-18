@@ -1,13 +1,13 @@
 use crate::schema::{init_schema, ChunkRecord, DependencyRecord, FileRecord, SymbolRecord};
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use semantiq_parser::{CodeChunk, Symbol};
+use semantiq_parser::{CodeChunk, Symbol, PARSER_VERSION};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 pub struct IndexStore {
     conn: Arc<Mutex<Connection>>,
@@ -551,6 +551,116 @@ impl IndexStore {
         })
     }
 
+    // Parser version management
+
+    /// Vérifie si l'index doit être recréé (changement de parser)
+    pub fn needs_full_reindex(&self) -> Result<bool> {
+        self.with_conn(|conn| {
+            Self::needs_full_reindex_impl(conn)
+        })
+    }
+
+    /// Implémentation interne pour réutilisation dans une transaction
+    fn needs_full_reindex_impl(conn: &Connection) -> Result<bool> {
+        let stored_version: Option<String> = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'parser_version'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match stored_version {
+            Some(v) => {
+                let stored: u32 = match v.parse() {
+                    Ok(val) => val,
+                    Err(_) => {
+                        warn!("Corrupted parser_version in metadata: '{}', forcing reindex", v);
+                        0
+                    }
+                };
+                Ok(stored != PARSER_VERSION)
+            }
+            None => Ok(true), // No version stored = needs reindex
+        }
+    }
+
+    /// Met à jour la version du parser dans metadata
+    pub fn set_parser_version(&self) -> Result<()> {
+        self.with_conn(|conn| {
+            Self::set_parser_version_impl(conn)
+        })
+    }
+
+    /// Implémentation interne pour réutilisation dans une transaction
+    fn set_parser_version_impl(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('parser_version', ?1)",
+            [PARSER_VERSION.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Supprime toutes les données indexées
+    pub fn clear_all_data(&self) -> Result<()> {
+        self.with_conn(|conn| {
+            Self::clear_all_data_impl(conn)
+        })
+    }
+
+    /// Implémentation interne pour réutilisation dans une transaction
+    fn clear_all_data_impl(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             DELETE FROM dependencies;
+             DELETE FROM chunks;
+             DELETE FROM symbols;
+             DELETE FROM files;
+             COMMIT;",
+        )?;
+        debug!("Cleared all indexed data");
+        Ok(())
+    }
+
+    /// Vérifie et nettoie si nécessaire. Retourne true si reindex nécessaire.
+    /// Utilise une transaction unique pour éviter les race conditions.
+    pub fn check_and_prepare_for_reindex(&self) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e: PoisonError<MutexGuard<Connection>>| {
+            anyhow!("Database lock poisoned: {}", e)
+        })?;
+
+        if !Self::needs_full_reindex_impl(&conn)? {
+            return Ok(false);
+        }
+
+        // Transaction unique pour check + clear + set version
+        conn.execute("BEGIN IMMEDIATE", [])?;
+
+        let result = (|| -> Result<()> {
+            // Clear all data (sans transaction interne car déjà dans une)
+            conn.execute_batch(
+                "DELETE FROM dependencies;
+                 DELETE FROM chunks;
+                 DELETE FROM symbols;
+                 DELETE FROM files;",
+            )?;
+            Self::set_parser_version_impl(&conn)?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", [])?;
+                info!("Parser version changed - index cleared for full reindex");
+                Ok(true)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
     // Statistics
 
     pub fn get_stats(&self) -> Result<IndexStats> {
@@ -636,5 +746,108 @@ mod tests {
         let results = store.find_symbol_by_name("hello").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "hello");
+    }
+
+    #[test]
+    fn test_needs_full_reindex_no_version() {
+        let store = IndexStore::open_in_memory().unwrap();
+        // Fresh DB without parser_version should need reindex
+        assert!(store.needs_full_reindex().unwrap());
+    }
+
+    #[test]
+    fn test_needs_full_reindex_same_version() {
+        let store = IndexStore::open_in_memory().unwrap();
+        store.set_parser_version().unwrap();
+        // After setting version, should not need reindex
+        assert!(!store.needs_full_reindex().unwrap());
+    }
+
+    #[test]
+    fn test_needs_full_reindex_different_version() {
+        let store = IndexStore::open_in_memory().unwrap();
+        // Set a different version manually
+        store.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('parser_version', '999')",
+                [],
+            )?;
+            Ok(())
+        }).unwrap();
+        // Should need reindex because version differs
+        assert!(store.needs_full_reindex().unwrap());
+    }
+
+    #[test]
+    fn test_needs_full_reindex_corrupted_version() {
+        let store = IndexStore::open_in_memory().unwrap();
+        // Set a corrupted version
+        store.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('parser_version', 'not_a_number')",
+                [],
+            )?;
+            Ok(())
+        }).unwrap();
+        // Should need reindex because version is corrupted
+        assert!(store.needs_full_reindex().unwrap());
+    }
+
+    #[test]
+    fn test_clear_all_data() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        // Insert some data
+        let file_id = store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        let symbols = vec![Symbol {
+            name: "main".to_string(),
+            kind: SymbolKind::Function,
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 12,
+            signature: None,
+            doc_comment: None,
+            parent: None,
+        }];
+        store.insert_symbols(file_id, &symbols).unwrap();
+
+        // Verify data exists
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 1);
+        assert_eq!(stats.symbol_count, 1);
+
+        // Clear all data
+        store.clear_all_data().unwrap();
+
+        // Verify data is gone
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 0);
+        assert_eq!(stats.symbol_count, 0);
+    }
+
+    #[test]
+    fn test_check_and_prepare_for_reindex() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        // Insert some data
+        store
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        // First call should return true (needs reindex) and clear data
+        let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
+        assert!(needs_reindex);
+
+        // Data should be cleared
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 0);
+
+        // Second call should return false (version now set)
+        let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
+        assert!(!needs_reindex);
     }
 }

@@ -27,6 +27,10 @@ impl SemantiqServer {
 
         // Share a single IndexStore instance across all components
         let store = Arc::new(IndexStore::open(db_path)?);
+
+        // Check if parser version changed and prepare for full reindex if needed
+        let _ = store.check_and_prepare_for_reindex()?;
+
         let engine = Arc::new(RetrievalEngine::new(
             Arc::clone(&store),
             project_root,
