@@ -143,7 +143,9 @@ impl ImportExtractor {
         for child in node.children(&mut cursor) {
             if child.kind() == "string" {
                 let path_text = &source[child.start_byte()..child.end_byte()];
-                let path = path_text.trim_matches(|c| c == '"' || c == '\'').to_string();
+                let path = path_text
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .to_string();
 
                 let kind = if path.starts_with('.') {
                     ImportKind::Local
@@ -227,9 +229,26 @@ impl ImportExtractor {
 
         // Common Python standard library modules
         let std_modules = [
-            "os", "sys", "re", "json", "pathlib", "collections", "itertools",
-            "functools", "typing", "dataclasses", "abc", "io", "time", "datetime",
-            "logging", "unittest", "argparse", "subprocess", "threading", "asyncio",
+            "os",
+            "sys",
+            "re",
+            "json",
+            "pathlib",
+            "collections",
+            "itertools",
+            "functools",
+            "typing",
+            "dataclasses",
+            "abc",
+            "io",
+            "time",
+            "datetime",
+            "logging",
+            "unittest",
+            "argparse",
+            "subprocess",
+            "threading",
+            "asyncio",
         ];
 
         if std_modules.contains(&first_segment) {
@@ -466,9 +485,21 @@ from .local_module import helper
         let tree = support.parse(Language::Python, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::Python).unwrap();
 
-        assert!(imports.iter().any(|i| i.path == "os" && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path == "json" && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path == "collections" && i.kind == ImportKind::Std));
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "os" && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "json" && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "collections" && i.kind == ImportKind::Std)
+        );
     }
 
     #[test]
@@ -485,8 +516,16 @@ import (
         let tree = support.parse(Language::Go, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::Go).unwrap();
 
-        assert!(imports.iter().any(|i| i.path == "fmt" && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path == "github.com/pkg/errors" && i.kind == ImportKind::External));
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "fmt" && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "github.com/pkg/errors" && i.kind == ImportKind::External)
+        );
     }
 
     #[test]
@@ -500,8 +539,16 @@ import com.google.gson.Gson;
         let tree = support.parse(Language::Java, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::Java).unwrap();
 
-        assert!(imports.iter().any(|i| i.path.starts_with("java.util") && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path.starts_with("com.google") && i.kind == ImportKind::External));
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path.starts_with("java.util") && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path.starts_with("com.google") && i.kind == ImportKind::External)
+        );
     }
 
     #[test]
@@ -515,9 +562,21 @@ import com.google.gson.Gson;
         let tree = support.parse(Language::C, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::C).unwrap();
 
-        assert!(imports.iter().any(|i| i.path == "stdio.h" && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path == "stdlib.h" && i.kind == ImportKind::Std));
-        assert!(imports.iter().any(|i| i.path == "myheader.h" && i.kind == ImportKind::Local));
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "stdio.h" && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "stdlib.h" && i.kind == ImportKind::Std)
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|i| i.path == "myheader.h" && i.kind == ImportKind::Local)
+        );
     }
 
     #[test]

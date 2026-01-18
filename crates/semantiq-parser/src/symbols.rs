@@ -91,7 +91,12 @@ impl SymbolExtractor {
         Ok(())
     }
 
-    fn node_to_symbol(node: &Node, source: &str, language: Language, parent: Option<&str>) -> Option<Symbol> {
+    fn node_to_symbol(
+        node: &Node,
+        source: &str,
+        language: Language,
+        parent: Option<&str>,
+    ) -> Option<Symbol> {
         let kind = Self::get_symbol_kind(node.kind(), language)?;
         let name = Self::extract_name(node, source, language)?;
 
@@ -243,10 +248,7 @@ impl SymbolExtractor {
 
         // Handle lexical_declaration / variable_declaration in TS/JS
         // Structure: lexical_declaration -> variable_declarator -> identifier
-        if matches!(
-            node.kind(),
-            "lexical_declaration" | "variable_declaration"
-        ) {
+        if matches!(node.kind(), "lexical_declaration" | "variable_declaration") {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "variable_declarator" {
@@ -354,8 +356,16 @@ impl User {
         let tree = support.parse(Language::Rust, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
 
-        assert!(symbols.iter().any(|s| s.name == "hello" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "hello" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+        );
     }
 
     #[test]
@@ -381,19 +391,27 @@ function greet(name: string): string {
 
         // Check that const/let variables are extracted
         assert!(
-            symbols.iter().any(|s| s.name == "fadeInUp" && s.kind == SymbolKind::Variable),
+            symbols
+                .iter()
+                .any(|s| s.name == "fadeInUp" && s.kind == SymbolKind::Variable),
             "fadeInUp should be extracted as Variable"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "config" && s.kind == SymbolKind::Variable),
+            symbols
+                .iter()
+                .any(|s| s.name == "config" && s.kind == SymbolKind::Variable),
             "config should be extracted as Variable"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "counter" && s.kind == SymbolKind::Variable),
+            symbols
+                .iter()
+                .any(|s| s.name == "counter" && s.kind == SymbolKind::Variable),
             "counter should be extracted as Variable"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function),
             "greet should be extracted as Function"
         );
     }
@@ -417,8 +435,16 @@ def process_data(items: list) -> dict:
         let tree = support.parse(Language::Python, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Python).unwrap();
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "process_data" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "process_data" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -445,8 +471,16 @@ func main() {
         let tree = support.parse(Language::Go, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Go).unwrap();
 
-        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Greet" && s.kind == SymbolKind::Method));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "main" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greet" && s.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -472,9 +506,21 @@ interface Computable {
         let tree = support.parse(Language::Java, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Java).unwrap();
 
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface)
+        );
     }
 
     #[test]
@@ -506,18 +552,36 @@ int main() {
         let tree = support.parse(Language::C, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::C).unwrap();
 
-        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        // C functions have declarator as name which includes params, check for partial match
         assert!(
-            symbols.iter().any(|s| s.kind == SymbolKind::Function && s.name.contains("add")),
-            "Expected a function containing 'add', found: {:?}",
-            symbols.iter().filter(|s| s.kind == SymbolKind::Function).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
         );
         assert!(
-            symbols.iter().any(|s| s.kind == SymbolKind::Function && s.name.contains("main")),
+            symbols
+                .iter()
+                .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum)
+        );
+        // C functions have declarator as name which includes params, check for partial match
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == SymbolKind::Function && s.name.contains("add")),
+            "Expected a function containing 'add', found: {:?}",
+            symbols
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Function)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == SymbolKind::Function && s.name.contains("main")),
             "Expected a function containing 'main', found: {:?}",
-            symbols.iter().filter(|s| s.kind == SymbolKind::Function).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Function)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -550,9 +614,17 @@ fn documented_function() {
         let tree = support.parse(Language::Rust, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
 
-        let func = symbols.iter().find(|s| s.name == "documented_function").unwrap();
+        let func = symbols
+            .iter()
+            .find(|s| s.name == "documented_function")
+            .unwrap();
         assert!(func.doc_comment.is_some());
-        assert!(func.doc_comment.as_ref().unwrap().contains("documented function"));
+        assert!(
+            func.doc_comment
+                .as_ref()
+                .unwrap()
+                .contains("documented function")
+        );
     }
 
     #[test]
