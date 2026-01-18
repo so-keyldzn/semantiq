@@ -76,6 +76,16 @@ semantiq search "authentication handler"
 semantiq stats
 ```
 
+## Supported Languages
+
+- Rust
+- TypeScript / JavaScript
+- Python
+- Go
+- Java
+- C / C++
+- PHP
+
 ## Compatibility
 
 Works with all MCP-compatible tools:
@@ -86,6 +96,10 @@ Works with all MCP-compatible tools:
 - JetBrains IDEs (2025.2+)
 - VS Code
 - Codex CLI / Aider
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 
