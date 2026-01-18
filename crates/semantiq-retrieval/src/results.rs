@@ -91,7 +91,11 @@ impl SearchResults {
 
     pub fn merge(&mut self, other: SearchResults) {
         self.results.extend(other.results);
-        self.results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        self.results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         self.total_count = self.results.len();
     }
 }
@@ -170,8 +174,22 @@ mod tests {
     #[test]
     fn test_search_results_new() {
         let results = vec![
-            SearchResult::new(SearchResultKind::Symbol, "a.rs".to_string(), 1, 1, "fn a()".to_string(), 0.9),
-            SearchResult::new(SearchResultKind::TextMatch, "b.rs".to_string(), 2, 2, "let b".to_string(), 0.5),
+            SearchResult::new(
+                SearchResultKind::Symbol,
+                "a.rs".to_string(),
+                1,
+                1,
+                "fn a()".to_string(),
+                0.9,
+            ),
+            SearchResult::new(
+                SearchResultKind::TextMatch,
+                "b.rs".to_string(),
+                2,
+                2,
+                "let b".to_string(),
+                0.5,
+            ),
         ];
 
         let search_results = SearchResults::new("test".to_string(), results, 100);
@@ -188,7 +206,14 @@ mod tests {
 
         let non_empty = SearchResults::new(
             "test".to_string(),
-            vec![SearchResult::new(SearchResultKind::Symbol, "a.rs".to_string(), 1, 1, "fn a()".to_string(), 0.9)],
+            vec![SearchResult::new(
+                SearchResultKind::Symbol,
+                "a.rs".to_string(),
+                1,
+                1,
+                "fn a()".to_string(),
+                0.9,
+            )],
             10,
         );
         assert!(!non_empty.is_empty());
@@ -197,9 +222,30 @@ mod tests {
     #[test]
     fn test_search_results_top() {
         let results = vec![
-            SearchResult::new(SearchResultKind::Symbol, "a.rs".to_string(), 1, 1, "fn a()".to_string(), 0.9),
-            SearchResult::new(SearchResultKind::Symbol, "b.rs".to_string(), 2, 2, "fn b()".to_string(), 0.8),
-            SearchResult::new(SearchResultKind::Symbol, "c.rs".to_string(), 3, 3, "fn c()".to_string(), 0.7),
+            SearchResult::new(
+                SearchResultKind::Symbol,
+                "a.rs".to_string(),
+                1,
+                1,
+                "fn a()".to_string(),
+                0.9,
+            ),
+            SearchResult::new(
+                SearchResultKind::Symbol,
+                "b.rs".to_string(),
+                2,
+                2,
+                "fn b()".to_string(),
+                0.8,
+            ),
+            SearchResult::new(
+                SearchResultKind::Symbol,
+                "c.rs".to_string(),
+                3,
+                3,
+                "fn c()".to_string(),
+                0.7,
+            ),
         ];
 
         let search_results = SearchResults::new("test".to_string(), results, 50);
@@ -212,12 +258,22 @@ mod tests {
 
     #[test]
     fn test_search_results_merge() {
-        let results1 = vec![
-            SearchResult::new(SearchResultKind::Symbol, "a.rs".to_string(), 1, 1, "fn a()".to_string(), 0.9),
-        ];
-        let results2 = vec![
-            SearchResult::new(SearchResultKind::Symbol, "b.rs".to_string(), 2, 2, "fn b()".to_string(), 0.95),
-        ];
+        let results1 = vec![SearchResult::new(
+            SearchResultKind::Symbol,
+            "a.rs".to_string(),
+            1,
+            1,
+            "fn a()".to_string(),
+            0.9,
+        )];
+        let results2 = vec![SearchResult::new(
+            SearchResultKind::Symbol,
+            "b.rs".to_string(),
+            2,
+            2,
+            "fn b()".to_string(),
+            0.95,
+        )];
 
         let mut search_results1 = SearchResults::new("test".to_string(), results1, 50);
         let search_results2 = SearchResults::new("test".to_string(), results2, 30);
@@ -234,7 +290,10 @@ mod tests {
     fn test_search_result_kind_serialization() {
         assert_eq!(SearchResultKind::Symbol, SearchResultKind::Symbol);
         assert_eq!(SearchResultKind::TextMatch, SearchResultKind::TextMatch);
-        assert_eq!(SearchResultKind::SemanticMatch, SearchResultKind::SemanticMatch);
+        assert_eq!(
+            SearchResultKind::SemanticMatch,
+            SearchResultKind::SemanticMatch
+        );
         assert_eq!(SearchResultKind::Reference, SearchResultKind::Reference);
     }
 }

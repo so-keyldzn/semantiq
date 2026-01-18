@@ -1,7 +1,7 @@
-use crate::schema::{init_schema, ChunkRecord, DependencyRecord, FileRecord, SymbolRecord};
-use anyhow::{anyhow, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
-use semantiq_parser::{CodeChunk, Symbol, PARSER_VERSION};
+use crate::schema::{ChunkRecord, DependencyRecord, FileRecord, SymbolRecord, init_schema};
+use anyhow::{Context, Result, anyhow};
+use rusqlite::{Connection, OptionalExtension, params};
+use semantiq_parser::{CodeChunk, PARSER_VERSION, Symbol};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -54,9 +54,12 @@ impl IndexStore {
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
-        let conn = self.conn.lock().map_err(|e: PoisonError<MutexGuard<Connection>>| {
-            anyhow!("Database lock poisoned: {}", e)
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e: PoisonError<MutexGuard<Connection>>| {
+                anyhow!("Database lock poisoned: {}", e)
+            })?;
         f(&conn)
     }
 
@@ -133,11 +136,9 @@ impl IndexStore {
     pub fn get_file_path_by_id(&self, file_id: i64) -> Result<Option<String>> {
         self.with_conn(|conn| {
             let result = conn
-                .query_row(
-                    "SELECT path FROM files WHERE id = ?1",
-                    [file_id],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT path FROM files WHERE id = ?1", [file_id], |row| {
+                    row.get(0)
+                })
                 .optional()?;
             Ok(result)
         })
@@ -146,9 +147,12 @@ impl IndexStore {
     // Symbol operations
 
     pub fn insert_symbols(&self, file_id: i64, symbols: &[Symbol]) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e: PoisonError<MutexGuard<Connection>>| {
-            anyhow!("Database lock poisoned: {}", e)
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e: PoisonError<MutexGuard<Connection>>| {
+                anyhow!("Database lock poisoned: {}", e)
+            })?;
 
         // Use a transaction for atomicity
         conn.execute("BEGIN IMMEDIATE", [])?;
@@ -297,9 +301,12 @@ impl IndexStore {
     // Chunk operations
 
     pub fn insert_chunks(&self, file_id: i64, chunks: &[CodeChunk]) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e: PoisonError<MutexGuard<Connection>>| {
-            anyhow!("Database lock poisoned: {}", e)
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e: PoisonError<MutexGuard<Connection>>| {
+                anyhow!("Database lock poisoned: {}", e)
+            })?;
 
         // Use a transaction for atomicity
         conn.execute("BEGIN IMMEDIATE", [])?;
@@ -344,10 +351,7 @@ impl IndexStore {
     pub fn update_chunk_embedding(&self, chunk_id: i64, embedding: &[f32]) -> Result<()> {
         self.with_conn(|conn| {
             // Convert f32 slice to bytes
-            let embedding_bytes: Vec<u8> = embedding
-                .iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect();
+            let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
             conn.execute(
                 "UPDATE chunks SET embedding = ?1 WHERE id = ?2",
@@ -555,9 +559,7 @@ impl IndexStore {
 
     /// Vérifie si l'index doit être recréé (changement de parser)
     pub fn needs_full_reindex(&self) -> Result<bool> {
-        self.with_conn(|conn| {
-            Self::needs_full_reindex_impl(conn)
-        })
+        self.with_conn(|conn| Self::needs_full_reindex_impl(conn))
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -575,7 +577,10 @@ impl IndexStore {
                 let stored: u32 = match v.parse() {
                     Ok(val) => val,
                     Err(_) => {
-                        warn!("Corrupted parser_version in metadata: '{}', forcing reindex", v);
+                        warn!(
+                            "Corrupted parser_version in metadata: '{}', forcing reindex",
+                            v
+                        );
                         0
                     }
                 };
@@ -587,9 +592,7 @@ impl IndexStore {
 
     /// Met à jour la version du parser dans metadata
     pub fn set_parser_version(&self) -> Result<()> {
-        self.with_conn(|conn| {
-            Self::set_parser_version_impl(conn)
-        })
+        self.with_conn(|conn| Self::set_parser_version_impl(conn))
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -603,9 +606,7 @@ impl IndexStore {
 
     /// Supprime toutes les données indexées
     pub fn clear_all_data(&self) -> Result<()> {
-        self.with_conn(|conn| {
-            Self::clear_all_data_impl(conn)
-        })
+        self.with_conn(|conn| Self::clear_all_data_impl(conn))
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -625,9 +626,12 @@ impl IndexStore {
     /// Vérifie et nettoie si nécessaire. Retourne true si reindex nécessaire.
     /// Utilise une transaction unique pour éviter les race conditions.
     pub fn check_and_prepare_for_reindex(&self) -> Result<bool> {
-        let conn = self.conn.lock().map_err(|e: PoisonError<MutexGuard<Connection>>| {
-            anyhow!("Database lock poisoned: {}", e)
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e: PoisonError<MutexGuard<Connection>>| {
+                anyhow!("Database lock poisoned: {}", e)
+            })?;
 
         if !Self::needs_full_reindex_impl(&conn)? {
             return Ok(false);
@@ -681,7 +685,8 @@ impl IndexStore {
                         dependency_count: row.get::<_, i64>(3)? as usize,
                     })
                 },
-            ).map_err(Into::into)
+            )
+            .map_err(Into::into)
         })
     }
 
@@ -767,13 +772,15 @@ mod tests {
     fn test_needs_full_reindex_different_version() {
         let store = IndexStore::open_in_memory().unwrap();
         // Set a different version manually
-        store.with_conn(|conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('parser_version', '999')",
-                [],
-            )?;
-            Ok(())
-        }).unwrap();
+        store
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('parser_version', '999')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         // Should need reindex because version differs
         assert!(store.needs_full_reindex().unwrap());
     }
@@ -858,7 +865,13 @@ mod tests {
         let store = IndexStore::open_in_memory().unwrap();
 
         let file_id = store
-            .insert_file("test.rs", Some("rust"), "fn main() {}\nfn foo() {}", 25, 1000)
+            .insert_file(
+                "test.rs",
+                Some("rust"),
+                "fn main() {}\nfn foo() {}",
+                25,
+                1000,
+            )
             .unwrap();
 
         let chunks = vec![
@@ -1041,7 +1054,11 @@ mod tests {
             .unwrap();
 
         // Different content should need reindex
-        assert!(store.needs_reindex("test.rs", "fn main() { println!(\"hello\"); }").unwrap());
+        assert!(
+            store
+                .needs_reindex("test.rs", "fn main() { println!(\"hello\"); }")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1057,7 +1074,13 @@ mod tests {
         let store = IndexStore::open_in_memory().unwrap();
 
         let file_id = store
-            .insert_file("test.rs", Some("rust"), "fn hello() {}\nfn world() {}", 27, 1000)
+            .insert_file(
+                "test.rs",
+                Some("rust"),
+                "fn hello() {}\nfn world() {}",
+                27,
+                1000,
+            )
             .unwrap();
 
         let symbols = vec![
