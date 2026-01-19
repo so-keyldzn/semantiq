@@ -1,15 +1,26 @@
-//! Initialize Cursor/VS Code configuration for a Rust project
+//! Initialize Cursor/VS Code configuration for a project
 
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-pub async fn init_cursor(path: &Path) -> Result<()> {
-    let project_root = if path.is_absolute() {
-        path.to_path_buf()
+use super::common::resolve_project_root;
+
+/// Writes content to a file, checking if it already exists.
+/// Returns true if the file was written, false if skipped.
+fn write_if_not_exists(path: &Path, content: &str, name: &str) -> Result<bool> {
+    if path.exists() {
+        println!("Skipped {} (already exists)", name);
+        Ok(false)
     } else {
-        std::env::current_dir()?.join(path)
-    };
+        fs::write(path, content)?;
+        println!("Created {}", name);
+        Ok(true)
+    }
+}
+
+pub async fn init_cursor(path: &Path) -> Result<()> {
+    let project_root = resolve_project_root(path)?;
 
     println!("Initializing Cursor/VS Code config for {:?}", project_root);
 
@@ -17,7 +28,6 @@ pub async fn init_cursor(path: &Path) -> Result<()> {
     let cursor_dir = project_root.join(".cursor");
     let rules_dir = cursor_dir.join("rules");
     fs::create_dir_all(&rules_dir)?;
-    println!("Created .cursor/rules/");
 
     // 2. Create .cursor/rules/project.mdc (general project guidelines)
     let project_rules_content = r#"---
@@ -49,8 +59,11 @@ alwaysApply: true
 - Write tests for new functionality
 - Document public APIs
 "#;
-    fs::write(rules_dir.join("project.mdc"), project_rules_content)?;
-    println!("Created .cursor/rules/project.mdc");
+    write_if_not_exists(
+        &rules_dir.join("project.mdc"),
+        project_rules_content,
+        ".cursor/rules/project.mdc",
+    )?;
 
     // 3. Create .cursor/rules/semantiq.mdc (MCP tools usage)
     let semantiq_rules_content = r#"---
@@ -89,8 +102,11 @@ This project uses Semantiq for semantic code understanding.
 3. Use `semantiq_deps` to understand module relationships
 4. Use `semantiq_explain` for unfamiliar symbols
 "#;
-    fs::write(rules_dir.join("semantiq.mdc"), semantiq_rules_content)?;
-    println!("Created .cursor/rules/semantiq.mdc");
+    write_if_not_exists(
+        &rules_dir.join("semantiq.mdc"),
+        semantiq_rules_content,
+        ".cursor/rules/semantiq.mdc",
+    )?;
 
     // 4. Create .cursor/mcp.json (MCP server configuration)
     let mcp_json_content = r#"{
@@ -102,8 +118,11 @@ This project uses Semantiq for semantic code understanding.
   }
 }
 "#;
-    fs::write(cursor_dir.join("mcp.json"), mcp_json_content)?;
-    println!("Created .cursor/mcp.json");
+    write_if_not_exists(
+        &cursor_dir.join("mcp.json"),
+        mcp_json_content,
+        ".cursor/mcp.json",
+    )?;
 
     // 5. Create .cursorignore
     let cursorignore_content = r#"# Build artifacts
@@ -131,8 +150,11 @@ node_modules/
 # Logs
 *.log
 "#;
-    fs::write(project_root.join(".cursorignore"), cursorignore_content)?;
-    println!("Created .cursorignore");
+    write_if_not_exists(
+        &project_root.join(".cursorignore"),
+        cursorignore_content,
+        ".cursorignore",
+    )?;
 
     // 6. Create .vscode directory
     let vscode_dir = project_root.join(".vscode");
@@ -166,8 +188,11 @@ node_modules/
     }
 }
 "#;
-    fs::write(vscode_dir.join("settings.json"), settings_json)?;
-    println!("Created .vscode/settings.json");
+    write_if_not_exists(
+        &vscode_dir.join("settings.json"),
+        settings_json,
+        ".vscode/settings.json",
+    )?;
 
     // 8. Create .vscode/tasks.json
     let tasks_json = r#"{
@@ -251,8 +276,11 @@ node_modules/
     ]
 }
 "#;
-    fs::write(vscode_dir.join("tasks.json"), tasks_json)?;
-    println!("Created .vscode/tasks.json");
+    write_if_not_exists(
+        &vscode_dir.join("tasks.json"),
+        tasks_json,
+        ".vscode/tasks.json",
+    )?;
 
     // 9. Create .vscode/launch.json
     let launch_json = r#"{
@@ -327,8 +355,11 @@ node_modules/
     ]
 }
 "#;
-    fs::write(vscode_dir.join("launch.json"), launch_json)?;
-    println!("Created .vscode/launch.json");
+    write_if_not_exists(
+        &vscode_dir.join("launch.json"),
+        launch_json,
+        ".vscode/launch.json",
+    )?;
 
     // 10. Create .vscode/extensions.json
     let extensions_json = r#"{
@@ -341,22 +372,73 @@ node_modules/
     ]
 }
 "#;
-    fs::write(vscode_dir.join("extensions.json"), extensions_json)?;
-    println!("Created .vscode/extensions.json");
+    write_if_not_exists(
+        &vscode_dir.join("extensions.json"),
+        extensions_json,
+        ".vscode/extensions.json",
+    )?;
 
-    println!("\n✓ Cursor/VS Code configuration created!");
-    println!("\nCreated files:");
-    println!("  .cursor/");
-    println!("    rules/");
-    println!("      project.mdc      (general project guidelines)");
-    println!("      semantiq.mdc     (Semantiq MCP tools usage)");
-    println!("    mcp.json           (MCP server configuration)");
-    println!("  .cursorignore        (indexing exclusions)");
-    println!("  .vscode/");
-    println!("    settings.json      (editor settings)");
-    println!("    tasks.json         (cargo tasks)");
-    println!("    launch.json        (debug configurations)");
-    println!("    extensions.json    (recommended extensions)");
+    println!("\n✓ Cursor/VS Code configuration initialized!");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_init_cursor_creates_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        init_cursor(path).await.unwrap();
+
+        // Check .cursor directory structure
+        assert!(path.join(".cursor").exists());
+        assert!(path.join(".cursor/rules").exists());
+        assert!(path.join(".cursor/rules/project.mdc").exists());
+        assert!(path.join(".cursor/rules/semantiq.mdc").exists());
+        assert!(path.join(".cursor/mcp.json").exists());
+
+        // Check .cursorignore
+        assert!(path.join(".cursorignore").exists());
+
+        // Check .vscode directory
+        assert!(path.join(".vscode").exists());
+        assert!(path.join(".vscode/settings.json").exists());
+        assert!(path.join(".vscode/tasks.json").exists());
+        assert!(path.join(".vscode/launch.json").exists());
+        assert!(path.join(".vscode/extensions.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_init_cursor_skips_existing_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // Create .cursorignore with custom content
+        let custom_content = "# My custom ignore\ncustom/";
+        fs::write(path.join(".cursorignore"), custom_content).unwrap();
+
+        init_cursor(path).await.unwrap();
+
+        // Check that custom content was preserved
+        let content = fs::read_to_string(path.join(".cursorignore")).unwrap();
+        assert_eq!(content, custom_content);
+    }
+
+    #[tokio::test]
+    async fn test_init_cursor_mcp_json_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        init_cursor(path).await.unwrap();
+
+        let content = fs::read_to_string(path.join(".cursor/mcp.json")).unwrap();
+        assert!(content.contains("semantiq"));
+        assert!(content.contains("serve"));
+    }
 }

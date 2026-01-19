@@ -4,15 +4,11 @@ use anyhow::{Context, Result};
 use semantiq_index::IndexStore;
 use std::path::PathBuf;
 
-const DEFAULT_DB_NAME: &str = ".semantiq.db";
+use super::common::resolve_db_path;
 
 pub async fn stats(database: Option<PathBuf>) -> Result<()> {
-    let db_path = match database {
-        Some(p) => p,
-        None => std::env::current_dir()
-            .context("Failed to get current directory")?
-            .join(DEFAULT_DB_NAME),
-    };
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let db_path = resolve_db_path(database, &cwd);
 
     if !db_path.exists() {
         anyhow::bail!(

@@ -5,11 +5,11 @@ use semantiq_index::IndexStore;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const DEFAULT_DB_NAME: &str = ".semantiq.db";
+use super::common::resolve_db_path;
 
 pub async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let db_path = database.unwrap_or_else(|| cwd.join(DEFAULT_DB_NAME));
+    let db_path = resolve_db_path(database, &cwd);
 
     if !db_path.exists() {
         anyhow::bail!(

@@ -1,5 +1,6 @@
 //! CLI command implementations for Semantiq
 
+mod common;
 mod index;
 mod init;
 mod init_cursor;

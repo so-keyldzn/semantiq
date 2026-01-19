@@ -4,14 +4,11 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
+use super::common::resolve_project_root;
 use super::index::index;
 
 pub async fn init(path: &Path) -> Result<()> {
-    let project_root = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
+    let project_root = resolve_project_root(path)?;
 
     println!("Initializing Semantiq for {:?}", project_root);
 

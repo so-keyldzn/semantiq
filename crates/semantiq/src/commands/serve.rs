@@ -6,7 +6,7 @@ use semantiq_mcp::{SemantiqServer, disable_update_check};
 use std::path::PathBuf;
 use tracing::info;
 
-const DEFAULT_DB_NAME: &str = ".semantiq.db";
+use super::common::resolve_db_path;
 
 pub async fn serve(
     project: Option<PathBuf>,
@@ -23,7 +23,7 @@ pub async fn serve(
         None => std::env::current_dir().context("Failed to get current directory")?,
     };
 
-    let db_path = database.unwrap_or_else(|| project_root.join(DEFAULT_DB_NAME));
+    let db_path = resolve_db_path(database, &project_root);
 
     info!("Starting Semantiq MCP server");
     info!("Project root: {:?}", project_root);

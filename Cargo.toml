@@ -83,6 +83,9 @@ grep-searcher = "0.1"
 grep-matcher = "0.1"
 regex = "1.12"
 
+# Testing
+tempfile = "3.14"
+
 # Internal crates
 semantiq-mcp = { path = "crates/semantiq-mcp" }
 semantiq-index = { path = "crates/semantiq-index" }
