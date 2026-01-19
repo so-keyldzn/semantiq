@@ -378,6 +378,40 @@ node_modules/
         ".vscode/extensions.json",
     )?;
 
+    // 11. Update .gitignore
+    let gitignore_path = project_root.join(".gitignore");
+    let gitignore_entries = vec![".semantiq.db", ".semantiq.db-wal", ".semantiq.db-shm"];
+
+    if gitignore_path.exists() {
+        let content = fs::read_to_string(&gitignore_path)?;
+        let mut entries_to_add = Vec::new();
+
+        for entry in &gitignore_entries {
+            if !content.contains(entry) {
+                entries_to_add.push(*entry);
+            }
+        }
+
+        if !entries_to_add.is_empty() {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new().append(true).open(&gitignore_path)?;
+            writeln!(file, "\n# Semantiq")?;
+            for entry in &entries_to_add {
+                writeln!(file, "{}", entry)?;
+            }
+            println!("Added Semantiq entries to .gitignore");
+        } else {
+            println!("Skipped .gitignore (entries already present)");
+        }
+    } else {
+        let content = format!(
+            "# Semantiq\n{}\n",
+            gitignore_entries.join("\n")
+        );
+        fs::write(&gitignore_path, content)?;
+        println!("Created .gitignore");
+    }
+
     println!("\n✓ Cursor/VS Code configuration initialized!");
 
     Ok(())
@@ -440,5 +474,56 @@ mod tests {
         let content = fs::read_to_string(path.join(".cursor/mcp.json")).unwrap();
         assert!(content.contains("semantiq"));
         assert!(content.contains("serve"));
+    }
+
+    #[tokio::test]
+    async fn test_init_cursor_creates_gitignore() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        init_cursor(path).await.unwrap();
+
+        let content = fs::read_to_string(path.join(".gitignore")).unwrap();
+        assert!(content.contains(".semantiq.db"));
+        assert!(content.contains(".semantiq.db-wal"));
+        assert!(content.contains(".semantiq.db-shm"));
+    }
+
+    #[tokio::test]
+    async fn test_init_cursor_updates_existing_gitignore() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // Create existing .gitignore
+        let existing = "# My project\nnode_modules/\n*.log\n";
+        fs::write(path.join(".gitignore"), existing).unwrap();
+
+        init_cursor(path).await.unwrap();
+
+        let content = fs::read_to_string(path.join(".gitignore")).unwrap();
+        // Original content preserved
+        assert!(content.contains("node_modules/"));
+        assert!(content.contains("*.log"));
+        // New entries added
+        assert!(content.contains(".semantiq.db"));
+        assert!(content.contains("# Semantiq"));
+    }
+
+    #[tokio::test]
+    async fn test_init_cursor_skips_existing_gitignore_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // Create .gitignore with Semantiq entries already present
+        let existing = "# Semantiq\n.semantiq.db\n.semantiq.db-wal\n.semantiq.db-shm\n";
+        fs::write(path.join(".gitignore"), existing).unwrap();
+
+        init_cursor(path).await.unwrap();
+
+        let content = fs::read_to_string(path.join(".gitignore")).unwrap();
+        // Should not duplicate the "# Semantiq" header
+        assert_eq!(content.matches("# Semantiq").count(), 1);
+        // Content should be unchanged
+        assert_eq!(content, existing);
     }
 }
