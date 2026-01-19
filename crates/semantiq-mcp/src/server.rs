@@ -5,7 +5,7 @@ use rmcp::{
     tool,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
-use semantiq_retrieval::RetrievalEngine;
+use semantiq_retrieval::{RetrievalEngine, SearchOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,16 +134,49 @@ impl SemantiqServer {
 impl SemantiqServer {
     #[tool(
         name = "semantiq_search",
-        description = "Search for code patterns, symbols, or text in the codebase. Returns relevant matches with file paths and line numbers."
+        description = "Search for code patterns, symbols, or text in the codebase. Returns relevant matches with file paths and line numbers. Supports filtering: min_score (0.0-1.0, default 0.35), file_type (comma-separated extensions like 'rs,ts,py'), symbol_kind (function,method,class,struct,enum,interface,trait,module,variable,constant,type)."
     )]
     pub async fn semantiq_search(
         &self,
         #[tool(param)] query: String,
         #[tool(param)] limit: Option<usize>,
+        #[tool(param)] min_score: Option<f32>,
+        #[tool(param)] file_type: Option<String>,
+        #[tool(param)] symbol_kind: Option<String>,
     ) -> Result<String, String> {
+        // Validate query
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("Query cannot be empty".to_string());
+        }
+        if query.len() > 500 {
+            return Err("Query exceeds maximum length of 500 characters".to_string());
+        }
+
         let limit = limit.unwrap_or(20);
 
-        match self.engine.search(&query, limit) {
+        // Build SearchOptions
+        let mut options = SearchOptions::new();
+
+        if let Some(score) = min_score {
+            options = options.with_min_score(score);
+        }
+
+        if let Some(ref ft) = file_type {
+            let types = SearchOptions::parse_csv(ft);
+            if !types.is_empty() {
+                options = options.with_file_types(types);
+            }
+        }
+
+        if let Some(ref sk) = symbol_kind {
+            let kinds = SearchOptions::parse_csv(sk);
+            if !kinds.is_empty() {
+                options = options.with_symbol_kinds(kinds);
+            }
+        }
+
+        match self.engine.search(query, limit, Some(options)) {
             Ok(results) => {
                 let mut output = format!(
                     "Found {} results for '{}' ({} ms)\n\n",

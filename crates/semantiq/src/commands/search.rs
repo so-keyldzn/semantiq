@@ -2,12 +2,20 @@
 
 use anyhow::{Context, Result};
 use semantiq_index::IndexStore;
+use semantiq_retrieval::SearchOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::common::resolve_db_path;
 
-pub async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Result<()> {
+pub async fn search(
+    query: &str,
+    database: Option<PathBuf>,
+    limit: usize,
+    min_score: Option<f32>,
+    file_type: Option<String>,
+    symbol_kind: Option<String>,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let db_path = resolve_db_path(database, &cwd);
 
@@ -24,7 +32,25 @@ pub async fn search(query: &str, database: Option<PathBuf>, limit: usize) -> Res
         .context("Current directory path contains invalid UTF-8")?;
     let engine = semantiq_retrieval::RetrievalEngine::new(store, cwd_str);
 
-    let results = engine.search(query, limit)?;
+    // Build SearchOptions
+    let mut options = SearchOptions::new();
+    if let Some(score) = min_score {
+        options = options.with_min_score(score);
+    }
+    if let Some(ref ft) = file_type {
+        let types = SearchOptions::parse_csv(ft);
+        if !types.is_empty() {
+            options = options.with_file_types(types);
+        }
+    }
+    if let Some(ref sk) = symbol_kind {
+        let kinds = SearchOptions::parse_csv(sk);
+        if !kinds.is_empty() {
+            options = options.with_symbol_kinds(kinds);
+        }
+    }
+
+    let results = engine.search(query, limit, Some(options))?;
 
     println!(
         "Search results for '{}' ({} ms)",

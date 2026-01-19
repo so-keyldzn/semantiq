@@ -82,6 +82,18 @@ enum Commands {
         /// Maximum results
         #[arg(short, long, default_value = "10")]
         limit: usize,
+
+        /// Minimum score (0.0-1.0, default: 0.35)
+        #[arg(long)]
+        min_score: Option<f32>,
+
+        /// File extensions to include (comma-separated, e.g., "rs,ts,py")
+        #[arg(long)]
+        file_type: Option<String>,
+
+        /// Symbol kinds to include (comma-separated, e.g., "function,class")
+        #[arg(long)]
+        symbol_kind: Option<String>,
     },
 }
 
@@ -119,6 +131,9 @@ async fn main() -> Result<()> {
             query,
             database,
             limit,
-        } => commands::search(&query, database, limit).await,
+            min_score,
+            file_type,
+            symbol_kind,
+        } => commands::search(&query, database, limit, min_score, file_type, symbol_kind).await,
     }
 }

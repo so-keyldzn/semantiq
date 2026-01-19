@@ -1,4 +1,4 @@
-use crate::query::Query;
+use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use crate::text_searcher::TextSearcher;
 use anyhow::Result;
@@ -38,9 +38,15 @@ impl RetrievalEngine {
         }
     }
 
-    pub fn search(&self, query_text: &str, limit: usize) -> Result<SearchResults> {
+    pub fn search(
+        &self,
+        query_text: &str,
+        limit: usize,
+        options: Option<SearchOptions>,
+    ) -> Result<SearchResults> {
         let start = Instant::now();
         let query = Query::new(query_text);
+        let opts = options.unwrap_or_default();
 
         // Cap limit to prevent excessive memory usage
         let safe_limit = limit.min(500);
@@ -49,17 +55,17 @@ impl RetrievalEngine {
 
         // 1. Semantic search (vector similarity) - highest priority
         if self.embedding_model.is_some() {
-            let semantic_results = self.search_semantic(query_text, safe_limit)?;
+            let semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
             all_results.extend(semantic_results);
         }
 
         // 2. Symbol search (FTS) - prioritize symbol matches
-        let symbol_results = self.search_symbols(&query, safe_limit)?;
+        let symbol_results = self.search_symbols(&query, safe_limit, &opts)?;
         all_results.extend(symbol_results);
 
         // 3. Text search (grep-like) - only if we need more results
         if all_results.len() < safe_limit {
-            let text_results = self.search_text(&query, safe_limit - all_results.len())?;
+            let text_results = self.search_text(&query, safe_limit - all_results.len(), &opts)?;
             all_results.extend(text_results);
         }
 
@@ -77,6 +83,10 @@ impl RetrievalEngine {
             seen.insert(key)
         });
 
+        // Filter by minimum score
+        let min_score = opts.effective_min_score();
+        all_results.retain(|r| r.score >= min_score);
+
         // Limit results
         all_results.truncate(safe_limit);
 
@@ -88,7 +98,12 @@ impl RetrievalEngine {
         ))
     }
 
-    fn search_semantic(&self, query_text: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    fn search_semantic(
+        &self,
+        query_text: &str,
+        limit: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
         let model = match &self.embedding_model {
             Some(m) => m,
             None => return Ok(Vec::new()),
@@ -129,6 +144,13 @@ impl RetrievalEngine {
             .filter(|(score, _)| *score > 0.3) // Only include results with reasonable similarity
             .filter_map(|(score, chunk)| {
                 let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
+
+                // Filter by extension
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
+                    if !options.accepts_extension(ext) {
+                        return None;
+                    }
+                }
 
                 Some(
                     SearchResult::new(
@@ -191,7 +213,7 @@ impl RetrievalEngine {
         }
 
         // Find usages via text search
-        let usage_results = self.search_text(&Query::new(symbol_name), limit)?;
+        let usage_results = self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
         for mut result in usage_results {
             result.kind = SearchResultKind::Reference;
             result.metadata.match_type = Some("usage".to_string());
@@ -281,7 +303,7 @@ impl RetrievalEngine {
         }
 
         // Count usages
-        let usage_results = self.search_text(&Query::new(symbol_name), 100)?;
+        let usage_results = self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
         let usage_count = usage_results.len();
 
         Ok(SymbolExplanation {
@@ -295,14 +317,32 @@ impl RetrievalEngine {
 
     // Private helper methods
 
-    fn search_symbols(&self, query: &Query, limit: usize) -> Result<Vec<SearchResult>> {
+    fn search_symbols(
+        &self,
+        query: &Query,
+        limit: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
 
         for term in query.all_terms() {
             let symbols = self.store.search_symbols(term, limit)?;
 
             for symbol in symbols {
+                // Filter by symbol kind if specified
+                if !options.accepts_symbol_kind(&symbol.kind) {
+                    continue;
+                }
+
                 let file_path = self.get_file_path(symbol.file_id)?;
+
+                // Filter by extension
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
+                    if !options.accepts_extension(ext) {
+                        continue;
+                    }
+                }
+
                 let content = symbol
                     .signature
                     .clone()
@@ -352,7 +392,7 @@ impl RetrievalEngine {
                     )
                     .with_metadata(SearchResultMetadata {
                         symbol_name: Some(symbol.name),
-                        symbol_kind: Some(symbol.kind),
+                        symbol_kind: Some(symbol.kind.clone()),
                         match_type: Some("symbol".to_string()),
                         context: symbol.doc_comment,
                     }),
@@ -363,7 +403,12 @@ impl RetrievalEngine {
         Ok(results)
     }
 
-    fn search_text(&self, query: &Query, limit: usize) -> Result<Vec<SearchResult>> {
+    fn search_text(
+        &self,
+        query: &Query,
+        limit: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         let root = Path::new(&self.root_path);
 
@@ -386,8 +431,14 @@ impl RetrievalEngine {
                 continue;
             }
 
-            // Skip non-code files
-            if !Self::is_code_file(path) {
+            // Filter by extension using SearchOptions
+            let accepted = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| options.accepts_extension(ext))
+                .unwrap_or(false);
+
+            if !accepted {
                 continue;
             }
 
@@ -470,18 +521,6 @@ impl RetrievalEngine {
 
         Ok(lines[start_idx..end_idx].join("\n"))
     }
-
-    fn is_code_file(path: &Path) -> bool {
-        let code_extensions = [
-            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "c", "cpp", "cc", "h", "hpp", "rb",
-            "php", "cs", "swift", "kt", "scala", "vue", "svelte",
-        ];
-
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| code_extensions.contains(&ext.to_lowercase().as_str()))
-            .unwrap_or(false)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -530,60 +569,6 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_code_file() {
-        assert!(RetrievalEngine::is_code_file(Path::new("test.rs")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.tsx")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("readme.md")));
-    }
-
-    #[test]
-    fn test_is_code_file_all_extensions() {
-        // Rust
-        assert!(RetrievalEngine::is_code_file(Path::new("lib.rs")));
-
-        // TypeScript/JavaScript
-        assert!(RetrievalEngine::is_code_file(Path::new("app.ts")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.tsx")));
-        assert!(RetrievalEngine::is_code_file(Path::new("index.js")));
-        assert!(RetrievalEngine::is_code_file(Path::new("component.jsx")));
-
-        // Python
-        assert!(RetrievalEngine::is_code_file(Path::new("script.py")));
-
-        // Go
-        assert!(RetrievalEngine::is_code_file(Path::new("main.go")));
-
-        // Java
-        assert!(RetrievalEngine::is_code_file(Path::new("Main.java")));
-
-        // C/C++
-        assert!(RetrievalEngine::is_code_file(Path::new("main.c")));
-        assert!(RetrievalEngine::is_code_file(Path::new("main.cpp")));
-        assert!(RetrievalEngine::is_code_file(Path::new("header.h")));
-        assert!(RetrievalEngine::is_code_file(Path::new("header.hpp")));
-
-        // PHP
-        assert!(RetrievalEngine::is_code_file(Path::new("index.php")));
-
-        // Other supported
-        assert!(RetrievalEngine::is_code_file(Path::new("app.rb")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.swift")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.kt")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.vue")));
-        assert!(RetrievalEngine::is_code_file(Path::new("app.svelte")));
-    }
-
-    #[test]
-    fn test_is_not_code_file() {
-        assert!(!RetrievalEngine::is_code_file(Path::new("readme.md")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("data.json")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("config.yaml")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("image.png")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("document.pdf")));
-        assert!(!RetrievalEngine::is_code_file(Path::new("noextension")));
-    }
 
     #[test]
     fn test_cosine_similarity() {
