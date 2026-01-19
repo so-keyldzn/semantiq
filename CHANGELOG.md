@@ -2,6 +2,25 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.3.1] - 2026-01-19
+
+### Added
+- **New `init-cursor` command** for Cursor/VS Code configuration setup
+  - Creates `.cursor/rules/project.mdc` (general project guidelines)
+  - Creates `.cursor/rules/semantiq.mdc` (Semantiq MCP tools usage)
+  - Creates `.cursor/mcp.json` (MCP server configuration)
+  - Creates `.cursorignore` (indexing exclusions)
+  - Creates `.vscode/` config (settings, tasks, launch, extensions)
+  - Preserves existing files (skip instead of overwrite)
+
+### Changed
+- Centralized `DEFAULT_DB_NAME` and path resolution utilities in `common.rs`
+- Refactored all CLI commands to use shared utilities
+- CLI description now generic ("for a project" instead of "for a Rust project")
+
+### Added (Tests)
+- 7 new unit tests for `common.rs` and `init_cursor.rs`
+
 ## [0.3.0] - 2026-01-19
 
 ### Added
