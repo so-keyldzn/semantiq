@@ -2,6 +2,25 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.3.3] - 2026-01-19
+
+### Added
+- **Search filtering options** for `semantiq_search` - more precise and relevant results
+  - `min_score` - Minimum relevance score threshold (0.0-1.0, default: 0.35)
+  - `file_type` - Filter by file extensions (e.g., "rs,ts,py")
+  - `symbol_kind` - Filter by symbol type (e.g., "function,class,struct")
+- **CLI flags** for search command: `--min-score`, `--file-type`, `--symbol-kind`
+- **Smart default exclusions** - Automatically excludes non-code files (.json, .lock, .yaml, .md, .toml, etc.)
+- **`SearchOptions` struct** in `semantiq-retrieval` with builder pattern
+
+### Changed
+- `RetrievalEngine::search()` now accepts optional `SearchOptions` parameter
+- Improved search relevance by filtering low-score results by default
+- Removed obsolete `is_code_file()` function in favor of `SearchOptions::accepts_extension()`
+
+### Added (Tests)
+- 12 new unit tests for `SearchOptions` in `query.rs`
+
 ## [0.3.2] - 2026-01-19
 
 ### Added
