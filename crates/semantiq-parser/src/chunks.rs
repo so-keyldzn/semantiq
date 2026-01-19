@@ -136,6 +136,8 @@ impl ChunkExtractor {
             Language::TypeScript | Language::JavaScript => matches!(
                 kind,
                 "function_declaration"
+                    | "arrow_function"
+                    | "lexical_declaration"
                     | "class_declaration"
                     | "interface_declaration"
                     | "method_definition"
