@@ -9,6 +9,8 @@ semantiq-parser = { path = "../semantiq-parser" }
 semantiq-embeddings = { path = "../semantiq-embeddings" }
 
 rusqlite.workspace = true
+sqlite-vec.workspace = true
+zerocopy.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

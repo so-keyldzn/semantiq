@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.9"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 authors = ["keyldzn"]
@@ -30,6 +30,8 @@ rmcp = { version = "0.1", features = ["server", "transport-io"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -57,6 +59,16 @@ tree-sitter-java = "0.23"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-php = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-scala = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-yaml = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-bash = "0.23"
+tree-sitter-elixir = "0.3"
 
 # File watching
 notify = "7.0"
@@ -64,6 +76,12 @@ notify = "7.0"
 # Glob patterns
 glob = "0.3"
 ignore = "0.4"
+
+# Ripgrep search
+grep-regex = "0.1"
+grep-searcher = "0.1"
+grep-matcher = "0.1"
+regex = "1.12"
 
 # Internal crates
 semantiq-mcp = { path = "crates/semantiq-mcp" }

@@ -1,6 +1,8 @@
 use crate::schema::{ChunkRecord, DependencyRecord, FileRecord, SymbolRecord, init_schema};
 use anyhow::{Context, Result, anyhow};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, ffi::sqlite3_auto_extension, params};
+use sqlite_vec::sqlite3_vec_init;
+use std::sync::Once;
 use semantiq_parser::{CodeChunk, PARSER_VERSION, Symbol};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -37,6 +39,18 @@ fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// Initialize sqlite-vec extension (called once)
+static SQLITE_VEC_INIT: Once = Once::new();
+
+fn init_sqlite_vec() {
+    SQLITE_VEC_INIT.call_once(|| {
+        unsafe {
+            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+        }
+        tracing::debug!("sqlite-vec extension registered");
+    });
+}
+
 pub struct IndexStore {
     conn: Arc<Mutex<Connection>>,
     db_path: PathBuf,
@@ -44,6 +58,8 @@ pub struct IndexStore {
 
 impl IndexStore {
     pub fn open(path: &Path) -> Result<Self> {
+        init_sqlite_vec();
+
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open database at {:?}", path))?;
 
@@ -64,6 +80,8 @@ impl IndexStore {
     }
 
     pub fn open_in_memory() -> Result<Self> {
+        init_sqlite_vec();
+
         let conn = Connection::open_in_memory()?;
         init_schema(&conn)?;
 
@@ -378,15 +396,89 @@ impl IndexStore {
 
     pub fn update_chunk_embedding(&self, chunk_id: i64, embedding: &[f32]) -> Result<()> {
         self.with_conn(|conn| {
-            // Convert f32 slice to bytes
+            // Convert f32 slice to bytes for the chunks table
             let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
+            // Update the chunks table (for backward compatibility)
             conn.execute(
                 "UPDATE chunks SET embedding = ?1 WHERE id = ?2",
                 params![embedding_bytes, chunk_id],
             )?;
 
+            // Insert/replace into the vec0 virtual table for vector search
+            // sqlite-vec expects raw f32 bytes
+            conn.execute(
+                "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, embedding_bytes],
+            )?;
+
             Ok(())
+        })
+    }
+
+    /// Search for similar chunks using vector similarity (sqlite-vec)
+    /// Returns chunk IDs with their distances, ordered by similarity (closest first)
+    pub fn search_similar_chunks(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+        self.with_conn(|conn| {
+            let embedding_bytes: Vec<u8> = query_embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+            let mut stmt = conn.prepare(
+                "SELECT chunk_id, distance
+                 FROM chunks_vec
+                 WHERE embedding MATCH ?1
+                 ORDER BY distance
+                 LIMIT ?2",
+            )?;
+
+            let results = stmt
+                .query_map(params![embedding_bytes, limit as i64], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f32>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(results)
+        })
+    }
+
+    /// Get chunk records by IDs (useful after vector search)
+    pub fn get_chunks_by_ids(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
+        if chunk_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.with_conn(|conn| {
+            let placeholders: String = chunk_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let query = format!(
+                "SELECT id, file_id, content, start_line, end_line, start_byte, end_byte, symbols_json, embedding
+                 FROM chunks WHERE id IN ({})",
+                placeholders
+            );
+
+            let mut stmt = conn.prepare(&query)?;
+            let params: Vec<&dyn rusqlite::ToSql> = chunk_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+            let results = stmt
+                .query_map(params.as_slice(), |row| {
+                    let symbols_json: String = row.get(7)?;
+                    let symbols = parse_symbols_json(&symbols_json);
+                    let embedding_bytes: Option<Vec<u8>> = row.get(8)?;
+                    let embedding = embedding_bytes.map(|b| parse_embedding_bytes(&b));
+
+                    Ok(ChunkRecord {
+                        id: row.get(0)?,
+                        file_id: row.get(1)?,
+                        content: row.get(2)?,
+                        start_line: row.get(3)?,
+                        end_line: row.get(4)?,
+                        start_byte: row.get(5)?,
+                        end_byte: row.get(6)?,
+                        symbols,
+                        embedding,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(results)
         })
     }
 
@@ -549,31 +641,96 @@ impl IndexStore {
 
     pub fn get_dependents(&self, target_path: &str) -> Result<Vec<DependencyRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, source_file_id, target_path, import_name, kind
-                 FROM dependencies WHERE target_path LIKE ?1 ESCAPE '\\'",
-            )?;
+            // Extract the file basename without extension for flexible matching
+            // e.g., "components/sections/hero.tsx" -> "hero"
+            let path = std::path::Path::new(target_path);
+            let basename = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(target_path);
 
-            // Escape special LIKE characters to prevent injection
-            let escaped_path = target_path
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            let pattern = format!("%{}", escaped_path);
+            // Get filename with extension if present
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(target_path);
 
-            let results = stmt
-                .query_map([pattern], |row| {
-                    Ok(DependencyRecord {
-                        id: row.get(0)?,
-                        source_file_id: row.get(1)?,
-                        target_path: row.get(2)?,
-                        import_name: row.get(3)?,
-                        kind: row.get(4)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
+            // Also get the parent path components for more precise matching
+            // e.g., "components/sections/hero.tsx" -> "sections/hero"
+            let parent_and_name = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .map(|parent| format!("{}/{}", parent, basename));
 
-            Ok(results)
+            // Escape special LIKE characters
+            fn escape_like(s: &str) -> String {
+                s.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            }
+
+            // Build patterns to match various import styles:
+            // 1. Exact match with extension (e.g., "utils.rs", "hero.tsx")
+            // 2. Match without extension (e.g., "/hero", "./hero")
+            // 3. Match with parent dir (e.g., "sections/hero")
+            let mut patterns = vec![
+                format!("%{}", escape_like(filename)),          // ends with utils.rs or hero.tsx
+                format!("%/{}", escape_like(basename)),         // ends with /hero
+                format!("./{}", escape_like(basename)),         // ./hero
+                format!("../{}", escape_like(basename)),        // ../hero
+                format!("%{}", escape_like(basename)),          // anything ending with hero
+            ];
+
+            // Add parent/name pattern if available
+            if let Some(ref parent_name) = parent_and_name {
+                patterns.push(format!("%{}", escape_like(parent_name)));  // sections/hero
+            }
+
+            let mut all_results = Vec::new();
+            let mut seen_ids = std::collections::HashSet::new();
+
+            for pattern in patterns {
+                let mut stmt = conn.prepare(
+                    "SELECT id, source_file_id, target_path, import_name, kind
+                     FROM dependencies WHERE target_path LIKE ?1 ESCAPE '\\'",
+                )?;
+
+                let results = stmt
+                    .query_map([&pattern], |row| {
+                        Ok(DependencyRecord {
+                            id: row.get(0)?,
+                            source_file_id: row.get(1)?,
+                            target_path: row.get(2)?,
+                            import_name: row.get(3)?,
+                            kind: row.get(4)?,
+                        })
+                    })?
+                    .filter_map(|r| r.ok())
+                    .filter(|r| {
+                        // Additional validation: the import path should reasonably match
+                        let import = &r.target_path;
+                        let import_lower = import.to_lowercase();
+                        let basename_lower = basename.to_lowercase();
+                        // Check if import ends with the basename or filename
+                        import.ends_with(basename)
+                            || import.ends_with(filename)
+                            || import.ends_with(&format!("{}.ts", basename))
+                            || import.ends_with(&format!("{}.tsx", basename))
+                            || import.ends_with(&format!("{}.js", basename))
+                            || import.ends_with(&format!("{}.jsx", basename))
+                            || import.ends_with(&format!("{}.rs", basename))
+                            || import_lower.ends_with(&basename_lower)
+                    });
+
+                for record in results {
+                    if seen_ids.insert(record.id) {
+                        all_results.push(record);
+                    }
+                }
+            }
+
+            Ok(all_results)
         })
     }
 
@@ -972,12 +1129,81 @@ mod tests {
         let chunks = store.get_chunks_by_file(file_id).unwrap();
         let chunk_id = chunks[0].id;
 
-        let embedding: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
+        // Use 384 dimensions to match the vec0 table definition
+        let embedding: Vec<f32> = (0..384).map(|i| i as f32 * 0.001).collect();
         store.update_chunk_embedding(chunk_id, &embedding).unwrap();
 
         // After updating, should no longer appear in "without embeddings"
         let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
         assert!(without_embeddings.is_empty());
+    }
+
+    #[test]
+    fn test_vector_search() {
+        let store = IndexStore::open_in_memory().unwrap();
+
+        let file_id = store
+            .insert_file("src/main.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .unwrap();
+
+        // Insert multiple chunks with different embeddings
+        let chunks = vec![
+            CodeChunk {
+                content: "fn hello() {}".to_string(),
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 13,
+                symbols: vec!["hello".to_string()],
+            },
+            CodeChunk {
+                content: "fn world() {}".to_string(),
+                start_line: 2,
+                end_line: 2,
+                start_byte: 14,
+                end_byte: 27,
+                symbols: vec!["world".to_string()],
+            },
+            CodeChunk {
+                content: "fn foo() {}".to_string(),
+                start_line: 3,
+                end_line: 3,
+                start_byte: 28,
+                end_byte: 39,
+                symbols: vec!["foo".to_string()],
+            },
+        ];
+
+        store.insert_chunks(file_id, &chunks).unwrap();
+        let stored_chunks = store.get_chunks_by_file(file_id).unwrap();
+
+        // Create embeddings for each chunk (384 dimensions)
+        let embedding1: Vec<f32> = (0..384).map(|i| i as f32 * 0.001).collect();
+        let embedding2: Vec<f32> = (0..384).map(|i| i as f32 * 0.002).collect();
+        let embedding3: Vec<f32> = (0..384).map(|i| i as f32 * 0.003).collect();
+
+        store
+            .update_chunk_embedding(stored_chunks[0].id, &embedding1)
+            .unwrap();
+        store
+            .update_chunk_embedding(stored_chunks[1].id, &embedding2)
+            .unwrap();
+        store
+            .update_chunk_embedding(stored_chunks[2].id, &embedding3)
+            .unwrap();
+
+        // Search with a query similar to embedding1
+        let query: Vec<f32> = (0..384).map(|i| i as f32 * 0.0011).collect();
+        let results = store.search_similar_chunks(&query, 2).unwrap();
+
+        assert_eq!(results.len(), 2);
+        // The closest should be embedding1
+        assert_eq!(results[0].0, stored_chunks[0].id);
+
+        // Test get_chunks_by_ids
+        let chunk_ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        let found_chunks = store.get_chunks_by_ids(&chunk_ids).unwrap();
+        assert_eq!(found_chunks.len(), 2);
     }
 
     #[test]

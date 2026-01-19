@@ -17,3 +17,7 @@ thiserror.workspace = true
 tracing.workspace = true
 ignore.workspace = true
 glob.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+grep-matcher.workspace = true
+regex.workspace = true

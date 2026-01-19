@@ -1,7 +1,10 @@
 use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
+
+/// Embedding dimension (MiniLM-L6-v2 produces 384-dimensional vectors)
+pub const EMBEDDING_DIMENSION: usize = 384;
 
 pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
     conn.execute_batch(
@@ -100,6 +103,17 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
         END;
         "#,
     )?;
+
+    // Create sqlite-vec virtual table for vector similarity search
+    // This table stores chunk embeddings for semantic search
+    conn.execute_batch(&format!(
+        r#"
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+            chunk_id INTEGER PRIMARY KEY,
+            embedding float[{EMBEDDING_DIMENSION}]
+        );
+        "#
+    ))?;
 
     // Set schema version
     conn.execute(

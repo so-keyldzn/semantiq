@@ -163,6 +163,37 @@ impl ChunkExtractor {
                     | "interface_declaration"
                     | "trait_declaration"
             ),
+            Language::Ruby => matches!(kind, "method" | "singleton_method" | "class" | "module"),
+            Language::CSharp => matches!(
+                kind,
+                "method_declaration"
+                    | "class_declaration"
+                    | "struct_declaration"
+                    | "interface_declaration"
+            ),
+            Language::Kotlin => matches!(
+                kind,
+                "function_declaration"
+                    | "class_declaration"
+                    | "object_declaration"
+                    | "interface_declaration"
+            ),
+            Language::Scala => matches!(
+                kind,
+                "function_definition"
+                    | "class_definition"
+                    | "object_definition"
+                    | "trait_definition"
+            ),
+            Language::Html => matches!(kind, "element" | "script_element" | "style_element"),
+            Language::Json => matches!(kind, "object" | "array"),
+            Language::Yaml => matches!(kind, "block_mapping" | "block_sequence"),
+            Language::Toml => matches!(kind, "table" | "array"),
+            Language::Bash => matches!(kind, "function_definition" | "compound_statement"),
+            Language::Elixir => matches!(
+                kind,
+                "call" | "anonymous_function" | "do_block"
+            ),
         }
     }
 

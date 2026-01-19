@@ -70,6 +70,14 @@ impl ImportExtractor {
             Language::Java => Self::extract_java_import(node, source),
             Language::C | Language::Cpp => Self::extract_c_import(node, source),
             Language::Php => Self::extract_php_import(node, source),
+            Language::Ruby => Self::extract_ruby_import(node, source),
+            Language::CSharp => Self::extract_csharp_import(node, source),
+            Language::Kotlin => Self::extract_kotlin_import(node, source),
+            Language::Scala => Self::extract_scala_import(node, source),
+            // Markup/config languages don't have traditional imports
+            Language::Html | Language::Json | Language::Yaml | Language::Toml => None,
+            Language::Bash => Self::extract_bash_import(node, source),
+            Language::Elixir => Self::extract_elixir_import(node, source),
         }
     }
 
@@ -419,6 +427,238 @@ impl ImportExtractor {
         };
 
         Some(path.trim().to_string())
+    }
+
+    fn extract_ruby_import(node: &Node, source: &str) -> Option<Import> {
+        // Ruby uses require and require_relative
+        if node.kind() != "call" {
+            return None;
+        }
+
+        let text = &source[node.start_byte()..node.end_byte()];
+        if !text.starts_with("require") {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        // Find the string argument
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "argument_list" {
+                let mut inner_cursor = child.walk();
+                for arg in child.children(&mut inner_cursor) {
+                    if arg.kind() == "string" {
+                        let path_text = &source[arg.start_byte()..arg.end_byte()];
+                        let path = path_text
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .to_string();
+
+                        let kind = if text.starts_with("require_relative") {
+                            ImportKind::Local
+                        } else {
+                            ImportKind::External
+                        };
+
+                        let name = path.split('/').next_back().map(String::from);
+
+                        return Some(Import {
+                            path,
+                            name,
+                            kind,
+                            start_line,
+                            end_line,
+                        });
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_csharp_import(node: &Node, source: &str) -> Option<Import> {
+        if node.kind() != "using_directive" {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        // Find the qualified_name child
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "qualified_name" || child.kind() == "identifier" {
+                let path = source[child.start_byte()..child.end_byte()].to_string();
+
+                let kind = if path.starts_with("System") {
+                    ImportKind::Std
+                } else {
+                    ImportKind::External
+                };
+
+                let name = path.split('.').next_back().map(String::from);
+
+                return Some(Import {
+                    path,
+                    name,
+                    kind,
+                    start_line,
+                    end_line,
+                });
+            }
+        }
+
+        None
+    }
+
+    fn extract_kotlin_import(node: &Node, source: &str) -> Option<Import> {
+        if node.kind() != "import_header" {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        // Find the identifier child
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" {
+                let path = source[child.start_byte()..child.end_byte()].to_string();
+
+                let kind = if path.starts_with("kotlin.") || path.starts_with("java.") {
+                    ImportKind::Std
+                } else {
+                    ImportKind::External
+                };
+
+                let name = path.split('.').next_back().map(String::from);
+
+                return Some(Import {
+                    path,
+                    name,
+                    kind,
+                    start_line,
+                    end_line,
+                });
+            }
+        }
+
+        None
+    }
+
+    fn extract_scala_import(node: &Node, source: &str) -> Option<Import> {
+        if node.kind() != "import_declaration" {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        let text = &source[node.start_byte()..node.end_byte()];
+        let path = text
+            .strip_prefix("import ")
+            .unwrap_or(text)
+            .trim()
+            .to_string();
+
+        let kind = if path.starts_with("scala.") || path.starts_with("java.") {
+            ImportKind::Std
+        } else {
+            ImportKind::External
+        };
+
+        let name = path.split('.').next_back().map(String::from);
+
+        Some(Import {
+            path,
+            name,
+            kind,
+            start_line,
+            end_line,
+        })
+    }
+
+    fn extract_bash_import(node: &Node, source: &str) -> Option<Import> {
+        // Bash uses source or . for imports
+        if node.kind() != "command" {
+            return None;
+        }
+
+        let text = &source[node.start_byte()..node.end_byte()];
+        if !text.starts_with("source ") && !text.starts_with(". ") {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        let path = text
+            .strip_prefix("source ")
+            .or_else(|| text.strip_prefix(". "))
+            .unwrap_or(text)
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+
+        let name = path.split('/').next_back().map(String::from);
+
+        Some(Import {
+            path,
+            name,
+            kind: ImportKind::Local,
+            start_line,
+            end_line,
+        })
+    }
+
+    fn extract_elixir_import(node: &Node, source: &str) -> Option<Import> {
+        // Elixir uses import, alias, use, require
+        if node.kind() != "call" {
+            return None;
+        }
+
+        let text = &source[node.start_byte()..node.end_byte()];
+        let is_import = text.starts_with("import ")
+            || text.starts_with("alias ")
+            || text.starts_with("use ")
+            || text.starts_with("require ");
+
+        if !is_import {
+            return None;
+        }
+
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+
+        let path = text
+            .split_whitespace()
+            .nth(1)
+            .map(|s| s.trim_end_matches(','))
+            .unwrap_or("")
+            .to_string();
+
+        if path.is_empty() {
+            return None;
+        }
+
+        let kind = if path.starts_with("Elixir.") || path.starts_with(':') {
+            ImportKind::Std
+        } else {
+            ImportKind::External
+        };
+
+        let name = path.split('.').next_back().map(String::from);
+
+        Some(Import {
+            path,
+            name,
+            kind,
+            start_line,
+            end_line,
+        })
     }
 }
 

@@ -79,11 +79,40 @@ impl SemantiqServer {
     }
 
     /// Start the auto-indexing background task
+    /// Performs initial indexing first, then watches for changes
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
 
             tokio::spawn(async move {
+                // Perform initial indexing in a blocking task
+                let indexer_clone = Arc::clone(&indexer);
+                let initial_result = tokio::task::spawn_blocking(move || {
+                    let indexer = indexer_clone.blocking_lock();
+                    indexer.initial_index()
+                })
+                .await;
+
+                match initial_result {
+                    Ok(Ok(result)) => {
+                        if result.indexed > 0 {
+                            info!(
+                                "Initial indexing complete: {} files indexed, {} skipped",
+                                result.indexed, result.skipped
+                            );
+                        } else if result.scanned > 0 {
+                            info!("Index up to date: {} files checked", result.scanned);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Initial indexing failed: {}", e);
+                    }
+                    Err(e) => {
+                        tracing::error!("Initial indexing task panicked: {}", e);
+                    }
+                }
+
+                // Then start watching for changes
                 let mut interval = tokio::time::interval(Duration::from_secs(2));
 
                 loop {
