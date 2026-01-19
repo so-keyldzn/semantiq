@@ -2,6 +2,17 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.3.2] - 2026-01-19
+
+### Added
+- **`.gitignore` support in `init-cursor`** - automatically adds Semantiq database entries
+  - Creates `.gitignore` if not present
+  - Updates existing `.gitignore` preserving original content
+  - Skips if entries already present (no duplication)
+
+### Added (Tests)
+- 3 new tests for `.gitignore` handling in `init_cursor.rs`
+
 ## [0.3.1] - 2026-01-19
 
 ### Added
