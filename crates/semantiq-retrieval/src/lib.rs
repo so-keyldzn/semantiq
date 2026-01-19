@@ -4,6 +4,6 @@ pub mod results;
 pub mod text_searcher;
 
 pub use engine::RetrievalEngine;
-pub use query::{Query, QueryExpander};
+pub use query::{Query, QueryExpander, SearchOptions};
 pub use results::{SearchResult, SearchResultKind};
 pub use text_searcher::TextSearcher;

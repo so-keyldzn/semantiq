@@ -182,6 +182,95 @@ impl Default for QueryExpander {
     }
 }
 
+/// Options for filtering and configuring search behavior
+#[derive(Debug, Clone, Default)]
+pub struct SearchOptions {
+    /// Minimum score threshold (0.0-1.0). Results below this score are excluded.
+    pub min_score: Option<f32>,
+    /// File extensions to include (e.g., ["rs", "ts"]). If set, only these extensions are searched.
+    pub file_types: Option<Vec<String>>,
+    /// Symbol kinds to include (e.g., ["function", "class"]). If set, only these symbol types are returned.
+    pub symbol_kinds: Option<Vec<String>>,
+}
+
+impl SearchOptions {
+    /// Default minimum score threshold
+    pub const DEFAULT_MIN_SCORE: f32 = 0.35;
+
+    /// Extensions excluded by default when no file_types filter is set
+    pub const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[
+        "json", "lock", "yaml", "yml", "md", "txt", "toml", "xml", "csv", "log", "env",
+        "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc",
+    ];
+
+    /// Valid symbol kinds for filtering
+    pub const VALID_SYMBOL_KINDS: &'static [&'static str] = &[
+        "function", "method", "class", "struct", "enum", "interface", "trait", "module",
+        "variable", "constant", "type",
+    ];
+
+    /// Create new SearchOptions with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create SearchOptions with a minimum score
+    pub fn with_min_score(mut self, min_score: f32) -> Self {
+        self.min_score = Some(min_score.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Create SearchOptions with file type filter
+    pub fn with_file_types(mut self, file_types: Vec<String>) -> Self {
+        self.file_types = Some(file_types);
+        self
+    }
+
+    /// Create SearchOptions with symbol kind filter
+    pub fn with_symbol_kinds(mut self, symbol_kinds: Vec<String>) -> Self {
+        self.symbol_kinds = Some(symbol_kinds);
+        self
+    }
+
+    /// Get the effective minimum score (uses default if not set)
+    pub fn effective_min_score(&self) -> f32 {
+        self.min_score.unwrap_or(Self::DEFAULT_MIN_SCORE)
+    }
+
+    /// Check if a file extension is accepted by these options
+    pub fn accepts_extension(&self, ext: &str) -> bool {
+        let ext_lower = ext.to_lowercase();
+
+        if let Some(ref file_types) = self.file_types {
+            // If file_types is set, only accept those extensions
+            file_types.iter().any(|ft| ft.to_lowercase() == ext_lower)
+        } else {
+            // Otherwise, exclude the default excluded extensions
+            !Self::EXCLUDED_EXTENSIONS.contains(&ext_lower.as_str())
+        }
+    }
+
+    /// Check if a symbol kind is accepted by these options
+    pub fn accepts_symbol_kind(&self, kind: &str) -> bool {
+        if let Some(ref symbol_kinds) = self.symbol_kinds {
+            let kind_lower = kind.to_lowercase();
+            symbol_kinds.iter().any(|sk| sk.to_lowercase() == kind_lower)
+        } else {
+            // Accept all symbol kinds if no filter is set
+            true
+        }
+    }
+
+    /// Parse a comma-separated string into a vector of trimmed strings
+    pub fn parse_csv(input: &str) -> Vec<String> {
+        input
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +441,120 @@ mod tests {
         let expander = QueryExpander::default();
         // Should work the same as new()
         assert_eq!(expander.snake_to_camel("test_case"), "testCase");
+    }
+
+    // SearchOptions tests
+
+    #[test]
+    fn test_search_options_default() {
+        let options = SearchOptions::default();
+        assert!(options.min_score.is_none());
+        assert!(options.file_types.is_none());
+        assert!(options.symbol_kinds.is_none());
+    }
+
+    #[test]
+    fn test_search_options_default_min_score() {
+        let options = SearchOptions::default();
+        assert!((options.effective_min_score() - SearchOptions::DEFAULT_MIN_SCORE).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_search_options_with_min_score() {
+        let options = SearchOptions::new().with_min_score(0.5);
+        assert!((options.effective_min_score() - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_search_options_min_score_clamped() {
+        let options_high = SearchOptions::new().with_min_score(1.5);
+        assert!((options_high.effective_min_score() - 1.0).abs() < 0.001);
+
+        let options_low = SearchOptions::new().with_min_score(-0.5);
+        assert!((options_low.effective_min_score() - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_accepts_extension_default_excludes_json() {
+        let options = SearchOptions::default();
+        assert!(!options.accepts_extension("json"));
+        assert!(!options.accepts_extension("JSON"));
+        assert!(!options.accepts_extension("lock"));
+        assert!(!options.accepts_extension("yaml"));
+        assert!(!options.accepts_extension("yml"));
+        assert!(!options.accepts_extension("md"));
+        assert!(!options.accepts_extension("toml"));
+    }
+
+    #[test]
+    fn test_accepts_extension_default_includes_code() {
+        let options = SearchOptions::default();
+        assert!(options.accepts_extension("rs"));
+        assert!(options.accepts_extension("ts"));
+        assert!(options.accepts_extension("py"));
+        assert!(options.accepts_extension("go"));
+        assert!(options.accepts_extension("js"));
+    }
+
+    #[test]
+    fn test_accepts_extension_custom_filter() {
+        let options = SearchOptions::new().with_file_types(vec!["rs".to_string(), "ts".to_string()]);
+        assert!(options.accepts_extension("rs"));
+        assert!(options.accepts_extension("RS"));
+        assert!(options.accepts_extension("ts"));
+        assert!(!options.accepts_extension("py"));
+        assert!(!options.accepts_extension("js"));
+        // When custom filter is set, excluded extensions are allowed if in filter
+        // but json is not in our filter, so still excluded
+        assert!(!options.accepts_extension("json"));
+    }
+
+    #[test]
+    fn test_accepts_symbol_kind_default() {
+        let options = SearchOptions::default();
+        assert!(options.accepts_symbol_kind("function"));
+        assert!(options.accepts_symbol_kind("class"));
+        assert!(options.accepts_symbol_kind("method"));
+        assert!(options.accepts_symbol_kind("anything")); // accepts all when no filter
+    }
+
+    #[test]
+    fn test_accepts_symbol_kind_with_filter() {
+        let options =
+            SearchOptions::new().with_symbol_kinds(vec!["function".to_string(), "class".to_string()]);
+        assert!(options.accepts_symbol_kind("function"));
+        assert!(options.accepts_symbol_kind("FUNCTION")); // case insensitive
+        assert!(options.accepts_symbol_kind("class"));
+        assert!(!options.accepts_symbol_kind("method"));
+        assert!(!options.accepts_symbol_kind("variable"));
+    }
+
+    #[test]
+    fn test_parse_csv() {
+        let result = SearchOptions::parse_csv("rs, ts, py");
+        assert_eq!(result, vec!["rs", "ts", "py"]);
+
+        let result_with_spaces = SearchOptions::parse_csv("  function ,  class  ");
+        assert_eq!(result_with_spaces, vec!["function", "class"]);
+
+        let result_empty = SearchOptions::parse_csv("");
+        assert!(result_empty.is_empty());
+
+        let result_single = SearchOptions::parse_csv("rs");
+        assert_eq!(result_single, vec!["rs"]);
+    }
+
+    #[test]
+    fn test_search_options_builder_chain() {
+        let options = SearchOptions::new()
+            .with_min_score(0.6)
+            .with_file_types(vec!["rs".to_string()])
+            .with_symbol_kinds(vec!["function".to_string()]);
+
+        assert!((options.effective_min_score() - 0.6).abs() < 0.001);
+        assert!(options.accepts_extension("rs"));
+        assert!(!options.accepts_extension("ts"));
+        assert!(options.accepts_symbol_kind("function"));
+        assert!(!options.accepts_symbol_kind("class"));
     }
 }
