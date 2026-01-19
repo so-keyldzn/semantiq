@@ -2,6 +2,17 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.2.9] - 2026-01-19
+
+### Fixed
+- Arrow functions (`const fn = () => {}`) now correctly indexed as `function` instead of `variable`
+- Function expressions (`const fn = function() {}`) now correctly indexed as `function`
+
+### Changed
+- Added `is_function_variable()` helper to detect functions assigned to variables
+- Added `arrow_function` and `lexical_declaration` to chunk boundaries for TypeScript/JavaScript
+- Bumped `PARSER_VERSION` to 3 (triggers automatic reindex)
+
 ## [0.2.8] - 2026-01-18
 
 ### Security
