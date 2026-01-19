@@ -2,6 +2,23 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.2.8] - 2026-01-18
+
+### Security
+- **CRITICAL**: Added SHA-256 checksum verification for ONNX model downloads (TOFU + hardcoded support)
+- **CRITICAL**: Added path traversal protection with canonicalization in `validate_path()`
+- **HIGH**: Added `MAX_AST_DEPTH=500` recursion limit in parser to prevent stack overflow attacks
+- **HIGH**: Added `safe_slice()` function to prevent panic on invalid byte indices
+- **HIGH**: Changed model directory fallback from "." to system temp dir (prevents writes to unexpected locations)
+- **HIGH**: Added pagination for `get_chunks_with_embeddings()` to prevent memory exhaustion DoS
+- **HIGH**: Reduced download size limit from 500MB to 100MB
+- **HIGH**: Added restrictive file permissions (0600 on Unix) for downloaded models and database
+- **MEDIUM**: Added explicit symlink handling (`follow_links(false)`) to prevent escape from project root
+
+### Changed
+- Refactored `download_file()` with connection timeouts (30s connect, 5min global)
+- Improved checksum verification with detailed warning messages
+
 ## [0.2.7] - 2026-01-18
 
 ### Added
