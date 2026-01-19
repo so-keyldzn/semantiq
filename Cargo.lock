@@ -1789,6 +1789,7 @@ dependencies = [
  "semantiq-retrieval",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

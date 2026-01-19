@@ -26,7 +26,7 @@ enum Commands {
         path: PathBuf,
     },
 
-    /// Initialize Cursor/VS Code configuration for a Rust project
+    /// Initialize Cursor/VS Code configuration for a project
     InitCursor {
         /// Path to the project (default: current directory)
         #[arg(default_value = ".")]
