@@ -97,8 +97,17 @@ impl SymbolExtractor {
         language: Language,
         parent: Option<&str>,
     ) -> Option<Symbol> {
-        let kind = Self::get_symbol_kind(node.kind(), language)?;
+        let mut kind = Self::get_symbol_kind(node.kind(), language)?;
         let name = Self::extract_name(node, source, language)?;
+
+        // Détecter si une variable contient une arrow_function ou function_expression
+        if matches!(kind, SymbolKind::Variable)
+            && matches!(language, Language::TypeScript | Language::JavaScript)
+        {
+            if Self::is_function_variable(node) {
+                kind = SymbolKind::Function;
+            }
+        }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
@@ -223,6 +232,22 @@ impl SymbolExtractor {
             "namespace_use_declaration" => Some(SymbolKind::Import),
             _ => None,
         }
+    }
+
+    /// Vérifie si un lexical_declaration/variable_declaration contient une arrow_function
+    /// ou function_expression comme valeur (pour TypeScript/JavaScript)
+    fn is_function_variable(node: &Node) -> bool {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                if let Some(value) = child.child_by_field_name("value") {
+                    if matches!(value.kind(), "arrow_function" | "function_expression") {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn extract_name(node: &Node, source: &str, language: Language) -> Option<String> {
@@ -647,5 +672,63 @@ impl Calculator {
         // The impl block should be detected, and functions inside should have parent
         let add_func = symbols.iter().find(|s| s.name == "add");
         assert!(add_func.is_some());
+    }
+
+    #[test]
+    fn test_extract_typescript_arrow_functions() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+export const ToolsShowcase = () => {
+    return "Tools";
+};
+
+const CopyButton = (props: Props) => {
+    return "Copy";
+};
+
+// Doit rester Variable (pas de fonction)
+const config = { debug: true };
+"#;
+        let tree = support.parse(Language::TypeScript, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::TypeScript).unwrap();
+
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "ToolsShowcase" && s.kind == SymbolKind::Function),
+            "ToolsShowcase should be extracted as Function, found: {:?}",
+            symbols
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "CopyButton" && s.kind == SymbolKind::Function),
+            "CopyButton should be extracted as Function"
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "config" && s.kind == SymbolKind::Variable),
+            "config should remain as Variable"
+        );
+    }
+
+    #[test]
+    fn test_extract_function_expression() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+const greet = function(name: string): string {
+    return `Hello, ${name}!`;
+};
+"#;
+        let tree = support.parse(Language::TypeScript, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::TypeScript).unwrap();
+
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function),
+            "greet should be extracted as Function (function expression)"
+        );
     }
 }

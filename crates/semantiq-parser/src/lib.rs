@@ -5,7 +5,7 @@ pub mod symbols;
 
 /// Version du parser. Incrémenter force une réindexation complète.
 /// Incrémenter quand : ajout/modif de types de noeuds, changement logique d'extraction
-pub const PARSER_VERSION: u32 = 2; // Start at 2 to force reindex for existing DBs
+pub const PARSER_VERSION: u32 = 3; // Arrow functions classifiées comme fonctions
 
 pub use chunks::{ChunkExtractor, CodeChunk};
 pub use imports::{Import, ImportExtractor, ImportKind};
