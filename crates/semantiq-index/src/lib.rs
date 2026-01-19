@@ -4,7 +4,7 @@ pub mod schema;
 pub mod store;
 pub mod watcher;
 
-pub use auto_indexer::AutoIndexer;
+pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult};
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_FILE_SIZE, should_exclude, should_exclude_entry, should_exclude_path,
 };

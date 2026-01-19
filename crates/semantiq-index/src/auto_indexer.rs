@@ -1,7 +1,8 @@
 use crate::IndexStore;
-use crate::exclusions::should_exclude;
+use crate::exclusions::{should_exclude, should_exclude_entry};
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::Result;
+use ignore::WalkBuilder;
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor,
@@ -46,6 +47,95 @@ impl AutoIndexer {
             chunk_extractor,
             embedding_model,
         })
+    }
+
+    /// Perform initial indexing of all files in the project
+    /// Only indexes files that are new or have changed since last index
+    pub fn initial_index(&self) -> Result<InitialIndexResult> {
+        info!("Starting initial index of {:?}", self.project_root);
+
+        let mut result = InitialIndexResult::default();
+
+        // Use ignore crate to walk directory respecting .gitignore
+        let walker = WalkBuilder::new(&self.project_root)
+            .hidden(true) // Skip hidden files by default
+            .git_ignore(true) // Respect .gitignore
+            .git_global(true) // Respect global gitignore
+            .git_exclude(true) // Respect .git/info/exclude
+            .filter_entry(|entry| {
+                // Skip excluded directories
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    let name = entry.file_name().to_string_lossy();
+                    return !should_exclude_entry(&name);
+                }
+                true
+            })
+            .build();
+
+        for entry in walker.flatten() {
+            // Skip directories
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
+                continue;
+            }
+
+            let path = entry.path();
+            result.scanned += 1;
+
+            // Skip if not a supported language
+            if Language::from_path(path).is_none() {
+                continue;
+            }
+
+            // Get relative path
+            let rel_path = path
+                .strip_prefix(&self.project_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+
+            // Read file content to check if needs reindex
+            let content = match fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("Skipping {}: {}", rel_path, e);
+                    continue;
+                }
+            };
+
+            // Check if file needs to be reindexed
+            match self.store.needs_reindex(&rel_path, &content) {
+                Ok(true) => {
+                    // File is new or changed, index it
+                    if let Err(e) = self.index_file(path) {
+                        error!("Failed to index {}: {}", rel_path, e);
+                        result.errors += 1;
+                    } else {
+                        result.indexed += 1;
+                    }
+                }
+                Ok(false) => {
+                    // File already indexed and unchanged
+                    result.skipped += 1;
+                }
+                Err(e) => {
+                    debug!("Error checking reindex for {}: {}", rel_path, e);
+                    // Try to index anyway
+                    if let Err(e) = self.index_file(path) {
+                        error!("Failed to index {}: {}", rel_path, e);
+                        result.errors += 1;
+                    } else {
+                        result.indexed += 1;
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Initial index complete: {} scanned, {} indexed, {} skipped, {} errors",
+            result.scanned, result.indexed, result.skipped, result.errors
+        );
+
+        Ok(result)
     }
 
     /// Process pending file events and reindex changed files
@@ -225,5 +315,13 @@ impl AutoIndexer {
 pub struct ProcessResult {
     pub indexed: usize,
     pub removed: usize,
+    pub errors: usize,
+}
+
+#[derive(Default, Debug)]
+pub struct InitialIndexResult {
+    pub scanned: usize,
+    pub indexed: usize,
+    pub skipped: usize,
     pub errors: usize,
 }

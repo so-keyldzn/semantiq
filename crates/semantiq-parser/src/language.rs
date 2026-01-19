@@ -14,6 +14,16 @@ pub enum Language {
     C,
     Cpp,
     Php,
+    Ruby,
+    CSharp,
+    Kotlin,
+    Scala,
+    Html,
+    Json,
+    Yaml,
+    Toml,
+    Bash,
+    Elixir,
 }
 
 impl Language {
@@ -28,6 +38,16 @@ impl Language {
             "c" | "h" => Some(Language::C),
             "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Some(Language::Cpp),
             "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => Some(Language::Php),
+            "rb" | "rake" | "gemspec" => Some(Language::Ruby),
+            "cs" => Some(Language::CSharp),
+            "kt" | "kts" => Some(Language::Kotlin),
+            "scala" | "sc" => Some(Language::Scala),
+            "html" | "htm" => Some(Language::Html),
+            "json" => Some(Language::Json),
+            "yaml" | "yml" => Some(Language::Yaml),
+            "toml" => Some(Language::Toml),
+            "sh" | "bash" | "zsh" => Some(Language::Bash),
+            "ex" | "exs" => Some(Language::Elixir),
             _ => None,
         }
     }
@@ -49,6 +69,16 @@ impl Language {
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::Php => "php",
+            Language::Ruby => "ruby",
+            Language::CSharp => "csharp",
+            Language::Kotlin => "kotlin",
+            Language::Scala => "scala",
+            Language::Html => "html",
+            Language::Json => "json",
+            Language::Yaml => "yaml",
+            Language::Toml => "toml",
+            Language::Bash => "bash",
+            Language::Elixir => "elixir",
         }
     }
 
@@ -63,6 +93,16 @@ impl Language {
             Language::C => &["c", "h"],
             Language::Cpp => &["cpp", "cc", "cxx", "hpp", "hxx", "hh"],
             Language::Php => &["php", "phtml", "php3", "php4", "php5", "php7", "phps"],
+            Language::Ruby => &["rb", "rake", "gemspec"],
+            Language::CSharp => &["cs"],
+            Language::Kotlin => &["kt", "kts"],
+            Language::Scala => &["scala", "sc"],
+            Language::Html => &["html", "htm"],
+            Language::Json => &["json"],
+            Language::Yaml => &["yaml", "yml"],
+            Language::Toml => &["toml"],
+            Language::Bash => &["sh", "bash", "zsh"],
+            Language::Elixir => &["ex", "exs"],
         }
     }
 }
@@ -113,6 +153,56 @@ impl LanguageSupport {
             Language::Php,
             tree_sitter_php::LANGUAGE_PHP.into(),
         )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Ruby,
+            tree_sitter_ruby::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::CSharp,
+            tree_sitter_c_sharp::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Kotlin,
+            tree_sitter_kotlin_ng::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Scala,
+            tree_sitter_scala::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Html,
+            tree_sitter_html::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Json,
+            tree_sitter_json::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Yaml,
+            tree_sitter_yaml::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Toml,
+            tree_sitter_toml_ng::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Bash,
+            tree_sitter_bash::LANGUAGE.into(),
+        )?;
+        Self::add_parser(
+            &mut parsers,
+            Language::Elixir,
+            tree_sitter_elixir::LANGUAGE.into(),
+        )?;
 
         Ok(Self { parsers })
     }
@@ -152,6 +242,16 @@ impl LanguageSupport {
             Language::C,
             Language::Cpp,
             Language::Php,
+            Language::Ruby,
+            Language::CSharp,
+            Language::Kotlin,
+            Language::Scala,
+            Language::Html,
+            Language::Json,
+            Language::Yaml,
+            Language::Toml,
+            Language::Bash,
+            Language::Elixir,
         ]
     }
 }
@@ -357,7 +457,7 @@ mod tests {
     #[test]
     fn test_supported_languages() {
         let languages = LanguageSupport::supported_languages();
-        assert_eq!(languages.len(), 9);
+        assert_eq!(languages.len(), 19);
         assert!(languages.contains(&Language::Rust));
         assert!(languages.contains(&Language::TypeScript));
         assert!(languages.contains(&Language::JavaScript));
@@ -367,6 +467,16 @@ mod tests {
         assert!(languages.contains(&Language::C));
         assert!(languages.contains(&Language::Cpp));
         assert!(languages.contains(&Language::Php));
+        assert!(languages.contains(&Language::Ruby));
+        assert!(languages.contains(&Language::CSharp));
+        assert!(languages.contains(&Language::Kotlin));
+        assert!(languages.contains(&Language::Scala));
+        assert!(languages.contains(&Language::Html));
+        assert!(languages.contains(&Language::Json));
+        assert!(languages.contains(&Language::Yaml));
+        assert!(languages.contains(&Language::Toml));
+        assert!(languages.contains(&Language::Bash));
+        assert!(languages.contains(&Language::Elixir));
     }
 
     #[test]

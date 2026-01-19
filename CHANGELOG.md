@@ -2,6 +2,26 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.3.0] - 2026-01-19
+
+### Added
+- **sqlite-vec integration** for vector similarity search (384-dim MiniLM-L6-v2 embeddings)
+- **Automatic initial indexing** when MCP server starts (no more manual `semantiq index` required)
+- **6 new languages**: HTML, JSON, YAML, TOML, Bash, Elixir (total: 15 languages)
+- **ripgrep integration** for fast regex text search via `TextSearcher`
+- New `search_similar_chunks()` method for semantic vector search
+- New `InitialIndexResult` struct for tracking initial indexing progress
+
+### Fixed
+- **"Imported by" always empty** in `semantiq_deps` - rewrote `get_dependents()` to match JS/TS import paths (`@/...`, `./...`, `../...`)
+- Import path resolution now handles basename matching with multiple extensions
+
+### Changed
+- Schema version bumped to 2 (triggers automatic reindex)
+- Added `chunks_vec` virtual table for sqlite-vec embeddings
+- `start_auto_indexer()` now runs `initial_index()` before watching for changes
+- Improved dependency matching with multiple LIKE patterns and post-filtering
+
 ## [0.2.9] - 2026-01-19
 
 ### Fixed

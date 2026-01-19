@@ -1,5 +1,6 @@
 use crate::query::Query;
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
+use crate::text_searcher::TextSearcher;
 use anyhow::Result;
 use ignore::WalkBuilder;
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
@@ -420,50 +421,29 @@ impl RetrievalEngine {
     }
 
     fn find_text_matches(&self, content: &str, query: &Query) -> Vec<(usize, String, f32)> {
-        let mut matches = Vec::new();
+        let searcher = TextSearcher::new(true); // Case insensitive
         let terms = query.all_terms();
+        let mut matches = Vec::new();
+        let mut seen_lines = std::collections::HashSet::new();
 
-        for (line_num, line) in content.lines().enumerate() {
-            let line_lower = line.to_lowercase();
-            let line_trimmed = line.trim();
-
-            // Skip empty lines and comments
-            if line_trimmed.is_empty()
-                || line_trimmed.starts_with("//")
-                || line_trimmed.starts_with('#')
-            {
-                continue;
-            }
-
-            for term in &terms {
-                let term_lower = term.to_lowercase();
-                if let Some(pos) = line_lower.find(&term_lower) {
-                    // Improved scoring based on match quality
-                    let mut score = if line_lower.trim() == term_lower {
-                        0.9 // Exact line match (but lower than symbol matches)
-                    } else if pos == 0
-                        || !line_lower
-                            .chars()
-                            .nth(pos.saturating_sub(1))
-                            .map(|c| c.is_alphanumeric())
-                            .unwrap_or(false)
-                    {
-                        // Word boundary match (higher score)
-                        0.7
-                    } else {
-                        // Substring match
-                        0.5
-                    };
-
-                    // Boost if match is near the beginning of the line
-                    let position_factor = 1.0 - (pos as f32 / (line.len() as f32 + 10.0)) * 0.2;
-                    score *= position_factor;
-
-                    matches.push((line_num + 1, line_trimmed.to_string(), score));
-                    break;
+        for term in &terms {
+            // Use ripgrep-based search
+            if let Ok(results) = searcher.search(content, term) {
+                for result in results {
+                    // Avoid duplicate lines
+                    if seen_lines.insert(result.line_number) {
+                        matches.push((
+                            result.line_number,
+                            result.line_content,
+                            result.score,
+                        ));
+                    }
                 }
             }
         }
+
+        // Sort by score descending
+        matches.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
         matches
     }

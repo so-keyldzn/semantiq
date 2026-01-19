@@ -139,6 +139,16 @@ impl SymbolExtractor {
             Language::Java => Self::java_symbol_kind(node_kind),
             Language::C | Language::Cpp => Self::c_symbol_kind(node_kind),
             Language::Php => Self::php_symbol_kind(node_kind),
+            Language::Ruby => Self::ruby_symbol_kind(node_kind),
+            Language::CSharp => Self::csharp_symbol_kind(node_kind),
+            Language::Kotlin => Self::kotlin_symbol_kind(node_kind),
+            Language::Scala => Self::scala_symbol_kind(node_kind),
+            Language::Html => Self::html_symbol_kind(node_kind),
+            Language::Json => Self::json_symbol_kind(node_kind),
+            Language::Yaml => Self::yaml_symbol_kind(node_kind),
+            Language::Toml => Self::toml_symbol_kind(node_kind),
+            Language::Bash => Self::bash_symbol_kind(node_kind),
+            Language::Elixir => Self::elixir_symbol_kind(node_kind),
         }
     }
 
@@ -234,6 +244,113 @@ impl SymbolExtractor {
         }
     }
 
+    fn ruby_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "method" => Some(SymbolKind::Function),
+            "singleton_method" => Some(SymbolKind::Function),
+            "class" => Some(SymbolKind::Class),
+            "module" => Some(SymbolKind::Module),
+            "constant" => Some(SymbolKind::Constant),
+            _ => None,
+        }
+    }
+
+    fn csharp_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "method_declaration" => Some(SymbolKind::Method),
+            "local_function_statement" => Some(SymbolKind::Function),
+            "class_declaration" => Some(SymbolKind::Class),
+            "struct_declaration" => Some(SymbolKind::Struct),
+            "interface_declaration" => Some(SymbolKind::Interface),
+            "enum_declaration" => Some(SymbolKind::Enum),
+            "namespace_declaration" => Some(SymbolKind::Module),
+            "field_declaration" => Some(SymbolKind::Variable),
+            "property_declaration" => Some(SymbolKind::Variable),
+            "using_directive" => Some(SymbolKind::Import),
+            _ => None,
+        }
+    }
+
+    fn kotlin_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function_declaration" => Some(SymbolKind::Function),
+            "class_declaration" => Some(SymbolKind::Class),
+            "object_declaration" => Some(SymbolKind::Class),
+            "interface_declaration" => Some(SymbolKind::Interface),
+            "enum_class_body" => Some(SymbolKind::Enum),
+            "property_declaration" => Some(SymbolKind::Variable),
+            "import_header" => Some(SymbolKind::Import),
+            _ => None,
+        }
+    }
+
+    fn scala_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function_definition" => Some(SymbolKind::Function),
+            "class_definition" => Some(SymbolKind::Class),
+            "object_definition" => Some(SymbolKind::Class),
+            "trait_definition" => Some(SymbolKind::Trait),
+            "enum_definition" => Some(SymbolKind::Enum),
+            "type_definition" => Some(SymbolKind::Type),
+            "val_definition" | "var_definition" => Some(SymbolKind::Variable),
+            "import_declaration" => Some(SymbolKind::Import),
+            _ => None,
+        }
+    }
+
+    fn html_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "element" => Some(SymbolKind::Variable),
+            "script_element" => Some(SymbolKind::Module),
+            "style_element" => Some(SymbolKind::Module),
+            _ => None,
+        }
+    }
+
+    fn json_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "pair" => Some(SymbolKind::Variable),
+            "object" => Some(SymbolKind::Struct),
+            "array" => Some(SymbolKind::Variable),
+            _ => None,
+        }
+    }
+
+    fn yaml_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "block_mapping_pair" => Some(SymbolKind::Variable),
+            "block_mapping" => Some(SymbolKind::Struct),
+            "block_sequence" => Some(SymbolKind::Variable),
+            _ => None,
+        }
+    }
+
+    fn toml_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "pair" => Some(SymbolKind::Variable),
+            "table" => Some(SymbolKind::Struct),
+            "array" => Some(SymbolKind::Variable),
+            _ => None,
+        }
+    }
+
+    fn bash_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function_definition" => Some(SymbolKind::Function),
+            "variable_assignment" => Some(SymbolKind::Variable),
+            _ => None,
+        }
+    }
+
+    fn elixir_symbol_kind(node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "call" => Some(SymbolKind::Function), // def, defp, defmodule
+            "anonymous_function" => Some(SymbolKind::Function),
+            "do_block" => Some(SymbolKind::Module),
+            _ => None,
+        }
+    }
+
     /// Vérifie si un lexical_declaration/variable_declaration contient une arrow_function
     /// ou function_expression comme valeur (pour TypeScript/JavaScript)
     fn is_function_variable(node: &Node) -> bool {
@@ -260,6 +377,16 @@ impl SymbolExtractor {
             Language::Java => "name",
             Language::C | Language::Cpp => "declarator",
             Language::Php => "name",
+            Language::Ruby => "name",
+            Language::CSharp => "name",
+            Language::Kotlin => "name",
+            Language::Scala => "name",
+            Language::Html => "tag_name",
+            Language::Json => "key",
+            Language::Yaml => "key",
+            Language::Toml => "key",
+            Language::Bash => "name",
+            Language::Elixir => "name",
         };
 
         let source_bytes = source.as_bytes();
