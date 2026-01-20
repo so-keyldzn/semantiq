@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1797,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-embeddings"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-index"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "ignore",
@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-mcp"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-parser"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "serde",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-retrieval"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "glob",
