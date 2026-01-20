@@ -2,6 +2,17 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.3.4] - 2026-01-20
+
+### Added
+- **macOS Intel (x86_64-apple-darwin) support restored** - Binary now available for Intel Macs
+- **CI build workflow** - New `build.yml` for testing builds on push/PR without publishing
+
+### Changed
+- **ONNX feature now optional** - `--features onnx` required on supported platforms (Apple Silicon, Linux, Windows)
+- Intel Mac builds use `StubEmbeddingModel` (no ONNX) due to missing prebuilt binaries
+- Updated CI to use `macos-15` runner for Intel Mac cross-compilation
+
 ## [0.3.3] - 2026-01-19
 
 ### Added
