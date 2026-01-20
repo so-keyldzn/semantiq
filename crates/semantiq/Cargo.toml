@@ -15,6 +15,10 @@ readme.workspace = true
 name = "semantiq"
 path = "src/main.rs"
 
+[features]
+default = []
+onnx = ["semantiq-embeddings/onnx"]
+
 [dependencies]
 semantiq-mcp = { path = "../semantiq-mcp" }
 semantiq-index = { path = "../semantiq-index" }
