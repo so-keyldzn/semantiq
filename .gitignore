@@ -27,3 +27,4 @@ models/
 
 # Documentation (private)
 docs/
+.claude/settings.json
