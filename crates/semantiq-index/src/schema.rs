@@ -175,20 +175,19 @@ pub struct DependencyRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IndexStore;
 
     #[test]
     fn test_init_schema() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
+        // Use IndexStore::open_in_memory() which properly initializes sqlite-vec
+        // before creating the database connection.
+        let store = IndexStore::open_in_memory().unwrap();
 
-        // Verify tables exist
-        let count: i32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='files'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
+        // Verify tables exist by getting stats (which queries the tables)
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 0);
+        assert_eq!(stats.symbol_count, 0);
+        assert_eq!(stats.chunk_count, 0);
+        assert_eq!(stats.dependency_count, 0);
     }
 }

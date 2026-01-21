@@ -21,3 +21,6 @@ tracing.workspace = true
 # Version check
 ureq = "3"
 dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3"
