@@ -1,12 +1,12 @@
 use crate::schema::{ChunkRecord, DependencyRecord, FileRecord, SymbolRecord, init_schema};
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, ffi::sqlite3_auto_extension, params};
-use sqlite_vec::sqlite3_vec_init;
-use std::sync::Once;
 use semantiq_parser::{CodeChunk, PARSER_VERSION, Symbol};
+use sqlite_vec::sqlite3_vec_init;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -463,9 +463,16 @@ impl IndexStore {
 
     /// Search for similar chunks using vector similarity (sqlite-vec)
     /// Returns chunk IDs with their distances, ordered by similarity (closest first)
-    pub fn search_similar_chunks(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    pub fn search_similar_chunks(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         self.with_conn(|conn| {
-            let embedding_bytes: Vec<u8> = query_embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let embedding_bytes: Vec<u8> = query_embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
 
             let mut stmt = conn.prepare(
                 "SELECT chunk_id, distance
@@ -720,16 +727,16 @@ impl IndexStore {
             // 2. Match without extension (e.g., "/hero", "./hero")
             // 3. Match with parent dir (e.g., "sections/hero")
             let mut patterns = vec![
-                format!("%{}", escape_like(filename)),          // ends with utils.rs or hero.tsx
-                format!("%/{}", escape_like(basename)),         // ends with /hero
-                format!("./{}", escape_like(basename)),         // ./hero
-                format!("../{}", escape_like(basename)),        // ../hero
-                format!("%{}", escape_like(basename)),          // anything ending with hero
+                format!("%{}", escape_like(filename)), // ends with utils.rs or hero.tsx
+                format!("%/{}", escape_like(basename)), // ends with /hero
+                format!("./{}", escape_like(basename)), // ./hero
+                format!("../{}", escape_like(basename)), // ../hero
+                format!("%{}", escape_like(basename)), // anything ending with hero
             ];
 
             // Add parent/name pattern if available
             if let Some(ref parent_name) = parent_and_name {
-                patterns.push(format!("%{}", escape_like(parent_name)));  // sections/hero
+                patterns.push(format!("%{}", escape_like(parent_name))); // sections/hero
             }
 
             let mut all_results = Vec::new();

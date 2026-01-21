@@ -97,9 +97,12 @@ impl<'a> MatchSink<'a> {
         // Base score
         let mut score = if line_lower == pattern_lower {
             0.9 // Exact line match
-        } else if match_start == 0 || line.chars().nth(match_start.saturating_sub(1))
-            .map(|c| !c.is_alphanumeric())
-            .unwrap_or(true)
+        } else if match_start == 0
+            || line
+                .chars()
+                .nth(match_start.saturating_sub(1))
+                .map(|c| !c.is_alphanumeric())
+                .unwrap_or(true)
         {
             0.7 // Word boundary match
         } else {
