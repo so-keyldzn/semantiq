@@ -23,7 +23,7 @@ fn parse_symbols_json(json: &str) -> Vec<String> {
 
 /// Convert embedding bytes to f32 vector with validation
 fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         warn!(
             "Invalid embedding bytes length: {} (not divisible by 4)",
             bytes.len()
@@ -82,7 +82,14 @@ fn init_sqlite_vec() {
         // Option<unsafe extern "C" fn()> but sqlite3_vec_init has additional parameters.
         // SQLite's extension loading mechanism handles the parameter passing correctly.
         unsafe {
-            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+            sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut rusqlite::ffi::sqlite3,
+                    *mut *mut i8,
+                    *const rusqlite::ffi::sqlite3_api_routines,
+                ) -> i32,
+            >(sqlite3_vec_init as *const ())));
         }
         tracing::debug!("sqlite-vec extension registered");
     });
@@ -790,7 +797,7 @@ impl IndexStore {
 
     /// Vérifie si l'index doit être recréé (changement de parser)
     pub fn needs_full_reindex(&self) -> Result<bool> {
-        self.with_conn(|conn| Self::needs_full_reindex_impl(conn))
+        self.with_conn(Self::needs_full_reindex_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -823,7 +830,7 @@ impl IndexStore {
 
     /// Met à jour la version du parser dans metadata
     pub fn set_parser_version(&self) -> Result<()> {
-        self.with_conn(|conn| Self::set_parser_version_impl(conn))
+        self.with_conn(Self::set_parser_version_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -837,7 +844,7 @@ impl IndexStore {
 
     /// Supprime toutes les données indexées
     pub fn clear_all_data(&self) -> Result<()> {
-        self.with_conn(|conn| Self::clear_all_data_impl(conn))
+        self.with_conn(Self::clear_all_data_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
