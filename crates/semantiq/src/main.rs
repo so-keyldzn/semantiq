@@ -13,6 +13,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Output logs in JSON format
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -108,10 +112,18 @@ async fn main() -> Result<()> {
         EnvFilter::new("info,ort=warn")
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    if cli.json {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     match cli.command {
         Commands::Init { path } => commands::init(&path).await,
