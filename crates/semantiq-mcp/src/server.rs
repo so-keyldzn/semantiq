@@ -436,8 +436,7 @@ mod tests {
         if let Some(lang) = lang
             && let Ok(mut support) = semantiq_parser::LanguageSupport::new()
             && let Ok(tree) = support.parse(lang, content)
-            && let Ok(symbols) =
-                semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
+            && let Ok(symbols) = semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
         {
             let _ = store.insert_symbols(file_id, &symbols);
         }
