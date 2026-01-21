@@ -433,16 +433,13 @@ mod tests {
                 .unwrap_or(""),
         );
 
-        if let Some(lang) = lang {
-            if let Ok(mut support) = semantiq_parser::LanguageSupport::new() {
-                if let Ok(tree) = support.parse(lang, content) {
-                    if let Ok(symbols) =
-                        semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
-                    {
-                        let _ = store.insert_symbols(file_id, &symbols);
-                    }
-                }
-            }
+        if let Some(lang) = lang
+            && let Ok(mut support) = semantiq_parser::LanguageSupport::new()
+            && let Ok(tree) = support.parse(lang, content)
+            && let Ok(symbols) =
+                semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
+        {
+            let _ = store.insert_symbols(file_id, &symbols);
         }
 
         file_id
