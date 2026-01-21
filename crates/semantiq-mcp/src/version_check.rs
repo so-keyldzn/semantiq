@@ -168,15 +168,15 @@ pub fn check_for_update(current_version: &str, config: &VersionCheckConfig) -> O
     }
 
     // Check cache first
-    if let Some(cache) = read_cache() {
-        if !cache.is_expired(config.cache_duration) {
-            debug!("Using cached version info: {}", cache.latest_version);
-            return Some(UpdateInfo {
-                current_version: current_version.to_string(),
-                latest_version: cache.latest_version.clone(),
-                update_available: is_newer(&cache.latest_version, current_version),
-            });
-        }
+    if let Some(cache) = read_cache()
+        && !cache.is_expired(config.cache_duration)
+    {
+        debug!("Using cached version info: {}", cache.latest_version);
+        return Some(UpdateInfo {
+            current_version: current_version.to_string(),
+            latest_version: cache.latest_version.clone(),
+            update_available: is_newer(&cache.latest_version, current_version),
+        });
     }
 
     // Fetch from GitHub

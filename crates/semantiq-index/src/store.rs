@@ -80,8 +80,9 @@ fn init_sqlite_vec() {
     SQLITE_VEC_INIT.call_once(|| {
         // SAFETY: See function-level documentation for safety invariants.
         // The transmute is required because sqlite3_auto_extension expects an
-        // Option<unsafe extern "C" fn()> but sqlite3_vec_init has additional parameters.
+        // Option<unsafe extern "C" fn()> but sqlite3_vec_init is declared without parameters.
         // SQLite's extension loading mechanism handles the parameter passing correctly.
+        // This follows the exact pattern from the sqlite-vec crate's own test code.
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute::<
                 *const (),
