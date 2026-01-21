@@ -404,10 +404,7 @@ node_modules/
             println!("Skipped .gitignore (entries already present)");
         }
     } else {
-        let content = format!(
-            "# Semantiq\n{}\n",
-            gitignore_entries.join("\n")
-        );
+        let content = format!("# Semantiq\n{}\n", gitignore_entries.join("\n"));
         fs::write(&gitignore_path, content)?;
         println!("Created .gitignore");
     }

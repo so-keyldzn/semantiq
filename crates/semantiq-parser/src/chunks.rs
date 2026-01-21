@@ -190,10 +190,7 @@ impl ChunkExtractor {
             Language::Yaml => matches!(kind, "block_mapping" | "block_sequence"),
             Language::Toml => matches!(kind, "table" | "array"),
             Language::Bash => matches!(kind, "function_definition" | "compound_statement"),
-            Language::Elixir => matches!(
-                kind,
-                "call" | "anonymous_function" | "do_block"
-            ),
+            Language::Elixir => matches!(kind, "call" | "anonymous_function" | "do_block"),
         }
     }
 
