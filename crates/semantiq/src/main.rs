@@ -13,7 +13,7 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Output logs in JSON format
+    /// Output logs in JSON format (default for 'serve' command)
     #[arg(long, global = true)]
     json: bool,
 
@@ -112,7 +112,10 @@ async fn main() -> Result<()> {
         EnvFilter::new("info,ort=warn")
     };
 
-    if cli.json {
+    // Use JSON logging by default for serve command (MCP server)
+    let use_json = cli.json || matches!(cli.command, Commands::Serve { .. });
+
+    if use_json {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)
