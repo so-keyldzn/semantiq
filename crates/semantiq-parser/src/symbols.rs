@@ -103,10 +103,9 @@ impl SymbolExtractor {
         // Détecter si une variable contient une arrow_function ou function_expression
         if matches!(kind, SymbolKind::Variable)
             && matches!(language, Language::TypeScript | Language::JavaScript)
+            && Self::is_function_variable(node)
         {
-            if Self::is_function_variable(node) {
-                kind = SymbolKind::Function;
-            }
+            kind = SymbolKind::Function;
         }
 
         let start_line = node.start_position().row + 1;
@@ -356,12 +355,11 @@ impl SymbolExtractor {
     fn is_function_variable(node: &Node) -> bool {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(value) = child.child_by_field_name("value") {
-                    if matches!(value.kind(), "arrow_function" | "function_expression") {
-                        return true;
-                    }
-                }
+            if child.kind() == "variable_declarator"
+                && let Some(value) = child.child_by_field_name("value")
+                && matches!(value.kind(), "arrow_function" | "function_expression")
+            {
+                return true;
             }
         }
         false
@@ -404,18 +402,18 @@ impl SymbolExtractor {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "variable_declarator" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        if let Ok(text) = name_node.utf8_text(source_bytes) {
-                            return Some(text.to_string());
-                        }
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(text) = name_node.utf8_text(source_bytes)
+                    {
+                        return Some(text.to_string());
                     }
                     // Fallback: look for identifier in variable_declarator
                     let mut inner_cursor = child.walk();
                     for inner_child in child.children(&mut inner_cursor) {
-                        if inner_child.kind() == "identifier" {
-                            if let Ok(text) = inner_child.utf8_text(source_bytes) {
-                                return Some(text.to_string());
-                            }
+                        if inner_child.kind() == "identifier"
+                            && let Ok(text) = inner_child.utf8_text(source_bytes)
+                        {
+                            return Some(text.to_string());
                         }
                     }
                 }
@@ -425,10 +423,10 @@ impl SymbolExtractor {
         // Fallback: look for identifier child
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "identifier" || child.kind() == "type_identifier" {
-                if let Ok(text) = child.utf8_text(source_bytes) {
-                    return Some(text.to_string());
-                }
+            if (child.kind() == "identifier" || child.kind() == "type_identifier")
+                && let Ok(text) = child.utf8_text(source_bytes)
+            {
+                return Some(text.to_string());
             }
         }
 
