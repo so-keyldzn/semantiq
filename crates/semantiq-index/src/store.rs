@@ -39,11 +39,48 @@ fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Initialize sqlite-vec extension (called once)
+/// Global initializer for sqlite-vec extension.
+///
+/// Uses `Once` to ensure the extension is registered exactly once per process,
+/// regardless of how many `IndexStore` instances are created.
 static SQLITE_VEC_INIT: Once = Once::new();
 
+/// Registers the sqlite-vec extension with SQLite's auto-extension mechanism.
+///
+/// # Safety
+///
+/// This function contains an `unsafe` block that is necessary to interface with
+/// the SQLite C API. The safety is guaranteed by the following invariants:
+///
+/// 1. **Function pointer validity**: `sqlite3_vec_init` is a valid C function
+///    exported by the `sqlite-vec` crate with the correct signature expected by
+///    `sqlite3_auto_extension`. The function signature is:
+///    `extern "C" fn(*mut sqlite3, *mut *mut c_char, *const sqlite3_api_routines) -> c_int`
+///
+/// 2. **Single initialization**: `Once::call_once` guarantees this code runs
+///    exactly once per process, preventing double-registration which could cause
+///    undefined behavior.
+///
+/// 3. **Transmute safety**: The `transmute` converts the function pointer to the
+///    opaque type expected by `sqlite3_auto_extension`. This is safe because:
+///    - The source type (`*const ()` from `sqlite3_vec_init as *const ()`) and
+///      target type are both pointer-sized
+///    - SQLite will call the function with the correct calling convention
+///    - The sqlite-vec crate guarantees ABI compatibility with SQLite
+///
+/// 4. **Thread safety**: `sqlite3_auto_extension` is documented as thread-safe
+///    by SQLite when called before any database connections are opened.
+///
+/// # Panics
+///
+/// This function does not panic. If the extension fails to register, SQLite will
+/// return an error when attempting to use vec0 virtual tables.
 fn init_sqlite_vec() {
     SQLITE_VEC_INIT.call_once(|| {
+        // SAFETY: See function-level documentation for safety invariants.
+        // The transmute is required because sqlite3_auto_extension expects an
+        // Option<unsafe extern "C" fn()> but sqlite3_vec_init has additional parameters.
+        // SQLite's extension loading mechanism handles the parameter passing correctly.
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
         }
@@ -242,9 +279,12 @@ impl IndexStore {
         }
     }
 
+    /// Maximum limit for symbol search results to prevent excessive memory usage.
+    const MAX_SYMBOL_SEARCH_LIMIT: usize = 10000;
+
     pub fn search_symbols(&self, query: &str, limit: usize) -> Result<Vec<SymbolRecord>> {
         // Cap limit to prevent excessive memory usage
-        let safe_limit = limit.min(10000);
+        let safe_limit = limit.min(Self::MAX_SYMBOL_SEARCH_LIMIT);
 
         self.with_conn(|conn| {
             // Use FTS5 for full-text search
@@ -257,10 +297,15 @@ impl IndexStore {
                  LIMIT ?2",
             )?;
 
-            // Escape special FTS5 characters by quoting the query
-            // FTS5 treats - as NOT, + as AND, etc.
-            let escaped_query = query.replace('"', "\"\"");
-            let fts_query = format!("\"{}\"*", escaped_query);
+            // Escape special FTS5 characters for safe literal matching.
+            // FTS5 operators that need escaping:
+            // - Double quotes: used for phrase queries, escape by doubling
+            // - AND, OR, NOT: boolean operators (handled by quoting)
+            // - +, -: prefix operators for required/excluded terms (handled by quoting)
+            // - *, ^: suffix/prefix wildcards (we add * ourselves for prefix search)
+            // - NEAR, parentheses: grouping (handled by quoting)
+            // By wrapping in double quotes, we get literal matching instead of FTS operators.
+            let fts_query = Self::escape_fts5_query(query);
             let results = stmt
                 .query_map(params![fts_query, safe_limit as i64], |row| {
                     Ok(SymbolRecord {
@@ -871,6 +916,63 @@ impl IndexStore {
 
     // Helper functions
 
+    /// Escapes a query string for safe use with FTS5 MATCH.
+    ///
+    /// FTS5 has several special characters and operators that need handling:
+    /// - `"` (double quote): Used for phrase queries, must be escaped by doubling
+    /// - `AND`, `OR`, `NOT`: Boolean operators
+    /// - `+`, `-`: Required/excluded term prefixes
+    /// - `*`: Wildcard suffix for prefix matching
+    /// - `^`: Start anchor
+    /// - `NEAR`: Proximity operator
+    /// - `(`, `)`: Grouping
+    ///
+    /// This function wraps the query in double quotes for literal matching,
+    /// then appends `*` for prefix search. This approach safely handles all
+    /// special characters by treating them as literal text.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // "hello" becomes "\"hello\"*" (matches "hello", "hello_world", etc.)
+    /// // "get-user" becomes "\"get-user\"*" (- is treated literally, not as NOT)
+    /// // "test\"quoted" becomes "\"test\"\"quoted\"*" (quotes are escaped)
+    /// ```
+    fn escape_fts5_query(query: &str) -> String {
+        // Escape double quotes by doubling them (FTS5 escape sequence)
+        let escaped = query.replace('"', "\"\"");
+        // Wrap in quotes for literal matching, add * for prefix search
+        format!("\"{}\"*", escaped)
+    }
+
+    /// Computes a hash of file content for change detection.
+    ///
+    /// # Implementation Notes
+    ///
+    /// This function uses `DefaultHasher` (currently SipHash 1-3) which is:
+    /// - **Fast**: Optimized for hash table operations
+    /// - **Deterministic**: Same input always produces same output within a process
+    /// - **NOT cryptographic**: Should not be used for security purposes
+    ///
+    /// # Use Case
+    ///
+    /// This hash is used solely for **change detection** during incremental indexing.
+    /// When a file's content hash differs from the stored hash, the file is re-indexed.
+    /// The hash is NOT used for:
+    /// - Content verification or integrity checking
+    /// - Security-sensitive comparisons
+    /// - Deduplication across untrusted inputs
+    ///
+    /// # Collision Risk
+    ///
+    /// While hash collisions are theoretically possible, the practical risk is
+    /// negligible for this use case:
+    /// - Collisions would only cause unnecessary re-indexing (not data corruption)
+    /// - The 64-bit hash space makes accidental collisions extremely unlikely
+    ///
+    /// # Returns
+    ///
+    /// A 16-character hexadecimal string (64-bit hash).
     fn hash_content(content: &str) -> String {
         let mut hasher = DefaultHasher::new();
         content.hash(&mut hasher);

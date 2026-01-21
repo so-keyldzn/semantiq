@@ -98,6 +98,15 @@ impl RetrievalEngine {
         ))
     }
 
+    /// Minimum similarity threshold for semantic search results.
+    /// Results with similarity below this threshold are excluded.
+    /// sqlite-vec uses L2 distance, so lower distance = more similar.
+    const SEMANTIC_MIN_SIMILARITY: f32 = 0.3;
+
+    /// Maximum distance threshold for sqlite-vec (L2 distance).
+    /// This corresponds roughly to cosine similarity of 0.3 for normalized vectors.
+    const SEMANTIC_MAX_DISTANCE: f32 = 1.2;
+
     fn search_semantic(
         &self,
         query_text: &str,
@@ -112,37 +121,53 @@ impl RetrievalEngine {
         // Generate query embedding
         let query_embedding = model.embed(query_text)?;
 
-        // Get all chunks with embeddings
-        let chunks_with_embeddings = self.store.get_chunks_with_embeddings()?;
+        // Use sqlite-vec's efficient vector search instead of loading all chunks
+        // This performs the similarity search directly in the database using
+        // optimized vector indices, avoiding O(n) memory usage for large codebases.
+        let similar_chunks = self.store.search_similar_chunks(&query_embedding, limit * 2)?;
 
-        if chunks_with_embeddings.is_empty() {
-            debug!("No chunks with embeddings found");
+        if similar_chunks.is_empty() {
+            debug!("No similar chunks found via vector search");
             return Ok(Vec::new());
         }
 
         debug!(
-            "Searching {} chunks with embeddings",
-            chunks_with_embeddings.len()
+            "Vector search returned {} candidate chunks",
+            similar_chunks.len()
         );
 
-        // Calculate cosine similarity for each chunk
-        let mut scored_chunks: Vec<(f32, &semantiq_index::ChunkRecord)> = chunks_with_embeddings
-            .iter()
-            .map(|(chunk, embedding)| {
-                let score = cosine_similarity(&query_embedding, embedding);
-                (score, chunk)
-            })
+        // Filter by distance threshold and collect chunk IDs
+        let filtered_results: Vec<(i64, f32)> = similar_chunks
+            .into_iter()
+            .filter(|(_, distance)| *distance < Self::SEMANTIC_MAX_DISTANCE)
             .collect();
 
-        // Sort by score descending
-        scored_chunks.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        if filtered_results.is_empty() {
+            debug!("No chunks passed distance threshold");
+            return Ok(Vec::new());
+        }
 
-        // Take top results and convert to SearchResult
-        let results: Vec<SearchResult> = scored_chunks
+        // Fetch the actual chunk records by their IDs
+        let chunk_ids: Vec<i64> = filtered_results.iter().map(|(id, _)| *id).collect();
+        let chunks = self.store.get_chunks_by_ids(&chunk_ids)?;
+
+        // Create a map from chunk_id to distance for scoring
+        let distance_map: std::collections::HashMap<i64, f32> = filtered_results.into_iter().collect();
+
+        // Convert to SearchResults with proper scoring and filtering
+        let results: Vec<SearchResult> = chunks
             .into_iter()
-            .take(limit)
-            .filter(|(score, _)| *score > 0.3) // Only include results with reasonable similarity
-            .filter_map(|(score, chunk)| {
+            .filter_map(|chunk| {
+                let distance = *distance_map.get(&chunk.id)?;
+                // Convert L2 distance to similarity score (0-1 range)
+                // Using: similarity = 1 / (1 + distance) for a smooth conversion
+                let score = 1.0 / (1.0 + distance);
+
+                // Apply minimum similarity threshold
+                if score < Self::SEMANTIC_MIN_SIMILARITY {
+                    return None;
+                }
+
                 let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
 
                 // Filter by extension
@@ -169,9 +194,10 @@ impl RetrievalEngine {
                     }),
                 )
             })
+            .take(limit)
             .collect();
 
-        debug!("Found {} semantic matches", results.len());
+        debug!("Found {} semantic matches after filtering", results.len());
         Ok(results)
     }
 
@@ -549,26 +575,27 @@ pub struct SymbolDefinition {
     pub doc_comment: Option<String>,
 }
 
-/// Calculate cosine similarity between two vectors
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-
-    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-
-    dot_product / (norm_a * norm_b)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Calculate cosine similarity between two vectors.
+    /// This function is used only in tests to verify vector operations.
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
+        }
+
+        dot_product / (norm_a * norm_b)
+    }
 
     #[test]
     fn test_cosine_similarity() {
