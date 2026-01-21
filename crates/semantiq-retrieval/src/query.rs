@@ -157,20 +157,20 @@ impl QueryExpander {
 
     fn is_camel_case(&self, s: &str) -> bool {
         let mut chars = s.chars();
-        if let Some(first) = chars.next() {
-            if first.is_lowercase() {
-                return chars.any(|c| c.is_uppercase());
-            }
+        if let Some(first) = chars.next()
+            && first.is_lowercase()
+        {
+            return chars.any(|c| c.is_uppercase());
         }
         false
     }
 
     fn is_pascal_case(&self, s: &str) -> bool {
         let mut chars = s.chars();
-        if let Some(first) = chars.next() {
-            if first.is_uppercase() {
-                return chars.any(|c| c.is_uppercase() || c.is_lowercase());
-            }
+        if let Some(first) = chars.next()
+            && first.is_uppercase()
+        {
+            return chars.any(|c| c.is_uppercase() || c.is_lowercase());
         }
         false
     }
@@ -389,7 +389,7 @@ mod tests {
         // Should include original term
         assert!(terms.contains(&"get_user"));
         // Should include expanded terms
-        assert!(terms.len() >= 1);
+        assert!(!terms.is_empty());
     }
 
     #[test]
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_query_expander_default() {
-        let expander = QueryExpander::default();
+        let expander = QueryExpander::new();
         // Should work the same as new()
         assert_eq!(expander.snake_to_camel("test_case"), "testCase");
     }

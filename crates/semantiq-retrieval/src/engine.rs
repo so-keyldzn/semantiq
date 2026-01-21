@@ -174,10 +174,10 @@ impl RetrievalEngine {
                 let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
 
                 // Filter by extension
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
-                    if !options.accepts_extension(ext) {
-                        return None;
-                    }
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
+                    && !options.accepts_extension(ext)
+                {
+                    return None;
                 }
 
                 Some(
@@ -368,10 +368,10 @@ impl RetrievalEngine {
                 let file_path = self.get_file_path(symbol.file_id)?;
 
                 // Filter by extension
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
-                    if !options.accepts_extension(ext) {
-                        continue;
-                    }
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
+                    && !options.accepts_extension(ext)
+                {
+                    continue;
                 }
 
                 let content = symbol
