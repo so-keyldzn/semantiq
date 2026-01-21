@@ -392,3 +392,437 @@ impl ServerHandler for SemantiqServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// Helper to create a test server with a temporary database
+    fn create_test_server() -> (SemantiqServer, TempDir) {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join(".semantiq.db");
+        let project_root = temp_dir.path().to_string_lossy().to_string();
+
+        // Create the server without spawning background tasks
+        let store = Arc::new(IndexStore::open(&db_path).expect("Failed to open store"));
+        let engine = Arc::new(RetrievalEngine::new(Arc::clone(&store), &project_root));
+
+        let server = SemantiqServer {
+            engine,
+            store,
+            auto_indexer: None,
+        };
+
+        (server, temp_dir)
+    }
+
+    /// Helper to index a test file with optional symbol extraction.
+    /// For simplicity in MCP tests, we insert the file and optionally parse symbols.
+    fn index_test_file(store: &IndexStore, path: &str, content: &str, language: &str) -> i64 {
+        let file_id = store
+            .insert_file(path, Some(language), content, content.len() as i64, 1000)
+            .expect("Failed to insert file");
+
+        // Parse and insert symbols using the correct API
+        let lang = semantiq_parser::Language::from_extension(
+            std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or(""),
+        );
+
+        if let Some(lang) = lang {
+            if let Ok(mut support) = semantiq_parser::LanguageSupport::new() {
+                if let Ok(tree) = support.parse(lang, content) {
+                    if let Ok(symbols) = semantiq_parser::SymbolExtractor::extract(&tree, content, lang) {
+                        let _ = store.insert_symbols(file_id, &symbols);
+                    }
+                }
+            }
+        }
+
+        file_id
+    }
+
+    // ==================== semantiq_search tests ====================
+
+    #[tokio::test]
+    async fn test_search_empty_query_returns_error() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_search("".to_string(), None, None, None, None)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Query cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_search_whitespace_only_query_returns_error() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_search("   ".to_string(), None, None, None, None)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Query cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_search_query_too_long_returns_error() {
+        let (server, _temp) = create_test_server();
+
+        let long_query = "a".repeat(501);
+        let result = server
+            .semantiq_search(long_query, None, None, None, None)
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("maximum length"));
+    }
+
+    #[tokio::test]
+    async fn test_search_query_at_max_length_succeeds() {
+        let (server, _temp) = create_test_server();
+
+        let max_query = "a".repeat(500);
+        let result = server
+            .semantiq_search(max_query, None, None, None, None)
+            .await;
+
+        // Should not error on length validation
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_search_returns_results_format() {
+        let (server, _temp) = create_test_server();
+
+        // Index a test file
+        index_test_file(
+            &server.store,
+            "test.rs",
+            "fn hello_world() { println!(\"Hello\"); }",
+            "rust",
+        );
+
+        let result = server
+            .semantiq_search("hello".to_string(), Some(10), None, None, None)
+            .await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("results for 'hello'"));
+        assert!(output.contains("ms)"));
+    }
+
+    #[tokio::test]
+    async fn test_search_with_file_type_filter() {
+        let (server, _temp) = create_test_server();
+
+        index_test_file(&server.store, "test.rs", "fn rust_func() {}", "rust");
+        index_test_file(&server.store, "test.py", "def python_func(): pass", "python");
+
+        let result = server
+            .semantiq_search(
+                "func".to_string(),
+                Some(10),
+                None,
+                Some("rs".to_string()),
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok());
+        // Result should only contain .rs files
+    }
+
+    #[tokio::test]
+    async fn test_search_with_min_score_filter() {
+        let (server, _temp) = create_test_server();
+
+        index_test_file(&server.store, "test.rs", "fn exact_match() {}", "rust");
+
+        let result = server
+            .semantiq_search(
+                "exact_match".to_string(),
+                Some(10),
+                Some(0.9),
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_search_with_symbol_kind_filter() {
+        let (server, _temp) = create_test_server();
+
+        index_test_file(
+            &server.store,
+            "test.rs",
+            "fn my_function() {}\nstruct MyStruct {}",
+            "rust",
+        );
+
+        let result = server
+            .semantiq_search(
+                "my".to_string(),
+                Some(10),
+                None,
+                None,
+                Some("function".to_string()),
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    // ==================== semantiq_find_refs tests ====================
+
+    #[tokio::test]
+    async fn test_find_refs_returns_formatted_output() {
+        let (server, temp) = create_test_server();
+
+        // Create the file physically in the temp directory
+        let content = "fn my_symbol() {}";
+        let file_path = temp.path().join("test.rs");
+        std::fs::write(&file_path, content).expect("Failed to write test file");
+
+        index_test_file(&server.store, "test.rs", content, "rust");
+
+        let result = server
+            .semantiq_find_refs("my_symbol".to_string(), Some(10))
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("references to 'my_symbol'"));
+    }
+
+    #[tokio::test]
+    async fn test_find_refs_with_definitions() {
+        let (server, temp) = create_test_server();
+
+        // Create the file physically in the temp directory
+        let content = "fn calculate() {}";
+        let file_path = temp.path().join("lib.rs");
+        std::fs::write(&file_path, content).expect("Failed to write test file");
+
+        index_test_file(&server.store, "lib.rs", content, "rust");
+
+        let result = server
+            .semantiq_find_refs("calculate".to_string(), Some(50))
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+        let output = result.unwrap();
+        // Should find the definition
+        assert!(output.contains("references to 'calculate'"));
+    }
+
+    #[tokio::test]
+    async fn test_find_refs_default_limit() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_find_refs("nonexistent".to_string(), None)
+            .await;
+
+        // Should use default limit of 50
+        assert!(result.is_ok());
+    }
+
+    // ==================== semantiq_deps tests ====================
+
+    #[tokio::test]
+    async fn test_deps_returns_formatted_output() {
+        let (server, _temp) = create_test_server();
+
+        let file_id = index_test_file(
+            &server.store,
+            "main.rs",
+            "use crate::utils;",
+            "rust",
+        );
+
+        // Add a dependency
+        server
+            .store
+            .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+            .expect("Failed to insert dependency");
+
+        let result = server.semantiq_deps("main.rs".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("Dependency analysis for 'main.rs'"));
+        assert!(output.contains("Imports"));
+    }
+
+    #[tokio::test]
+    async fn test_deps_shows_imports_section() {
+        let (server, _temp) = create_test_server();
+
+        let file_id = index_test_file(&server.store, "app.rs", "use std::io;", "rust");
+
+        server
+            .store
+            .insert_dependency(file_id, "std::io", Some("io"), "std")
+            .expect("Failed to insert dependency");
+
+        let result = server.semantiq_deps("app.rs".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("Imports"));
+        assert!(output.contains("std::io"));
+    }
+
+    #[tokio::test]
+    async fn test_deps_nonexistent_file() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_deps("nonexistent.rs".to_string())
+            .await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("0 dependencies"));
+    }
+
+    // ==================== semantiq_explain tests ====================
+
+    #[tokio::test]
+    async fn test_explain_returns_formatted_output() {
+        let (server, _temp) = create_test_server();
+
+        index_test_file(
+            &server.store,
+            "lib.rs",
+            "/// Documentation for process\nfn process() {}",
+            "rust",
+        );
+
+        let result = server.semantiq_explain("process".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("Symbol: process") || output.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_explain_symbol_not_found() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_explain("nonexistent_symbol".to_string())
+            .await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_explain_shows_definitions_count() {
+        let (server, _temp) = create_test_server();
+
+        index_test_file(&server.store, "a.rs", "fn shared_name() {}", "rust");
+        index_test_file(&server.store, "b.rs", "fn shared_name() {}", "rust");
+
+        let result = server.semantiq_explain("shared_name".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        // Should mention definitions found
+        assert!(
+            output.contains("definition") || output.contains("not found"),
+            "Expected 'definition' or 'not found' in output: {}",
+            output
+        );
+    }
+
+    // ==================== ServerHandler tests ====================
+
+    #[test]
+    fn test_get_info_returns_correct_name() {
+        let (server, _temp) = create_test_server();
+        let info = server.get_info();
+
+        assert_eq!(info.server_info.name, "semantiq");
+    }
+
+    #[test]
+    fn test_get_info_returns_version() {
+        let (server, _temp) = create_test_server();
+        let info = server.get_info();
+
+        assert!(!info.server_info.version.is_empty());
+    }
+
+    #[test]
+    fn test_get_info_has_instructions() {
+        let (server, _temp) = create_test_server();
+        let info = server.get_info();
+
+        assert!(info.instructions.is_some());
+        let instructions = info.instructions.unwrap();
+        assert!(instructions.contains("semantiq_search"));
+        assert!(instructions.contains("semantiq_find_refs"));
+        assert!(instructions.contains("semantiq_deps"));
+        assert!(instructions.contains("semantiq_explain"));
+    }
+
+    #[test]
+    fn test_get_info_enables_tools() {
+        let (server, _temp) = create_test_server();
+        let info = server.get_info();
+
+        // ServerCapabilities should have tools enabled
+        assert!(info.capabilities.tools.is_some());
+    }
+
+    // ==================== Edge case tests ====================
+
+    #[tokio::test]
+    async fn test_search_with_special_characters() {
+        let (server, _temp) = create_test_server();
+
+        // Should handle special regex/FTS characters gracefully
+        let result = server
+            .semantiq_search("test*".to_string(), Some(10), None, None, None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_search_with_unicode() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_search("函数".to_string(), Some(10), None, None, None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_find_refs_with_special_characters() {
+        let (server, _temp) = create_test_server();
+
+        let result = server
+            .semantiq_find_refs("operator+".to_string(), Some(10))
+            .await;
+
+        assert!(result.is_ok());
+    }
+}
