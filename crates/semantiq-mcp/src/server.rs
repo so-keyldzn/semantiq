@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::version_check::{VersionCheckConfig, check_for_update, notify_update};
 
@@ -144,6 +144,14 @@ impl SemantiqServer {
         #[tool(param)] file_type: Option<String>,
         #[tool(param)] symbol_kind: Option<String>,
     ) -> Result<String, String> {
+        debug!(
+            query = %query,
+            limit = ?limit,
+            file_type = ?file_type,
+            symbol_kind = ?symbol_kind,
+            "semantiq_search called"
+        );
+
         // Validate query
         let query = query.trim();
         if query.is_empty() {
@@ -216,6 +224,7 @@ impl SemantiqServer {
         #[tool(param)] symbol: String,
         #[tool(param)] limit: Option<usize>,
     ) -> Result<String, String> {
+        debug!(symbol = %symbol, limit = ?limit, "semantiq_find_refs called");
         let limit = limit.unwrap_or(50);
 
         match self.engine.find_references(&symbol, limit) {
@@ -288,6 +297,7 @@ impl SemantiqServer {
         description = "Analyze the dependency graph for a file. Shows what the file imports and what other files import it."
     )]
     pub async fn semantiq_deps(&self, #[tool(param)] file_path: String) -> Result<String, String> {
+        debug!(file = %file_path, "semantiq_deps called");
         let mut output = format!("Dependency analysis for '{}'\n\n", file_path);
 
         match self.engine.get_dependencies(&file_path) {
@@ -327,6 +337,7 @@ impl SemantiqServer {
         description = "Get a detailed explanation of a symbol including its definition, documentation, usage patterns, and related symbols."
     )]
     pub async fn semantiq_explain(&self, #[tool(param)] symbol: String) -> Result<String, String> {
+        debug!(symbol = %symbol, "semantiq_explain called");
         match self.engine.explain_symbol(&symbol) {
             Ok(explanation) => {
                 if !explanation.found {
