@@ -22,8 +22,9 @@ fn parse_symbols_json(json: &str) -> Vec<String> {
 }
 
 /// Convert embedding bytes to f32 vector with validation
+#[allow(clippy::manual_is_multiple_of)]
 fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
-    if !bytes.len().is_multiple_of(4) {
+    if bytes.len() % 4 != 0 {
         warn!(
             "Invalid embedding bytes length: {} (not divisible by 4)",
             bytes.len()
