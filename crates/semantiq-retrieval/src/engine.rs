@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, info};
 
 pub struct RetrievalEngine {
     store: Arc<IndexStore>,
@@ -91,6 +91,12 @@ impl RetrievalEngine {
         all_results.truncate(safe_limit);
 
         let search_time = start.elapsed().as_millis() as u64;
+        info!(
+            query = %query_text,
+            results = all_results.len(),
+            time_ms = search_time,
+            "Search completed"
+        );
         Ok(SearchResults::new(
             query_text.to_string(),
             all_results,
@@ -202,6 +208,7 @@ impl RetrievalEngine {
     }
 
     pub fn find_references(&self, symbol_name: &str, limit: usize) -> Result<SearchResults> {
+        info!(symbol = %symbol_name, limit = limit, "Finding references");
         let start = Instant::now();
         let mut results = Vec::new();
 
@@ -257,6 +264,7 @@ impl RetrievalEngine {
     }
 
     pub fn get_dependencies(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        debug!(file = %file_path, "Getting dependencies");
         let mut deps = Vec::new();
 
         if let Some(file) = self.store.get_file_by_path(file_path)? {
@@ -292,6 +300,7 @@ impl RetrievalEngine {
     }
 
     pub fn explain_symbol(&self, symbol_name: &str) -> Result<SymbolExplanation> {
+        info!(symbol = %symbol_name, "Explaining symbol");
         let symbols = self.store.find_symbol_by_name(symbol_name)?;
 
         if symbols.is_empty() {

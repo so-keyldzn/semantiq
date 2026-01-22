@@ -13,6 +13,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Output logs in JSON format (default for 'serve' command)
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -108,10 +112,21 @@ async fn main() -> Result<()> {
         EnvFilter::new("info,ort=warn")
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    // Use JSON logging by default for serve command (MCP server)
+    let use_json = cli.json || matches!(cli.command, Commands::Serve { .. });
+
+    if use_json {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     match cli.command {
         Commands::Init { path } => commands::init(&path).await,
