@@ -125,8 +125,20 @@ This project uses Semantiq for semantic code understanding.
     )?;
 
     // 5. Create .cursorignore
-    let cursorignore_content = r#"# Build artifacts
+    let cursorignore_content = r#"# Dependencies
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+
+# Build artifacts
+dist/
+build/
 target/
+out/
+.next/
+.nuxt/
 
 # Database files
 *.db
@@ -134,21 +146,31 @@ target/
 *.db-shm
 .semantiq.db*
 
-# Model files
-*.onnx
-models/
-
-# Dependencies
-node_modules/
-
 # Version control
 .git/
 
 # IDE
 .idea/
+.vscode/
 
-# Logs
+# Logs and caches
 *.log
+.cache/
+.tmp/
+
+# Package lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Cargo.lock
+poetry.lock
+Pipfile.lock
+composer.lock
+Gemfile.lock
+
+# Environment
+.env
+.env.*
 "#;
     write_if_not_exists(
         &project_root.join(".cursorignore"),
@@ -164,27 +186,32 @@ node_modules/
     let settings_json = r#"{
     "editor.tabSize": 4,
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "rust-lang.rust-analyzer",
-    "[rust]": {
-        "editor.defaultFormatter": "rust-lang.rust-analyzer"
-    },
-    "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.inlayHints.parameterHints.enable": true,
-    "rust-analyzer.inlayHints.typeHints.enable": true,
-    "rust-analyzer.inlayHints.chainingHints.enable": true,
-    "rust-analyzer.inlayHints.closingBraceHints.enable": true,
-    "rust-analyzer.inlayHints.lifetimeElisionHints.enable": "skip_trivial",
-    "rust-analyzer.lens.enable": true,
-    "rust-analyzer.lens.run.enable": true,
-    "rust-analyzer.lens.debug.enable": true,
+    "editor.minimap.enabled": false,
+    "editor.bracketPairColorization.enabled": true,
+    "editor.guides.bracketPairs": true,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
     "files.watcherExclude": {
+        "**/node_modules/**": true,
+        "**/.git/**": true,
+        "**/dist/**": true,
+        "**/build/**": true,
         "**/target/**": true,
         "**/*.db": true,
         "**/*.db-wal": true,
         "**/*.db-shm": true
     },
     "files.exclude": {
-        "**/target": true
+        "**/.git": true,
+        "**/node_modules": true,
+        "**/.DS_Store": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/dist": true,
+        "**/build": true,
+        "**/target": true,
+        "**/*.db": true
     }
 }
 "#;
@@ -199,79 +226,39 @@ node_modules/
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "cargo build",
+            "label": "Semantiq: Index project",
             "type": "shell",
-            "command": "cargo",
-            "args": ["build"],
-            "group": "build",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "cargo build --release",
-            "type": "shell",
-            "command": "cargo",
-            "args": ["build", "--release"],
-            "group": "build",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "cargo test",
-            "type": "shell",
-            "command": "cargo",
-            "args": ["test"],
-            "group": "test",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "cargo test -p",
-            "type": "shell",
-            "command": "cargo",
-            "args": ["test", "-p", "${input:crateName}"],
-            "group": "test",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "cargo fmt",
-            "type": "shell",
-            "command": "cargo",
-            "args": ["fmt"],
+            "command": "semantiq",
+            "args": ["index"],
             "problemMatcher": []
         },
         {
-            "label": "cargo clippy",
+            "label": "Semantiq: Start MCP server",
             "type": "shell",
-            "command": "cargo",
-            "args": ["clippy"],
-            "group": "build",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "cargo run -- index",
-            "type": "shell",
-            "command": "cargo",
-            "args": ["run", "--", "index"],
+            "command": "semantiq",
+            "args": ["serve"],
             "problemMatcher": []
         },
         {
-            "label": "cargo run -- serve",
+            "label": "Semantiq: Show stats",
             "type": "shell",
-            "command": "cargo",
-            "args": ["run", "--", "serve"],
+            "command": "semantiq",
+            "args": ["stats"],
             "problemMatcher": []
         },
         {
-            "label": "cargo run -- stats",
+            "label": "Semantiq: Search",
             "type": "shell",
-            "command": "cargo",
-            "args": ["run", "--", "stats"],
+            "command": "semantiq",
+            "args": ["search", "${input:searchQuery}"],
             "problemMatcher": []
         }
     ],
     "inputs": [
         {
-            "id": "crateName",
+            "id": "searchQuery",
             "type": "promptString",
-            "description": "Enter the crate name"
+            "description": "Enter search query"
         }
     ]
 }
@@ -285,74 +272,7 @@ node_modules/
     // 9. Create .vscode/launch.json
     let launch_json = r#"{
     "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug: index",
-            "cargo": {
-                "args": ["build", "--bin=semantiq", "--package=semantiq"],
-                "filter": {
-                    "name": "semantiq",
-                    "kind": "bin"
-                }
-            },
-            "args": ["index"],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug: serve",
-            "cargo": {
-                "args": ["build", "--bin=semantiq", "--package=semantiq"],
-                "filter": {
-                    "name": "semantiq",
-                    "kind": "bin"
-                }
-            },
-            "args": ["serve"],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug: search",
-            "cargo": {
-                "args": ["build", "--bin=semantiq", "--package=semantiq"],
-                "filter": {
-                    "name": "semantiq",
-                    "kind": "bin"
-                }
-            },
-            "args": ["search", "${input:searchQuery}"],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug: unit tests",
-            "cargo": {
-                "args": ["test", "--no-run", "--lib", "--package=${input:testCrate}"],
-                "filter": {
-                    "kind": "lib"
-                }
-            },
-            "cwd": "${workspaceFolder}"
-        }
-    ],
-    "inputs": [
-        {
-            "id": "searchQuery",
-            "type": "promptString",
-            "description": "Enter search query"
-        },
-        {
-            "id": "testCrate",
-            "type": "promptString",
-            "description": "Enter crate name to test"
-        }
-    ]
+    "configurations": []
 }
 "#;
     write_if_not_exists(
@@ -364,11 +284,9 @@ node_modules/
     // 10. Create .vscode/extensions.json
     let extensions_json = r#"{
     "recommendations": [
-        "rust-lang.rust-analyzer",
-        "serayuzgur.crates",
-        "tamasfe.even-better-toml",
         "usernamehw.errorlens",
-        "vadimcn.vscode-lldb"
+        "eamodio.gitlens",
+        "esbenp.prettier-vscode"
     ]
 }
 "#;
