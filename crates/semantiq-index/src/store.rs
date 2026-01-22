@@ -87,9 +87,9 @@ fn init_sqlite_vec() {
                 *const (),
                 unsafe extern "C" fn(
                     *mut rusqlite::ffi::sqlite3,
-                    *mut *mut i8,
+                    *mut *mut std::os::raw::c_char,
                     *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> i32,
+                ) -> std::os::raw::c_int,
             >(sqlite3_vec_init as *const ())));
         }
         tracing::debug!("sqlite-vec extension registered");
