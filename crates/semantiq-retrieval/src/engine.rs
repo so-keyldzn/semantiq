@@ -130,7 +130,9 @@ impl RetrievalEngine {
         // Use sqlite-vec's efficient vector search instead of loading all chunks
         // This performs the similarity search directly in the database using
         // optimized vector indices, avoiding O(n) memory usage for large codebases.
-        let similar_chunks = self.store.search_similar_chunks(&query_embedding, limit * 2)?;
+        let similar_chunks = self
+            .store
+            .search_similar_chunks(&query_embedding, limit * 2)?;
 
         if similar_chunks.is_empty() {
             debug!("No similar chunks found via vector search");
@@ -158,7 +160,8 @@ impl RetrievalEngine {
         let chunks = self.store.get_chunks_by_ids(&chunk_ids)?;
 
         // Create a map from chunk_id to distance for scoring
-        let distance_map: std::collections::HashMap<i64, f32> = filtered_results.into_iter().collect();
+        let distance_map: std::collections::HashMap<i64, f32> =
+            filtered_results.into_iter().collect();
 
         // Convert to SearchResults with proper scoring and filtering
         let results: Vec<SearchResult> = chunks
@@ -177,10 +180,10 @@ impl RetrievalEngine {
                 let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
 
                 // Filter by extension
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
-                    if !options.accepts_extension(ext) {
-                        return None;
-                    }
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
+                    && !options.accepts_extension(ext)
+                {
+                    return None;
                 }
 
                 Some(
@@ -246,7 +249,8 @@ impl RetrievalEngine {
         }
 
         // Find usages via text search
-        let usage_results = self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
+        let usage_results =
+            self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
         for mut result in usage_results {
             result.kind = SearchResultKind::Reference;
             result.metadata.match_type = Some("usage".to_string());
@@ -338,7 +342,8 @@ impl RetrievalEngine {
         }
 
         // Count usages
-        let usage_results = self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
+        let usage_results =
+            self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
         let usage_count = usage_results.len();
 
         Ok(SymbolExplanation {
@@ -372,10 +377,10 @@ impl RetrievalEngine {
                 let file_path = self.get_file_path(symbol.file_id)?;
 
                 // Filter by extension
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str()) {
-                    if !options.accepts_extension(ext) {
-                        continue;
-                    }
+                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
+                    && !options.accepts_extension(ext)
+                {
+                    continue;
                 }
 
                 let content = symbol
@@ -518,11 +523,7 @@ impl RetrievalEngine {
                 for result in results {
                     // Avoid duplicate lines
                     if seen_lines.insert(result.line_number) {
-                        matches.push((
-                            result.line_number,
-                            result.line_content,
-                            result.score,
-                        ));
+                        matches.push((result.line_number, result.line_content, result.score));
                     }
                 }
             }

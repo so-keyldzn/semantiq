@@ -1,12 +1,12 @@
 use crate::schema::{ChunkRecord, DependencyRecord, FileRecord, SymbolRecord, init_schema};
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, ffi::sqlite3_auto_extension, params};
-use sqlite_vec::sqlite3_vec_init;
-use std::sync::Once;
 use semantiq_parser::{CodeChunk, PARSER_VERSION, Symbol};
+use sqlite_vec::sqlite3_vec_init;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -79,10 +79,18 @@ fn init_sqlite_vec() {
     SQLITE_VEC_INIT.call_once(|| {
         // SAFETY: See function-level documentation for safety invariants.
         // The transmute is required because sqlite3_auto_extension expects an
-        // Option<unsafe extern "C" fn()> but sqlite3_vec_init has additional parameters.
+        // Option<unsafe extern "C" fn()> but sqlite3_vec_init is declared without parameters.
         // SQLite's extension loading mechanism handles the parameter passing correctly.
+        // This follows the exact pattern from the sqlite-vec crate's own test code.
         unsafe {
-            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+            sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut rusqlite::ffi::sqlite3,
+                    *mut *mut i8,
+                    *const rusqlite::ffi::sqlite3_api_routines,
+                ) -> i32,
+            >(sqlite3_vec_init as *const ())));
         }
         tracing::debug!("sqlite-vec extension registered");
     });
@@ -463,9 +471,16 @@ impl IndexStore {
 
     /// Search for similar chunks using vector similarity (sqlite-vec)
     /// Returns chunk IDs with their distances, ordered by similarity (closest first)
-    pub fn search_similar_chunks(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    pub fn search_similar_chunks(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         self.with_conn(|conn| {
-            let embedding_bytes: Vec<u8> = query_embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let embedding_bytes: Vec<u8> = query_embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
 
             let mut stmt = conn.prepare(
                 "SELECT chunk_id, distance
@@ -720,16 +735,16 @@ impl IndexStore {
             // 2. Match without extension (e.g., "/hero", "./hero")
             // 3. Match with parent dir (e.g., "sections/hero")
             let mut patterns = vec![
-                format!("%{}", escape_like(filename)),          // ends with utils.rs or hero.tsx
-                format!("%/{}", escape_like(basename)),         // ends with /hero
-                format!("./{}", escape_like(basename)),         // ./hero
-                format!("../{}", escape_like(basename)),        // ../hero
-                format!("%{}", escape_like(basename)),          // anything ending with hero
+                format!("%{}", escape_like(filename)), // ends with utils.rs or hero.tsx
+                format!("%/{}", escape_like(basename)), // ends with /hero
+                format!("./{}", escape_like(basename)), // ./hero
+                format!("../{}", escape_like(basename)), // ../hero
+                format!("%{}", escape_like(basename)), // anything ending with hero
             ];
 
             // Add parent/name pattern if available
             if let Some(ref parent_name) = parent_and_name {
-                patterns.push(format!("%{}", escape_like(parent_name)));  // sections/hero
+                patterns.push(format!("%{}", escape_like(parent_name))); // sections/hero
             }
 
             let mut all_results = Vec::new();
@@ -783,7 +798,7 @@ impl IndexStore {
 
     /// Vérifie si l'index doit être recréé (changement de parser)
     pub fn needs_full_reindex(&self) -> Result<bool> {
-        self.with_conn(|conn| Self::needs_full_reindex_impl(conn))
+        self.with_conn(Self::needs_full_reindex_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -816,7 +831,7 @@ impl IndexStore {
 
     /// Met à jour la version du parser dans metadata
     pub fn set_parser_version(&self) -> Result<()> {
-        self.with_conn(|conn| Self::set_parser_version_impl(conn))
+        self.with_conn(Self::set_parser_version_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction
@@ -830,7 +845,7 @@ impl IndexStore {
 
     /// Supprime toutes les données indexées
     pub fn clear_all_data(&self) -> Result<()> {
-        self.with_conn(|conn| Self::clear_all_data_impl(conn))
+        self.with_conn(Self::clear_all_data_impl)
     }
 
     /// Implémentation interne pour réutilisation dans une transaction

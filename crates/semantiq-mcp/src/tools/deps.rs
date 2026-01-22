@@ -7,7 +7,7 @@ pub struct SemantiqDeps {
     pub depth: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DependencyDirection {
     /// What this file imports
@@ -15,13 +15,8 @@ pub enum DependencyDirection {
     /// What imports this file
     ImportedBy,
     /// Both directions
+    #[default]
     Both,
-}
-
-impl Default for DependencyDirection {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 impl SemantiqDeps {

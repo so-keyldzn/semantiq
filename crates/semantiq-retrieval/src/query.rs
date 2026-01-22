@@ -157,20 +157,20 @@ impl QueryExpander {
 
     fn is_camel_case(&self, s: &str) -> bool {
         let mut chars = s.chars();
-        if let Some(first) = chars.next() {
-            if first.is_lowercase() {
-                return chars.any(|c| c.is_uppercase());
-            }
+        if let Some(first) = chars.next()
+            && first.is_lowercase()
+        {
+            return chars.any(|c| c.is_uppercase());
         }
         false
     }
 
     fn is_pascal_case(&self, s: &str) -> bool {
         let mut chars = s.chars();
-        if let Some(first) = chars.next() {
-            if first.is_uppercase() {
-                return chars.any(|c| c.is_uppercase() || c.is_lowercase());
-            }
+        if let Some(first) = chars.next()
+            && first.is_uppercase()
+        {
+            return chars.any(|c| c.is_uppercase() || c.is_lowercase());
         }
         false
     }
@@ -199,14 +199,37 @@ impl SearchOptions {
 
     /// Extensions excluded by default when no file_types filter is set
     pub const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[
-        "json", "lock", "yaml", "yml", "md", "txt", "toml", "xml", "csv", "log", "env",
-        "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc",
+        "json",
+        "lock",
+        "yaml",
+        "yml",
+        "md",
+        "txt",
+        "toml",
+        "xml",
+        "csv",
+        "log",
+        "env",
+        "gitignore",
+        "dockerignore",
+        "editorconfig",
+        "prettierrc",
+        "eslintrc",
     ];
 
     /// Valid symbol kinds for filtering
     pub const VALID_SYMBOL_KINDS: &'static [&'static str] = &[
-        "function", "method", "class", "struct", "enum", "interface", "trait", "module",
-        "variable", "constant", "type",
+        "function",
+        "method",
+        "class",
+        "struct",
+        "enum",
+        "interface",
+        "trait",
+        "module",
+        "variable",
+        "constant",
+        "type",
     ];
 
     /// Create new SearchOptions with default values
@@ -254,7 +277,9 @@ impl SearchOptions {
     pub fn accepts_symbol_kind(&self, kind: &str) -> bool {
         if let Some(ref symbol_kinds) = self.symbol_kinds {
             let kind_lower = kind.to_lowercase();
-            symbol_kinds.iter().any(|sk| sk.to_lowercase() == kind_lower)
+            symbol_kinds
+                .iter()
+                .any(|sk| sk.to_lowercase() == kind_lower)
         } else {
             // Accept all symbol kinds if no filter is set
             true
@@ -364,7 +389,7 @@ mod tests {
         // Should include original term
         assert!(terms.contains(&"get_user"));
         // Should include expanded terms
-        assert!(terms.len() >= 1);
+        assert!(!terms.is_empty());
     }
 
     #[test]
@@ -438,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_query_expander_default() {
-        let expander = QueryExpander::default();
+        let expander = QueryExpander::new();
         // Should work the same as new()
         assert_eq!(expander.snake_to_camel("test_case"), "testCase");
     }
@@ -498,7 +523,8 @@ mod tests {
 
     #[test]
     fn test_accepts_extension_custom_filter() {
-        let options = SearchOptions::new().with_file_types(vec!["rs".to_string(), "ts".to_string()]);
+        let options =
+            SearchOptions::new().with_file_types(vec!["rs".to_string(), "ts".to_string()]);
         assert!(options.accepts_extension("rs"));
         assert!(options.accepts_extension("RS"));
         assert!(options.accepts_extension("ts"));
@@ -520,8 +546,8 @@ mod tests {
 
     #[test]
     fn test_accepts_symbol_kind_with_filter() {
-        let options =
-            SearchOptions::new().with_symbol_kinds(vec!["function".to_string(), "class".to_string()]);
+        let options = SearchOptions::new()
+            .with_symbol_kinds(vec!["function".to_string(), "class".to_string()]);
         assert!(options.accepts_symbol_kind("function"));
         assert!(options.accepts_symbol_kind("FUNCTION")); // case insensitive
         assert!(options.accepts_symbol_kind("class"));

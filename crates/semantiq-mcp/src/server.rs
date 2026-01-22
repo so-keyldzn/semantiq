@@ -444,14 +444,12 @@ mod tests {
                 .unwrap_or(""),
         );
 
-        if let Some(lang) = lang {
-            if let Ok(mut support) = semantiq_parser::LanguageSupport::new() {
-                if let Ok(tree) = support.parse(lang, content) {
-                    if let Ok(symbols) = semantiq_parser::SymbolExtractor::extract(&tree, content, lang) {
-                        let _ = store.insert_symbols(file_id, &symbols);
-                    }
-                }
-            }
+        if let Some(lang) = lang
+            && let Ok(mut support) = semantiq_parser::LanguageSupport::new()
+            && let Ok(tree) = support.parse(lang, content)
+            && let Ok(symbols) = semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
+        {
+            let _ = store.insert_symbols(file_id, &symbols);
         }
 
         file_id
@@ -536,7 +534,12 @@ mod tests {
         let (server, _temp) = create_test_server();
 
         index_test_file(&server.store, "test.rs", "fn rust_func() {}", "rust");
-        index_test_file(&server.store, "test.py", "def python_func(): pass", "python");
+        index_test_file(
+            &server.store,
+            "test.py",
+            "def python_func(): pass",
+            "python",
+        );
 
         let result = server
             .semantiq_search(
@@ -559,13 +562,7 @@ mod tests {
         index_test_file(&server.store, "test.rs", "fn exact_match() {}", "rust");
 
         let result = server
-            .semantiq_search(
-                "exact_match".to_string(),
-                Some(10),
-                Some(0.9),
-                None,
-                None,
-            )
+            .semantiq_search("exact_match".to_string(), Some(10), Some(0.9), None, None)
             .await;
 
         assert!(result.is_ok());
@@ -656,12 +653,7 @@ mod tests {
     async fn test_deps_returns_formatted_output() {
         let (server, _temp) = create_test_server();
 
-        let file_id = index_test_file(
-            &server.store,
-            "main.rs",
-            "use crate::utils;",
-            "rust",
-        );
+        let file_id = index_test_file(&server.store, "main.rs", "use crate::utils;", "rust");
 
         // Add a dependency
         server
@@ -700,9 +692,7 @@ mod tests {
     async fn test_deps_nonexistent_file() {
         let (server, _temp) = create_test_server();
 
-        let result = server
-            .semantiq_deps("nonexistent.rs".to_string())
-            .await;
+        let result = server.semantiq_deps("nonexistent.rs".to_string()).await;
 
         assert!(result.is_ok());
         let output = result.unwrap();

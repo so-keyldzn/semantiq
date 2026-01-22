@@ -106,14 +106,14 @@ impl ChunkExtractor {
         language: Language,
         boundaries: &mut Vec<SemanticBoundary>,
     ) {
-        if self.is_boundary_node(node.kind(), language) {
-            if let Some(name) = self.get_node_name(node, source) {
-                boundaries.push(SemanticBoundary {
-                    name,
-                    start_line: node.start_position().row,
-                    end_line: node.end_position().row,
-                });
-            }
+        if self.is_boundary_node(node.kind(), language)
+            && let Some(name) = self.get_node_name(node, source)
+        {
+            boundaries.push(SemanticBoundary {
+                name,
+                start_line: node.start_position().row,
+                end_line: node.end_position().row,
+            });
         }
 
         let mut cursor = node.walk();
@@ -190,10 +190,7 @@ impl ChunkExtractor {
             Language::Yaml => matches!(kind, "block_mapping" | "block_sequence"),
             Language::Toml => matches!(kind, "table" | "array"),
             Language::Bash => matches!(kind, "function_definition" | "compound_statement"),
-            Language::Elixir => matches!(
-                kind,
-                "call" | "anonymous_function" | "do_block"
-            ),
+            Language::Elixir => matches!(kind, "call" | "anonymous_function" | "do_block"),
         }
     }
 
@@ -202,20 +199,20 @@ impl ChunkExtractor {
 
         // Try common name fields
         for field in &["name", "declarator"] {
-            if let Some(name_node) = node.child_by_field_name(field) {
-                if let Ok(text) = name_node.utf8_text(source_bytes) {
-                    return Some(text.to_string());
-                }
+            if let Some(name_node) = node.child_by_field_name(field)
+                && let Ok(text) = name_node.utf8_text(source_bytes)
+            {
+                return Some(text.to_string());
             }
         }
 
         // Fallback to looking for identifier
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "identifier" || child.kind() == "type_identifier" {
-                if let Ok(text) = child.utf8_text(source_bytes) {
-                    return Some(text.to_string());
-                }
+            if (child.kind() == "identifier" || child.kind() == "type_identifier")
+                && let Ok(text) = child.utf8_text(source_bytes)
+            {
+                return Some(text.to_string());
             }
         }
 

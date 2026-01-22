@@ -483,7 +483,7 @@ mod tests {
     fn test_language_support_new() {
         // Test that LanguageSupport::new() succeeds and initializes properly
         let support = LanguageSupport::new().expect("Failed to create LanguageSupport");
-        assert!(LanguageSupport::supported_languages().len() > 0);
+        assert!(!LanguageSupport::supported_languages().is_empty());
         drop(support);
     }
 }
