@@ -16,9 +16,10 @@ pub const DEFAULT_MIN_SIMILARITY: f32 = 0.3;
 pub const MIN_SAMPLES_FOR_CALIBRATION: usize = 100;
 
 /// Confidence level for calibrated thresholds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Confidence {
     /// No calibration data available, using defaults.
+    #[default]
     None,
     /// Few samples (< 500), thresholds may not be reliable.
     Low,
@@ -45,12 +46,6 @@ impl Confidence {
     /// Check if this confidence level is sufficient for using calibrated thresholds.
     pub fn is_sufficient(&self) -> bool {
         matches!(self, Self::Medium | Self::High)
-    }
-}
-
-impl Default for Confidence {
-    fn default() -> Self {
-        Self::None
     }
 }
 

@@ -289,7 +289,7 @@ impl DistanceCollector {
 
         // Sample every N observations where N = 1/sample_rate
         let n = (1.0 / self.config.sample_rate) as u64;
-        *counter % n == 0
+        (*counter).is_multiple_of(n)
     }
 }
 
