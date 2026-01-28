@@ -2,6 +2,26 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [0.4.0] - 2026-01-28
+
+### Added
+- **JSON logging support** - Structured logging throughout the codebase
+- **JSON logging by default** for `serve` command - Better integration with log aggregators
+- **MCP tests** - Comprehensive test coverage for MCP server functionality
+- **CI and security workflows** - Automated testing and security scanning
+
+### Changed
+- **`init-cursor` command is now language-agnostic** - Works with any project type
+- Updated `deny.toml` to v2 schema
+
+### Fixed
+- Cross-platform FFI compatibility using `c_char`
+- Clippy compatibility with `is_multiple_of()`
+- Cargo audit integration (replaced rustsec/audit-check action)
+- Various clippy warnings resolved throughout codebase
+- Added CDLA-Permissive-2.0 license for webpki-roots dependency
+- Cross-compilation for aarch64-linux using `cross`
+
 ## [0.3.4] - 2026-01-20
 
 ### Added

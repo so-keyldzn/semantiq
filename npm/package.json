@@ -1,6 +1,6 @@
 {
   "name": "semantiq-mcp",
-  "version": "0.2.7",
+  "version": "0.4.0",
   "description": "Semantic code understanding for AI tools - One MCP Server for all AI coding assistants",
   "bin": {
     "semantiq": "bin/semantiq"
