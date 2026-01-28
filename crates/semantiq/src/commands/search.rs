@@ -52,6 +52,11 @@ pub async fn search(
 
     let results = engine.search(query, limit, Some(options))?;
 
+    // Flush distance observations for ML calibration
+    if let Err(e) = engine.flush_observations() {
+        tracing::debug!("Failed to flush observations: {}", e);
+    }
+
     println!(
         "Search results for '{}' ({} ms)",
         query, results.search_time_ms

@@ -1,5 +1,6 @@
 //! CLI command implementations for Semantiq
 
+mod calibrate;
 mod common;
 mod index;
 mod init;
@@ -8,6 +9,7 @@ mod search;
 mod serve;
 mod stats;
 
+pub use calibrate::calibrate;
 pub use index::index;
 pub use init::init;
 pub use init_cursor::init_cursor;

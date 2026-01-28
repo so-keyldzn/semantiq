@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Embedding dimension (MiniLM-L6-v2 produces 384-dimensional vectors)
 pub const EMBEDDING_DIMENSION: usize = 384;
@@ -101,6 +101,36 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             INSERT INTO symbols_fts(rowid, name, signature, doc_comment)
             VALUES (new.id, new.name, new.signature, new.doc_comment);
         END;
+
+        -- Distance observations for threshold calibration
+        -- Records distances observed during semantic search for ML-based calibration
+        CREATE TABLE IF NOT EXISTS distance_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            language TEXT NOT NULL,
+            distance REAL NOT NULL,
+            query_hash INTEGER NOT NULL,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(query_hash, language)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_obs_language ON distance_observations(language);
+        CREATE INDEX IF NOT EXISTS idx_obs_timestamp ON distance_observations(timestamp);
+
+        -- Calibrated thresholds per language
+        -- Stores ML-calibrated thresholds based on observed distance distributions
+        CREATE TABLE IF NOT EXISTS threshold_calibration (
+            language TEXT PRIMARY KEY,
+            max_distance REAL NOT NULL,
+            min_similarity REAL NOT NULL,
+            confidence TEXT NOT NULL,
+            sample_count INTEGER NOT NULL,
+            p50_distance REAL,
+            p90_distance REAL,
+            p95_distance REAL,
+            mean_distance REAL,
+            std_distance REAL,
+            calibrated_at INTEGER NOT NULL
+        );
         "#,
     )?;
 
