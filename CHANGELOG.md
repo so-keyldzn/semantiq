@@ -2,6 +2,38 @@
 
 All notable changes to Semantiq will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Adaptive ML Thresholds** - Automatic calibration of semantic search thresholds per programming language
+  - Bootstrap mode: Collects 100% of distance observations until 500 samples
+  - Production mode: Switches to 10% sampling after bootstrap
+  - Auto-calibration: Triggers automatically when bootstrap completes
+  - Percentile-based thresholds: Uses p90 for max_distance, p10 for min_similarity
+  - Per-language calibration with fallback cascade (language → global → defaults)
+- **New `calibrate` CLI command** - Manual threshold calibration with `--dry-run` option
+- **ML stats in `stats` command** - Shows bootstrap progress, observations per language, calibrated thresholds
+- **New database tables** - `distance_observations` and `threshold_calibration` for ML data
+- **CI workflows for `dev` branch** - Tests, Clippy, format checks, and multi-platform builds
+
+### Changed
+- **Refactored `store.rs`** (2108 lines → 8 modules) - Better code organization
+  - `store/mod.rs` - Core IndexStore struct and helpers
+  - `store/files.rs` - File operations and parser version management
+  - `store/symbols.rs` - Symbol search and insertion
+  - `store/chunks.rs` - Chunk operations and embeddings
+  - `store/dependencies.rs` - Dependency graph operations
+  - `store/observations.rs` - ML distance observation storage
+  - `store/calibrations.rs` - Threshold calibration persistence
+  - `store/tests.rs` - All unit tests
+- **Refactored `engine.rs`** (1049 lines → 5 modules) - Cleaner architecture
+  - `engine/mod.rs` - RetrievalEngine struct and construction
+  - `engine/search.rs` - Semantic, symbol, and text search
+  - `engine/threshold.rs` - Adaptive threshold management
+  - `engine/analysis.rs` - References, dependencies, symbol explanation
+  - `engine/tests.rs` - Unit tests
+- Schema version bumped to 3 (triggers automatic reindex)
+
 ## [0.4.0] - 2026-01-28
 
 ### Added
