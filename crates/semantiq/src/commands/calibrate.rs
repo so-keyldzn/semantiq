@@ -1,7 +1,7 @@
 //! Calibrate semantic search thresholds based on collected observations.
 
 use anyhow::{Context, Result};
-use semantiq_index::IndexStore;
+use semantiq_index::{CalibrationData, IndexStore};
 use semantiq_retrieval::{CalibrationConfig, ThresholdCalibrator, format_calibration_summary};
 use std::path::PathBuf;
 
@@ -107,18 +107,19 @@ fn calibrate_language(
 
         if !dry_run {
             let stats = result.thresholds.stats.as_ref();
-            store.save_calibration(
-                language,
-                result.thresholds.max_distance,
-                result.thresholds.min_similarity,
-                &result.thresholds.confidence.to_string(),
-                result.thresholds.sample_count,
-                stats.map(|s| s.p50),
-                stats.map(|s| s.p90),
-                stats.map(|s| s.p95),
-                stats.map(|s| s.mean),
-                stats.map(|s| s.std_dev),
-            )?;
+            let data = CalibrationData {
+                language: language.to_string(),
+                max_distance: result.thresholds.max_distance,
+                min_similarity: result.thresholds.min_similarity,
+                confidence: result.thresholds.confidence.to_string(),
+                sample_count: result.thresholds.sample_count,
+                p50_distance: stats.map(|s| s.p50),
+                p90_distance: stats.map(|s| s.p90),
+                p95_distance: stats.map(|s| s.p95),
+                mean_distance: stats.map(|s| s.mean),
+                std_distance: stats.map(|s| s.std_dev),
+            };
+            store.save_calibration(&data)?;
             println!();
             println!("Calibration saved to database.");
         } else {
@@ -154,36 +155,38 @@ fn calibrate_all(store: &IndexStore, min_samples: usize, dry_run: bool) -> Resul
         for (language, thresholds) in &config.per_language {
             if thresholds.sample_count >= min_samples {
                 let stats = thresholds.stats.as_ref();
-                store.save_calibration(
-                    language,
-                    thresholds.max_distance,
-                    thresholds.min_similarity,
-                    &thresholds.confidence.to_string(),
-                    thresholds.sample_count,
-                    stats.map(|s| s.p50),
-                    stats.map(|s| s.p90),
-                    stats.map(|s| s.p95),
-                    stats.map(|s| s.mean),
-                    stats.map(|s| s.std_dev),
-                )?;
+                let data = CalibrationData {
+                    language: language.clone(),
+                    max_distance: thresholds.max_distance,
+                    min_similarity: thresholds.min_similarity,
+                    confidence: thresholds.confidence.to_string(),
+                    sample_count: thresholds.sample_count,
+                    p50_distance: stats.map(|s| s.p50),
+                    p90_distance: stats.map(|s| s.p90),
+                    p95_distance: stats.map(|s| s.p95),
+                    mean_distance: stats.map(|s| s.mean),
+                    std_distance: stats.map(|s| s.std_dev),
+                };
+                store.save_calibration(&data)?;
             }
         }
 
         // Save global calibration
         if config.global.sample_count >= min_samples {
             let stats = config.global.stats.as_ref();
-            store.save_calibration(
-                "_global",
-                config.global.max_distance,
-                config.global.min_similarity,
-                &config.global.confidence.to_string(),
-                config.global.sample_count,
-                stats.map(|s| s.p50),
-                stats.map(|s| s.p90),
-                stats.map(|s| s.p95),
-                stats.map(|s| s.mean),
-                stats.map(|s| s.std_dev),
-            )?;
+            let data = CalibrationData {
+                language: "_global".to_string(),
+                max_distance: config.global.max_distance,
+                min_similarity: config.global.min_similarity,
+                confidence: config.global.confidence.to_string(),
+                sample_count: config.global.sample_count,
+                p50_distance: stats.map(|s| s.p50),
+                p90_distance: stats.map(|s| s.p90),
+                p95_distance: stats.map(|s| s.p95),
+                mean_distance: stats.map(|s| s.mean),
+                std_distance: stats.map(|s| s.std_dev),
+            };
+            store.save_calibration(&data)?;
         }
 
         println!();

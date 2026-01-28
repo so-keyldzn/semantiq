@@ -2,7 +2,7 @@
 
 use super::IndexStore;
 use anyhow::Result;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use tracing::debug;
 
 /// Record of calibrated thresholds loaded from the database.
@@ -21,21 +21,24 @@ pub struct CalibrationRecord {
     pub calibrated_at: i64,
 }
 
+/// Data for saving a calibration (reduces function arguments).
+#[derive(Debug, Clone)]
+pub struct CalibrationData {
+    pub language: String,
+    pub max_distance: f32,
+    pub min_similarity: f32,
+    pub confidence: String,
+    pub sample_count: usize,
+    pub p50_distance: Option<f32>,
+    pub p90_distance: Option<f32>,
+    pub p95_distance: Option<f32>,
+    pub mean_distance: Option<f32>,
+    pub std_distance: Option<f32>,
+}
+
 impl IndexStore {
     /// Save calibrated thresholds for a language.
-    pub fn save_calibration(
-        &self,
-        language: &str,
-        max_distance: f32,
-        min_similarity: f32,
-        confidence: &str,
-        sample_count: usize,
-        p50_distance: Option<f32>,
-        p90_distance: Option<f32>,
-        p95_distance: Option<f32>,
-        mean_distance: Option<f32>,
-        std_distance: Option<f32>,
-    ) -> Result<()> {
+    pub fn save_calibration(&self, data: &CalibrationData) -> Result<()> {
         let calibrated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -48,23 +51,23 @@ impl IndexStore {
                   p50_distance, p90_distance, p95_distance, mean_distance, std_distance, calibrated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
-                    language,
-                    max_distance,
-                    min_similarity,
-                    confidence,
-                    sample_count as i64,
-                    p50_distance,
-                    p90_distance,
-                    p95_distance,
-                    mean_distance,
-                    std_distance,
+                    data.language,
+                    data.max_distance,
+                    data.min_similarity,
+                    data.confidence,
+                    data.sample_count as i64,
+                    data.p50_distance,
+                    data.p90_distance,
+                    data.p95_distance,
+                    data.mean_distance,
+                    data.std_distance,
                     calibrated_at
                 ],
             )?;
 
             debug!(
                 "Saved calibration for {}: max_dist={:.3}, min_sim={:.3}, samples={}",
-                language, max_distance, min_similarity, sample_count
+                data.language, data.max_distance, data.min_similarity, data.sample_count
             );
 
             Ok(())

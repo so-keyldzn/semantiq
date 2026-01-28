@@ -643,18 +643,18 @@ fn test_save_and_load_calibration() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .save_calibration(
-            "rust",
-            1.0,
-            0.4,
-            "medium",
-            1000,
-            Some(0.8),
-            Some(1.1),
-            Some(1.2),
-            Some(0.85),
-            Some(0.15),
-        )
+        .save_calibration(&CalibrationData {
+            language: "rust".to_string(),
+            max_distance: 1.0,
+            min_similarity: 0.4,
+            confidence: "medium".to_string(),
+            sample_count: 1000,
+            p50_distance: Some(0.8),
+            p90_distance: Some(1.1),
+            p95_distance: Some(1.2),
+            mean_distance: Some(0.85),
+            std_distance: Some(0.15),
+        })
         .unwrap();
 
     let calibration = store.load_calibration("rust").unwrap().unwrap();
@@ -671,14 +671,32 @@ fn test_load_all_calibrations() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .save_calibration(
-            "rust", 1.0, 0.4, "medium", 1000, None, None, None, None, None,
-        )
+        .save_calibration(&CalibrationData {
+            language: "rust".to_string(),
+            max_distance: 1.0,
+            min_similarity: 0.4,
+            confidence: "medium".to_string(),
+            sample_count: 1000,
+            p50_distance: None,
+            p90_distance: None,
+            p95_distance: None,
+            mean_distance: None,
+            std_distance: None,
+        })
         .unwrap();
     store
-        .save_calibration(
-            "python", 1.1, 0.35, "high", 5000, None, None, None, None, None,
-        )
+        .save_calibration(&CalibrationData {
+            language: "python".to_string(),
+            max_distance: 1.1,
+            min_similarity: 0.35,
+            confidence: "high".to_string(),
+            sample_count: 5000,
+            p50_distance: None,
+            p90_distance: None,
+            p95_distance: None,
+            mean_distance: None,
+            std_distance: None,
+        })
         .unwrap();
 
     let calibrations = store.load_all_calibrations().unwrap();
@@ -690,9 +708,18 @@ fn test_clear_calibrations() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .save_calibration(
-            "rust", 1.0, 0.4, "medium", 1000, None, None, None, None, None,
-        )
+        .save_calibration(&CalibrationData {
+            language: "rust".to_string(),
+            max_distance: 1.0,
+            min_similarity: 0.4,
+            confidence: "medium".to_string(),
+            sample_count: 1000,
+            p50_distance: None,
+            p90_distance: None,
+            p95_distance: None,
+            mean_distance: None,
+            std_distance: None,
+        })
         .unwrap();
 
     let before = store.load_all_calibrations().unwrap();

@@ -21,7 +21,7 @@ use std::sync::Once;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // Re-export types
-pub use calibrations::CalibrationRecord;
+pub use calibrations::{CalibrationData, CalibrationRecord};
 
 /// Global initializer for sqlite-vec extension.
 ///

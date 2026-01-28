@@ -389,7 +389,11 @@ impl RetrievalEngine {
     }
 
     /// Find text matches in content.
-    pub(crate) fn find_text_matches(&self, content: &str, query: &Query) -> Vec<(usize, String, f32)> {
+    pub(crate) fn find_text_matches(
+        &self,
+        content: &str,
+        query: &Query,
+    ) -> Vec<(usize, String, f32)> {
         let searcher = TextSearcher::new(true);
         let terms = query.all_terms();
         let mut matches = Vec::new();
@@ -418,7 +422,12 @@ impl RetrievalEngine {
     }
 
     /// Read specific lines from a file.
-    pub(crate) fn read_file_lines(&self, file_path: &str, start: usize, end: usize) -> Result<String> {
+    pub(crate) fn read_file_lines(
+        &self,
+        file_path: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<String> {
         let full_path = Path::new(&self.root_path).join(file_path);
         let content = fs::read_to_string(full_path)?;
         let lines: Vec<&str> = content.lines().collect();

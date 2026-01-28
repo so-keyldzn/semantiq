@@ -152,12 +152,11 @@ impl ThresholdConfig {
     /// 3. Default thresholds
     pub fn get(&self, language: Option<&str>) -> (f32, f32) {
         // Try language-specific thresholds first
-        if let Some(lang) = language {
-            if let Some(thresholds) = self.per_language.get(lang) {
-                if thresholds.should_use() {
-                    return (thresholds.max_distance, thresholds.min_similarity);
-                }
-            }
+        if let Some(thresholds) = language
+            .and_then(|lang| self.per_language.get(lang))
+            .filter(|t| t.should_use())
+        {
+            return (thresholds.max_distance, thresholds.min_similarity);
         }
 
         // Try global thresholds
@@ -263,7 +262,7 @@ mod tests {
                 stats: None,
             },
         );
-        let (max_dist, min_sim) = config.get(Some("rust"));
+        let (max_dist, _min_sim) = config.get(Some("rust"));
         assert!((max_dist - DEFAULT_MAX_DISTANCE).abs() < 0.001);
 
         // Add medium confidence calibration - should use it

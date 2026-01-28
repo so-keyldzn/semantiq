@@ -41,7 +41,8 @@ pub async fn stats(database: Option<PathBuf>) -> Result<()> {
     println!("ML Calibration:");
 
     // Show bootstrap status
-    let bootstrap_progress = (total_observations as f32 / BOOTSTRAP_THRESHOLD as f32 * 100.0).min(100.0) as u8;
+    let bootstrap_progress =
+        (total_observations as f32 / BOOTSTRAP_THRESHOLD as f32 * 100.0).min(100.0) as u8;
     if total_observations < BOOTSTRAP_THRESHOLD {
         println!(
             "  Bootstrap: {}% ({}/{} observations)",

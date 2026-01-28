@@ -1,9 +1,11 @@
 //! Threshold management and calibration for RetrievalEngine.
 
 use super::RetrievalEngine;
-use crate::threshold::{CalibrationConfig, Confidence, LanguageThresholds, ThresholdCalibrator, ThresholdConfig};
+use crate::threshold::{
+    CalibrationConfig, Confidence, LanguageThresholds, ThresholdCalibrator, ThresholdConfig,
+};
 use anyhow::Result;
-use semantiq_index::IndexStore;
+use semantiq_index::{CalibrationData, IndexStore};
 use tracing::{debug, info, warn};
 
 impl RetrievalEngine {
@@ -124,36 +126,38 @@ impl RetrievalEngine {
         for (language, thresholds) in &config.per_language {
             if thresholds.sample_count >= 50 {
                 let stats = thresholds.stats.as_ref();
-                self.store.save_calibration(
-                    language,
-                    thresholds.max_distance,
-                    thresholds.min_similarity,
-                    &thresholds.confidence.to_string(),
-                    thresholds.sample_count,
-                    stats.map(|s| s.p50),
-                    stats.map(|s| s.p90),
-                    stats.map(|s| s.p95),
-                    stats.map(|s| s.mean),
-                    stats.map(|s| s.std_dev),
-                )?;
+                let data = CalibrationData {
+                    language: language.clone(),
+                    max_distance: thresholds.max_distance,
+                    min_similarity: thresholds.min_similarity,
+                    confidence: thresholds.confidence.to_string(),
+                    sample_count: thresholds.sample_count,
+                    p50_distance: stats.map(|s| s.p50),
+                    p90_distance: stats.map(|s| s.p90),
+                    p95_distance: stats.map(|s| s.p95),
+                    mean_distance: stats.map(|s| s.mean),
+                    std_distance: stats.map(|s| s.std_dev),
+                };
+                self.store.save_calibration(&data)?;
             }
         }
 
         // Save global calibration
         if config.global.sample_count >= 50 {
             let stats = config.global.stats.as_ref();
-            self.store.save_calibration(
-                "_global",
-                config.global.max_distance,
-                config.global.min_similarity,
-                &config.global.confidence.to_string(),
-                config.global.sample_count,
-                stats.map(|s| s.p50),
-                stats.map(|s| s.p90),
-                stats.map(|s| s.p95),
-                stats.map(|s| s.mean),
-                stats.map(|s| s.std_dev),
-            )?;
+            let data = CalibrationData {
+                language: "_global".to_string(),
+                max_distance: config.global.max_distance,
+                min_similarity: config.global.min_similarity,
+                confidence: config.global.confidence.to_string(),
+                sample_count: config.global.sample_count,
+                p50_distance: stats.map(|s| s.p50),
+                p90_distance: stats.map(|s| s.p90),
+                p95_distance: stats.map(|s| s.p95),
+                mean_distance: stats.map(|s| s.mean),
+                std_distance: stats.map(|s| s.std_dev),
+            };
+            self.store.save_calibration(&data)?;
         }
 
         self.reload_thresholds();
@@ -190,9 +194,9 @@ impl RetrievalEngine {
         };
 
         if collector.needs_flush() {
-            if let Err(e) = self.flush_observations() {
-                warn!("Failed to flush distance observations: {}", e);
-            }
+            let _ = self
+                .flush_observations()
+                .inspect_err(|e| warn!("Failed to flush distance observations: {}", e));
         }
 
         self.maybe_auto_calibrate();

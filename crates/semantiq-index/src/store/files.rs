@@ -3,12 +3,12 @@
 use super::IndexStore;
 use crate::schema::FileRecord;
 use anyhow::{Context, Result, anyhow};
+use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
+use semantiq_parser::PARSER_VERSION;
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
-use rusqlite::Connection;
-use semantiq_parser::PARSER_VERSION;
 
 impl IndexStore {
     /// Insert or update a file record.

@@ -2,11 +2,11 @@
 
 use super::IndexStore;
 use anyhow::{Result, anyhow};
+use rusqlite::Connection;
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::{MutexGuard, PoisonError};
 use tracing::{debug, info};
-use rusqlite::Connection;
 
 impl IndexStore {
     /// Insert a distance observation for threshold calibration.

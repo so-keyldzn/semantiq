@@ -3,11 +3,11 @@
 use super::IndexStore;
 use crate::schema::ChunkRecord;
 use anyhow::{Result, anyhow};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::Connection;
+use rusqlite::{OptionalExtension, params};
 use semantiq_parser::CodeChunk;
 use std::sync::{MutexGuard, PoisonError};
 use tracing::{debug, warn};
-use rusqlite::Connection;
 
 /// Parse symbols JSON with logging on error.
 fn parse_symbols_json(json: &str) -> Vec<String> {

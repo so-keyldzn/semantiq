@@ -3,11 +3,11 @@
 use super::IndexStore;
 use crate::schema::SymbolRecord;
 use anyhow::{Result, anyhow};
+use rusqlite::Connection;
 use rusqlite::params;
 use semantiq_parser::Symbol;
 use std::sync::{MutexGuard, PoisonError};
 use tracing::debug;
-use rusqlite::Connection;
 
 impl IndexStore {
     /// Maximum limit for symbol search results to prevent excessive memory usage.
