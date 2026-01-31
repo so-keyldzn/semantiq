@@ -99,6 +99,25 @@ enum Commands {
         #[arg(long)]
         symbol_kind: Option<String>,
     },
+
+    /// Calibrate semantic search thresholds using ML
+    Calibrate {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: Option<PathBuf>,
+
+        /// Calibrate only this language (e.g., "rust", "python")
+        #[arg(short, long)]
+        language: Option<String>,
+
+        /// Show what would be done without saving
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Minimum samples required for calibration
+        #[arg(long, default_value = "100")]
+        min_samples: usize,
+    },
 }
 
 #[tokio::main]
@@ -150,5 +169,11 @@ async fn main() -> Result<()> {
             file_type,
             symbol_kind,
         } => commands::search(&query, database, limit, min_score, file_type, symbol_kind).await,
+        Commands::Calibrate {
+            database,
+            language,
+            dry_run,
+            min_samples,
+        } => commands::calibrate(database, language, dry_run, min_samples).await,
     }
 }
