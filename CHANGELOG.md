@@ -4,6 +4,8 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-01-31
+
 ### Added
 - **Adaptive ML Thresholds** - Automatic calibration of semantic search thresholds per programming language
   - Bootstrap mode: Collects 100% of distance observations until 500 samples
