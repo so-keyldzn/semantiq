@@ -4,6 +4,25 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-02-10
+
+### Security
+- **HIGH**: Fixed ReDoS vulnerability - user input is now escaped with `regex::escape()` in `TextSearcher::search()` before regex compilation
+- **HIGH**: Updated `bytes` crate 1.11.0 → 1.11.1 to fix integer overflow in `BytesMut::reserve` (RUSTSEC-2026-0007)
+- **HIGH**: Text search walker now uses `hidden(true)` and `should_exclude_entry` filtering, preventing reads from `.env`, `.git/`, and other sensitive directories
+- **MEDIUM**: Fixed path traversal in `read_file_lines()` - paths are now canonicalized and verified to stay within the project root
+- **MEDIUM**: Added input validation (empty, length ≤ 500, limit ≤ 1000) to `semantiq_find_refs`, `semantiq_explain`, and `semantiq_deps` MCP handlers
+- **MEDIUM**: Added path traversal rejection (`..`) in `semantiq_deps` file path parameter
+- **MEDIUM**: `resolve_project_root()` now canonicalizes paths to normalize `..` components and symlinks
+- **LOW**: FTS5 query escaping now strips null bytes and control characters
+- **LOW**: Query expansion limited to 10 terms to prevent amplification attacks
+- **LOW**: MCP error messages sanitized to avoid leaking internal file paths
+- **LOW**: Version check HTTP response limited to 10KB to prevent memory exhaustion
+- **LOW**: Poisoned mutex recovery in `DistanceCollector` now logs warnings instead of silently continuing
+
+### Changed
+- Capped `limit` parameter to 1000 on all MCP tool handlers at the server level
+
 ## [0.5.0] - 2026-01-31
 
 ### Added
