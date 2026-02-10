@@ -180,10 +180,7 @@ impl IndexStore {
     /// then appends `*` for prefix search.
     pub(crate) fn escape_fts5_query(query: &str) -> String {
         // Strip null bytes and control characters that could cause unexpected FTS5 behavior
-        let cleaned: String = query
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
+        let cleaned: String = query.chars().filter(|c| !c.is_control()).collect();
         let escaped = cleaned.replace('"', "\"\"");
         format!("\"{}\"*", escaped)
     }

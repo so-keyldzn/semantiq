@@ -452,15 +452,15 @@ impl RetrievalEngine {
 
         // Canonicalize to resolve symlinks and .. components, then verify
         // the resolved path is still within the project root.
-        let canonical_root = root
-            .canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf());
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let canonical_path = full_path
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("Cannot resolve file path: {}", e))?;
 
         if !canonical_path.starts_with(&canonical_root) {
-            return Err(anyhow::anyhow!("Access denied: path is outside the project root"));
+            return Err(anyhow::anyhow!(
+                "Access denied: path is outside the project root"
+            ));
         }
 
         let content = fs::read_to_string(&canonical_path)?;

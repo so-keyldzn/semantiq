@@ -242,9 +242,9 @@ impl DistanceCollector {
     /// Record a single observation directly (useful for testing or manual collection).
     pub fn record_single(&self, observation: DistanceObservation) {
         let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
-                warn!("DistanceCollector mutex was poisoned, recovering");
-                e.into_inner()
-            });
+            warn!("DistanceCollector mutex was poisoned, recovering");
+            e.into_inner()
+        });
         buffer.push(observation);
         self.total_observations.fetch_add(1, Ordering::Relaxed);
     }
@@ -252,27 +252,27 @@ impl DistanceCollector {
     /// Check if the buffer needs to be flushed.
     pub fn needs_flush(&self) -> bool {
         let buffer = self.buffer.lock().unwrap_or_else(|e| {
-                warn!("DistanceCollector mutex was poisoned, recovering");
-                e.into_inner()
-            });
+            warn!("DistanceCollector mutex was poisoned, recovering");
+            e.into_inner()
+        });
         buffer.len() >= self.config.buffer_size
     }
 
     /// Take all buffered observations (clears the buffer).
     pub fn take_buffer(&self) -> Vec<DistanceObservation> {
         let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
-                warn!("DistanceCollector mutex was poisoned, recovering");
-                e.into_inner()
-            });
+            warn!("DistanceCollector mutex was poisoned, recovering");
+            e.into_inner()
+        });
         std::mem::take(&mut *buffer)
     }
 
     /// Get the current buffer size.
     pub fn buffer_len(&self) -> usize {
         let buffer = self.buffer.lock().unwrap_or_else(|e| {
-                warn!("DistanceCollector mutex was poisoned, recovering");
-                e.into_inner()
-            });
+            warn!("DistanceCollector mutex was poisoned, recovering");
+            e.into_inner()
+        });
         buffer.len()
     }
 
@@ -296,13 +296,10 @@ impl DistanceCollector {
             return false;
         }
 
-        let mut counter = self
-            .sample_counter
-            .lock()
-            .unwrap_or_else(|e| {
-                warn!("DistanceCollector mutex was poisoned, recovering");
-                e.into_inner()
-            });
+        let mut counter = self.sample_counter.lock().unwrap_or_else(|e| {
+            warn!("DistanceCollector mutex was poisoned, recovering");
+            e.into_inner()
+        });
         *counter = counter.wrapping_add(1);
 
         // Sample every N observations where N = 1/sample_rate
