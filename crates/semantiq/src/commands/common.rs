@@ -1,19 +1,25 @@
 //! Common utilities and constants for CLI commands
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Default database filename
 pub const DEFAULT_DB_NAME: &str = ".semantiq.db";
 
-/// Resolves a path to an absolute project root path.
+/// Resolves a path to an absolute, canonicalized project root path.
 /// If the path is relative, it's joined with the current directory.
+/// The result is canonicalized to resolve `..` components and symlinks.
 pub fn resolve_project_root(path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        Ok(path.to_path_buf())
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        Ok(std::env::current_dir()?.join(path))
-    }
+        std::env::current_dir()?.join(path)
+    };
+
+    // Canonicalize to resolve .. components and symlinks
+    absolute
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve project root: {:?}", absolute))
 }
 
 /// Returns the database path, using the provided path or defaulting to
@@ -29,16 +35,19 @@ mod tests {
 
     #[test]
     fn test_resolve_project_root_absolute() {
-        let path = Path::new("/tmp/test");
+        // Use a path that actually exists for canonicalize
+        let path = Path::new("/tmp");
         let result = resolve_project_root(path).unwrap();
-        assert_eq!(result, PathBuf::from("/tmp/test"));
+        // canonicalize resolves symlinks, so just check it's absolute
+        assert!(result.is_absolute());
     }
 
     #[test]
     fn test_resolve_project_root_relative() {
         let path = Path::new(".");
         let result = resolve_project_root(path).unwrap();
-        assert_eq!(result, env::current_dir().unwrap());
+        // canonicalize resolves symlinks, so compare canonical forms
+        assert_eq!(result, env::current_dir().unwrap().canonicalize().unwrap());
     }
 
     #[test]

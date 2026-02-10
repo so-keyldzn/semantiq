@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -129,7 +130,14 @@ fn fetch_latest_version(timeout: Duration) -> Option<String> {
         .call()
         .ok()?;
 
-    let body = response.into_body().read_to_string().ok()?;
+    // Limit response body to 10KB to prevent memory exhaustion
+    let mut body = String::new();
+    response
+        .into_body()
+        .as_reader()
+        .take(10 * 1024)
+        .read_to_string(&mut body)
+        .ok()?;
     let release: GitHubRelease = serde_json::from_str(&body).ok()?;
     let version = release.tag_name.trim_start_matches('v').to_string();
     Some(version)

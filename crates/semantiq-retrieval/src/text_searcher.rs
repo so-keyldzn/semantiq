@@ -26,11 +26,12 @@ impl TextSearcher {
     /// Search for a pattern in the given content
     /// Returns matches with line numbers and scores
     pub fn search(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
-        // Build regex matcher
+        // Escape user input to prevent ReDoS attacks
+        let escaped = regex::escape(pattern);
         let matcher = RegexMatcherBuilder::new()
             .case_insensitive(self.case_insensitive)
             .word(false)
-            .build(pattern)?;
+            .build(&escaped)?;
 
         let mut matches = Vec::new();
         let mut sink = MatchSink::new(&mut matches, pattern);

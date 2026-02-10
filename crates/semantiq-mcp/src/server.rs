@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::version_check::{VersionCheckConfig, check_for_update, notify_update};
 
@@ -161,7 +161,7 @@ impl SemantiqServer {
             return Err("Query exceeds maximum length of 500 characters".to_string());
         }
 
-        let limit = limit.unwrap_or(20);
+        let limit = limit.unwrap_or(20).min(1000);
 
         // Build SearchOptions
         let mut options = SearchOptions::new();
@@ -211,7 +211,10 @@ impl SemantiqServer {
 
                 Ok(output)
             }
-            Err(e) => Err(format!("Search failed: {}", e)),
+            Err(e) => {
+                error!("Search failed: {}", e);
+                Err("Search failed: an internal error occurred".to_string())
+            }
         }
     }
 
@@ -225,7 +228,17 @@ impl SemantiqServer {
         #[tool(param)] limit: Option<usize>,
     ) -> Result<String, String> {
         debug!(symbol = %symbol, limit = ?limit, "semantiq_find_refs called");
-        let limit = limit.unwrap_or(50);
+
+        // Validate symbol input
+        let symbol = symbol.trim().to_string();
+        if symbol.is_empty() {
+            return Err("Symbol name cannot be empty".to_string());
+        }
+        if symbol.len() > 500 {
+            return Err("Symbol name exceeds maximum length of 500 characters".to_string());
+        }
+
+        let limit = limit.unwrap_or(50).min(1000);
 
         match self.engine.find_references(&symbol, limit) {
             Ok(results) => {
@@ -288,7 +301,10 @@ impl SemantiqServer {
 
                 Ok(output)
             }
-            Err(e) => Err(format!("Find references failed: {}", e)),
+            Err(e) => {
+                error!("Find references failed: {}", e);
+                Err("Find references failed: an internal error occurred".to_string())
+            }
         }
     }
 
@@ -298,6 +314,20 @@ impl SemantiqServer {
     )]
     pub async fn semantiq_deps(&self, #[tool(param)] file_path: String) -> Result<String, String> {
         debug!(file = %file_path, "semantiq_deps called");
+
+        // Validate file_path input
+        let file_path = file_path.trim().to_string();
+        if file_path.is_empty() {
+            return Err("File path cannot be empty".to_string());
+        }
+        if file_path.len() > 500 {
+            return Err("File path exceeds maximum length of 500 characters".to_string());
+        }
+        // Reject path traversal attempts
+        if file_path.contains("..") {
+            return Err("File path must not contain '..'".to_string());
+        }
+
         let mut output = format!("Dependency analysis for '{}'\n\n", file_path);
 
         match self.engine.get_dependencies(&file_path) {
@@ -338,6 +368,16 @@ impl SemantiqServer {
     )]
     pub async fn semantiq_explain(&self, #[tool(param)] symbol: String) -> Result<String, String> {
         debug!(symbol = %symbol, "semantiq_explain called");
+
+        // Validate symbol input
+        let symbol = symbol.trim().to_string();
+        if symbol.is_empty() {
+            return Err("Symbol name cannot be empty".to_string());
+        }
+        if symbol.len() > 500 {
+            return Err("Symbol name exceeds maximum length of 500 characters".to_string());
+        }
+
         match self.engine.explain_symbol(&symbol) {
             Ok(explanation) => {
                 if !explanation.found {
@@ -377,7 +417,10 @@ impl SemantiqServer {
 
                 Ok(output)
             }
-            Err(e) => Err(format!("Explain failed: {}", e)),
+            Err(e) => {
+                error!("Explain failed: {}", e);
+                Err("Explain failed: an internal error occurred".to_string())
+            }
         }
     }
 }

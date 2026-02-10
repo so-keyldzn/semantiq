@@ -46,11 +46,15 @@ impl QueryExpander {
         Self
     }
 
+    /// Maximum number of whitespace-separated terms to expand.
+    /// Prevents amplification attacks from queries with many words.
+    const MAX_TERMS: usize = 10;
+
     pub fn expand(&self, text: &str) -> Vec<String> {
         let mut expanded = Vec::new();
 
-        // Split on whitespace and process each term
-        for term in text.split_whitespace() {
+        // Split on whitespace and process each term (limit to prevent amplification)
+        for term in text.split_whitespace().take(Self::MAX_TERMS) {
             // Add case variations
             expanded.extend(self.case_variations(term));
         }

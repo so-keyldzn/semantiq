@@ -6,10 +6,14 @@ use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, Searc
 use crate::text_searcher::TextSearcher;
 use anyhow::Result;
 use ignore::WalkBuilder;
+use semantiq_index::should_exclude_entry;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// Maximum limit for search results to prevent excessive memory usage.
+const MAX_SEARCH_LIMIT: usize = 1000;
 
 impl RetrievalEngine {
     /// Perform a multi-strategy search combining semantic, symbol, and text search.
@@ -24,7 +28,15 @@ impl RetrievalEngine {
         let opts = options.unwrap_or_default();
 
         // Cap limit to prevent excessive memory usage
-        let safe_limit = limit.min(500);
+        let safe_limit = limit.min(MAX_SEARCH_LIMIT);
+        if limit > MAX_SEARCH_LIMIT {
+            warn!(
+                requested = limit,
+                max = MAX_SEARCH_LIMIT,
+                "Requested limit exceeds maximum, capping to {}",
+                MAX_SEARCH_LIMIT
+            );
+        }
 
         let mut all_results = Vec::new();
 
@@ -335,8 +347,12 @@ impl RetrievalEngine {
         }
 
         let walker = WalkBuilder::new(root)
-            .hidden(false)
+            .hidden(true) // Exclude hidden directories (.git, .env, etc.)
             .git_ignore(true)
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !should_exclude_entry(&name)
+            })
             .build();
 
         for entry in walker.filter_map(|e| e.ok()) {
@@ -422,14 +438,32 @@ impl RetrievalEngine {
     }
 
     /// Read specific lines from a file.
+    ///
+    /// Validates that the resolved path stays within `root_path` to prevent
+    /// path traversal attacks via `..` sequences.
     pub(crate) fn read_file_lines(
         &self,
         file_path: &str,
         start: usize,
         end: usize,
     ) -> Result<String> {
-        let full_path = Path::new(&self.root_path).join(file_path);
-        let content = fs::read_to_string(full_path)?;
+        let root = Path::new(&self.root_path);
+        let full_path = root.join(file_path);
+
+        // Canonicalize to resolve symlinks and .. components, then verify
+        // the resolved path is still within the project root.
+        let canonical_root = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf());
+        let canonical_path = full_path
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("Cannot resolve file path: {}", e))?;
+
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(anyhow::anyhow!("Access denied: path is outside the project root"));
+        }
+
+        let content = fs::read_to_string(&canonical_path)?;
         let lines: Vec<&str> = content.lines().collect();
 
         let start_idx = start.saturating_sub(1).min(lines.len());

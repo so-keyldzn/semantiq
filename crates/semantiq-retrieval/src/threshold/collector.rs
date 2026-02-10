@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::info;
+use tracing::{info, warn};
 
 /// A single distance observation recorded during search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,7 +164,10 @@ impl DistanceCollector {
         let mut recorded_count = 0;
 
         {
-            let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+            let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
 
             for (chunk_id, distance) in results {
                 if let Some(language) = language_lookup(*chunk_id) {
@@ -238,26 +241,38 @@ impl DistanceCollector {
 
     /// Record a single observation directly (useful for testing or manual collection).
     pub fn record_single(&self, observation: DistanceObservation) {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
         buffer.push(observation);
         self.total_observations.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Check if the buffer needs to be flushed.
     pub fn needs_flush(&self) -> bool {
-        let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let buffer = self.buffer.lock().unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
         buffer.len() >= self.config.buffer_size
     }
 
     /// Take all buffered observations (clears the buffer).
     pub fn take_buffer(&self) -> Vec<DistanceObservation> {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
         std::mem::take(&mut *buffer)
     }
 
     /// Get the current buffer size.
     pub fn buffer_len(&self) -> usize {
-        let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let buffer = self.buffer.lock().unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
         buffer.len()
     }
 
@@ -284,7 +299,10 @@ impl DistanceCollector {
         let mut counter = self
             .sample_counter
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(|e| {
+                warn!("DistanceCollector mutex was poisoned, recovering");
+                e.into_inner()
+            });
         *counter = counter.wrapping_add(1);
 
         // Sample every N observations where N = 1/sample_rate
