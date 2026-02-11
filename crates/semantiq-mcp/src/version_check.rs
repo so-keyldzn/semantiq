@@ -81,7 +81,9 @@ impl VersionCache {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        now - self.checked_at > max_age.as_secs()
+        // Use saturating_sub to avoid underflow if checked_at is somehow in the future
+        // (e.g., corrupted cache file or clock skew)
+        now.saturating_sub(self.checked_at) > max_age.as_secs()
     }
 }
 

@@ -63,10 +63,12 @@ impl RetrievalEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Remove duplicates based on file_path + start_line + content hash
+        // Remove duplicates based on file_path + start_line + end_line
+        // Using start_line + end_line is more reliable than content.len() which
+        // could collide for different content of the same length
         let mut seen = std::collections::HashSet::new();
         all_results.retain(|r| {
-            let key = format!("{}:{}:{}", r.file_path, r.start_line, r.content.len());
+            let key = format!("{}:{}:{}", r.file_path, r.start_line, r.end_line);
             seen.insert(key)
         });
 
