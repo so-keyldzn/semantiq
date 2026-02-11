@@ -1,7 +1,11 @@
 use anyhow::Result;
 use rmcp::{
     ServerHandler,
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{
+        Implementation, LoggingLevel, LoggingMessageNotificationParam, ServerCapabilities,
+        ServerInfo,
+    },
+    service::{Peer, RequestContext, RoleServer},
     tool,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
@@ -12,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::version_check::{VersionCheckConfig, check_for_update, notify_update};
+use crate::version_check::{VersionCheckConfig, check_for_update};
 
 #[derive(Clone)]
 pub struct SemantiqServer {
@@ -47,9 +51,6 @@ impl SemantiqServer {
             }
         };
 
-        // Spawn background version check (non-blocking)
-        Self::spawn_version_check();
-
         Ok(Self {
             engine,
             store,
@@ -57,16 +58,32 @@ impl SemantiqServer {
         })
     }
 
-    fn spawn_version_check() {
-        tokio::spawn(async {
-            tokio::task::spawn_blocking(|| {
+    /// Spawn a background version check that notifies the MCP client if an update is available.
+    fn spawn_version_check(peer: Peer<RoleServer>) {
+        tokio::spawn(async move {
+            let info = tokio::task::spawn_blocking(|| {
                 let config = VersionCheckConfig::from_env();
-                if let Some(info) = check_for_update(env!("CARGO_PKG_VERSION"), &config) {
-                    notify_update(&info);
-                }
+                check_for_update(env!("CARGO_PKG_VERSION"), &config)
             })
             .await
-            .ok();
+            .ok()
+            .flatten();
+
+            if let Some(info) = info
+                && info.update_available
+            {
+                let message = format!(
+                    "Update available: {} -> {} | Run: npm install -g semantiq-mcp | Or: https://github.com/so-keyldzn/semantiq/releases",
+                    info.current_version, info.latest_version
+                );
+                let _ = peer
+                    .notify_logging_message(LoggingMessageNotificationParam {
+                        level: LoggingLevel::Warning,
+                        logger: Some("semantiq".into()),
+                        data: serde_json::json!(message),
+                    })
+                    .await;
+            }
         });
     }
 
@@ -444,6 +461,17 @@ impl ServerHandler for SemantiqServer {
                     .to_string(),
             ),
         }
+    }
+
+    async fn initialize(
+        &self,
+        _request: rmcp::model::InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<rmcp::model::InitializeResult, rmcp::Error> {
+        // Now that we have a peer connection, spawn the version check
+        Self::spawn_version_check(context.peer.clone());
+
+        Ok(self.get_info())
     }
 }
 
