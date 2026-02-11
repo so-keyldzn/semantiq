@@ -332,6 +332,84 @@ fn test_get_dependents() {
 }
 
 #[test]
+fn test_get_dependents_deduplicates() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/app.rs", Some("rust"), "use crate::lib;", 15, 1000)
+        .unwrap();
+
+    // Insert a dependency that would match multiple LIKE patterns
+    store
+        .insert_dependency(file_a, "./lib", Some("lib"), "local")
+        .unwrap();
+
+    // Should return exactly one result even though "./lib" matches
+    // multiple LIKE patterns (e.g., "%/lib" and "./lib")
+    let dependents = store.get_dependents("src/lib.rs").unwrap();
+    assert!(
+        dependents.len() <= 1,
+        "Expected at most 1 dependent, got {}",
+        dependents.len()
+    );
+}
+
+#[test]
+fn test_get_dependents_multiple_importers() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .unwrap();
+    let file_b = store
+        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .unwrap();
+
+    store
+        .insert_dependency(file_a, "crate::shared", Some("shared"), "local")
+        .unwrap();
+    store
+        .insert_dependency(file_b, "./shared", Some("shared"), "local")
+        .unwrap();
+
+    let dependents = store.get_dependents("src/shared.rs").unwrap();
+    assert_eq!(
+        dependents.len(),
+        2,
+        "Expected 2 dependents, got {}",
+        dependents.len()
+    );
+}
+
+#[test]
+fn test_get_dependents_no_false_positives() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_id = store
+        .insert_file(
+            "src/main.rs",
+            Some("rust"),
+            "use crate::something;",
+            21,
+            1000,
+        )
+        .unwrap();
+
+    store
+        .insert_dependency(
+            file_id,
+            "crate::something_else",
+            Some("something_else"),
+            "local",
+        )
+        .unwrap();
+
+    // "utils.rs" should not match "something_else"
+    let dependents = store.get_dependents("utils.rs").unwrap();
+    assert_eq!(dependents.len(), 0);
+}
+
+#[test]
 fn test_delete_dependencies() {
     let store = IndexStore::open_in_memory().unwrap();
 

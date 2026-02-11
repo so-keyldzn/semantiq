@@ -12,6 +12,9 @@ ignore = [
     # paste is unmaintained but used transitively by rmcp
     # Waiting for rmcp to migrate to pastey
     "RUSTSEC-2024-0436",
+    # number_prefix is unmaintained but used transitively by tokenizers via indicatif
+    # Waiting for indicatif/tokenizers to update
+    "RUSTSEC-2025-0119",
 ]
 
 [licenses]

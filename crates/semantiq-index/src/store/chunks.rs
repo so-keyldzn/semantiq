@@ -141,9 +141,23 @@ impl IndexStore {
     }
 
     /// Get chunk records by IDs (useful after vector search).
+    ///
+    /// If more than 900 IDs are provided, the query is split into batches
+    /// to stay within SQLite's `SQLITE_MAX_VARIABLE_NUMBER` limit (default 999).
     pub fn get_chunks_by_ids(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
         if chunk_ids.is_empty() {
             return Ok(Vec::new());
+        }
+
+        // SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999.
+        // Process in batches to avoid exceeding the limit.
+        const BATCH_SIZE: usize = 900;
+        if chunk_ids.len() > BATCH_SIZE {
+            let mut all_results = Vec::new();
+            for batch in chunk_ids.chunks(BATCH_SIZE) {
+                all_results.extend(self.get_chunks_by_ids(batch)?);
+            }
+            return Ok(all_results);
         }
 
         self.with_conn(|conn| {

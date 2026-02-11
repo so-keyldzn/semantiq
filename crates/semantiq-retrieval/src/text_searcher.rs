@@ -58,8 +58,19 @@ impl TextSearcher {
         Ok(matches)
     }
 
-    /// Search with a raw regex pattern
+    /// Search with a raw regex pattern.
+    ///
+    /// # Safety
+    ///
+    /// The underlying `grep-regex` crate uses the Rust `regex` crate which
+    /// guarantees O(n) matching time, providing inherent ReDoS protection.
+    /// A pattern length limit is enforced to prevent excessive compilation time.
     pub fn search_regex(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
+        // Limit pattern length to prevent excessive regex compilation time
+        if pattern.len() > 1000 {
+            anyhow::bail!("Regex pattern exceeds maximum length of 1000 characters");
+        }
+
         let matcher = RegexMatcherBuilder::new()
             .case_insensitive(self.case_insensitive)
             .build(pattern)?;
@@ -237,5 +248,27 @@ mod tests {
 
         // Exact match should have highest score
         assert!(matches[0].score > matches[2].score);
+    }
+
+    #[test]
+    fn test_regex_search_rejects_oversized_pattern() {
+        let searcher = TextSearcher::new(true);
+        let content = "fn main() {}";
+        let long_pattern = "a".repeat(1001);
+
+        let result = searcher.search_regex(content, &long_pattern);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("maximum length"));
+    }
+
+    #[test]
+    fn test_regex_search_accepts_max_length_pattern() {
+        let searcher = TextSearcher::new(true);
+        let content = "fn main() {}";
+        let pattern = "a".repeat(1000);
+
+        // Should not error on length validation (may not match, but shouldn't panic)
+        let result = searcher.search_regex(content, &pattern);
+        assert!(result.is_ok());
     }
 }
