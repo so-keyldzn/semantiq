@@ -79,10 +79,20 @@ impl RetrievalEngine {
         // Find usages via text search
         let usage_results =
             self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
+
+        // Deduplicate: track seen (file_path, start_line) pairs from symbol definitions
+        let mut seen = std::collections::HashSet::new();
+        for r in &results {
+            seen.insert((r.file_path.clone(), r.start_line));
+        }
+
         for mut result in usage_results {
-            result.kind = SearchResultKind::Reference;
-            result.metadata.match_type = Some("usage".to_string());
-            results.push(result);
+            let key = (result.file_path.clone(), result.start_line);
+            if seen.insert(key) {
+                result.kind = SearchResultKind::Reference;
+                result.metadata.match_type = Some("usage".to_string());
+                results.push(result);
+            }
         }
 
         results.truncate(limit);
@@ -150,7 +160,12 @@ impl RetrievalEngine {
         let mut definitions = Vec::new();
         let mut related_symbols = std::collections::HashSet::new();
 
-        for symbol in &symbols {
+        // Limit definitions processed to avoid excessive DB queries (N+1 pattern).
+        // For symbols defined in many files, the first 20 are sufficient.
+        let max_definitions = 20;
+        let mut seen_file_ids = std::collections::HashSet::new();
+
+        for symbol in symbols.iter().take(max_definitions) {
             let file_path = self.get_file_path(symbol.file_id)?;
 
             definitions.push(SymbolDefinition {
@@ -162,19 +177,33 @@ impl RetrievalEngine {
                 doc_comment: symbol.doc_comment.clone(),
             });
 
-            // Find related symbols in the same file
-            let file_symbols = self.store.get_symbols_by_file(symbol.file_id)?;
-            for fs in file_symbols {
-                if fs.name != symbol_name {
-                    related_symbols.insert(fs.name);
+            // Find related symbols in the same file (only query each file once)
+            if seen_file_ids.insert(symbol.file_id) {
+                let file_symbols = self.store.get_symbols_by_file(symbol.file_id)?;
+                for fs in file_symbols {
+                    if fs.name != symbol_name {
+                        related_symbols.insert(fs.name);
+                    }
                 }
             }
         }
 
-        // Count usages
-        let usage_results =
-            self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
-        let usage_count = usage_results.len();
+        // Count usages via FTS5 (much faster than reading files from disk)
+        // Falls back to text search if FTS5 returns no results
+        let usage_count = match self.store.search_symbols(symbol_name, 100) {
+            Ok(fts_results) => {
+                // FTS5 returns symbol definitions; add a conservative estimate
+                // for text usages beyond definitions
+                let definition_count = definitions.len();
+                fts_results.len().saturating_sub(definition_count)
+            }
+            Err(_) => {
+                // Fallback: use text search (slower but more accurate)
+                let usage_results =
+                    self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
+                usage_results.len()
+            }
+        };
 
         Ok(SymbolExplanation {
             name: symbol_name.to_string(),

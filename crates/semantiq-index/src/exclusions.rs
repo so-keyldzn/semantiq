@@ -67,9 +67,12 @@ pub fn should_exclude(path: &Path) -> bool {
     should_exclude_path(path) || is_file_too_large(path)
 }
 
-/// Check if a directory entry name should be excluded (for WalkBuilder filter)
+/// Check if a directory entry name should be excluded (for WalkBuilder filter).
+///
+/// Returns true if the name matches an excluded directory or starts with '.'
+/// (hidden directory). This is consistent with `should_exclude_path` behavior.
 pub fn should_exclude_entry(name: &str) -> bool {
-    EXCLUDED_DIRS.contains(&name)
+    name.starts_with('.') || EXCLUDED_DIRS.contains(&name)
 }
 
 #[cfg(test)]
@@ -105,6 +108,9 @@ mod tests {
     fn test_should_exclude_entry() {
         assert!(should_exclude_entry("node_modules"));
         assert!(should_exclude_entry("target"));
+        assert!(should_exclude_entry(".git"));
+        assert!(should_exclude_entry(".env"));
+        assert!(should_exclude_entry(".secrets"));
         assert!(!should_exclude_entry("src"));
         assert!(!should_exclude_entry("lib"));
     }

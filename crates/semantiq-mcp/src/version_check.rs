@@ -3,7 +3,7 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, warn};
+use tracing::debug;
 
 const GITHUB_API_URL: &str = "https://api.github.com/repos/so-keyldzn/semantiq/releases/latest";
 const CACHE_FILE: &str = "version_cache.json";
@@ -81,7 +81,9 @@ impl VersionCache {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        now - self.checked_at > max_age.as_secs()
+        // Use saturating_sub to avoid underflow if checked_at is somehow in the future
+        // (e.g., corrupted cache file or clock skew)
+        now.saturating_sub(self.checked_at) > max_age.as_secs()
     }
 }
 
@@ -205,16 +207,6 @@ pub fn check_for_update(current_version: &str, config: &VersionCheckConfig) -> O
         latest_version: latest.clone(),
         update_available: is_newer(&latest, current_version),
     })
-}
-
-/// Display update notification via warn! macro
-pub fn notify_update(info: &UpdateInfo) {
-    if info.update_available {
-        warn!(
-            "Update available: {} -> {} | Run: npm install -g semantiq-mcp | Or: https://github.com/so-keyldzn/semantiq/releases",
-            info.current_version, info.latest_version
-        );
-    }
 }
 
 #[cfg(test)]

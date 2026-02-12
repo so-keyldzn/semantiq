@@ -252,18 +252,48 @@ impl AutoIndexer {
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
                 self.store.insert_chunks(file_id, &chunks)?;
 
-                // Generate embeddings for chunks
+                // Generate embeddings for chunks in batch to reduce ONNX overhead
                 let chunks_to_embed = self.store.get_chunks_by_file(file_id)?;
-                for chunk in chunks_to_embed {
-                    match self.embedding_model.embed(&chunk.content) {
-                        Ok(embedding) => {
-                            if let Err(e) = self.store.update_chunk_embedding(chunk.id, &embedding)
+                if !chunks_to_embed.is_empty() {
+                    let texts: Vec<String> =
+                        chunks_to_embed.iter().map(|c| c.content.clone()).collect();
+                    match self.embedding_model.embed_batch(&texts) {
+                        Ok(embeddings) => {
+                            for (chunk, embedding) in chunks_to_embed.iter().zip(embeddings.iter())
                             {
-                                debug!("Failed to store embedding for chunk {}: {}", chunk.id, e);
+                                if let Err(e) =
+                                    self.store.update_chunk_embedding(chunk.id, embedding)
+                                {
+                                    debug!(
+                                        "Failed to store embedding for chunk {}: {}",
+                                        chunk.id, e
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
-                            debug!("Failed to generate embedding for chunk {}: {}", chunk.id, e);
+                            debug!("Batch embedding failed, falling back to individual: {}", e);
+                            // Fallback to individual embedding on batch failure
+                            for chunk in &chunks_to_embed {
+                                match self.embedding_model.embed(&chunk.content) {
+                                    Ok(embedding) => {
+                                        if let Err(e) =
+                                            self.store.update_chunk_embedding(chunk.id, &embedding)
+                                        {
+                                            debug!(
+                                                "Failed to store embedding for chunk {}: {}",
+                                                chunk.id, e
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        debug!(
+                                            "Failed to generate embedding for chunk {}: {}",
+                                            chunk.id, e
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }

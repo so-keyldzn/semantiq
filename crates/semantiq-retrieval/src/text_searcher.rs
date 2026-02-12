@@ -58,8 +58,19 @@ impl TextSearcher {
         Ok(matches)
     }
 
-    /// Search with a raw regex pattern
+    /// Search with a raw regex pattern.
+    ///
+    /// # Safety
+    ///
+    /// The underlying `grep-regex` crate uses the Rust `regex` crate which
+    /// guarantees O(n) matching time, providing inherent ReDoS protection.
+    /// A pattern length limit is enforced to prevent excessive compilation time.
     pub fn search_regex(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
+        // Limit pattern length to prevent excessive regex compilation time
+        if pattern.len() > 1000 {
+            anyhow::bail!("Regex pattern exceeds maximum length of 1000 characters");
+        }
+
         let matcher = RegexMatcherBuilder::new()
             .case_insensitive(self.case_insensitive)
             .build(pattern)?;
@@ -83,20 +94,32 @@ impl Default for TextSearcher {
 struct MatchSink<'a> {
     matches: &'a mut Vec<TextMatch>,
     pattern: &'a str,
+    /// Pre-computed lowercase pattern to avoid re-allocating on every line.
+    pattern_lower: String,
 }
 
 impl<'a> MatchSink<'a> {
     fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str) -> Self {
-        Self { matches, pattern }
+        Self {
+            matches,
+            pattern_lower: pattern.to_lowercase(),
+            pattern,
+        }
     }
 
     fn calculate_score(&self, line: &str, match_start: usize) -> f32 {
         let line_trimmed = line.trim();
-        let pattern_lower = self.pattern.to_lowercase();
-        let line_lower = line_trimmed.to_lowercase();
+
+        // Use eq_ignore_ascii_case for the common ASCII path, avoiding allocation.
+        // Fall back to full Unicode lowercase only when ASCII comparison fails.
+        let is_exact_line = if line_trimmed.is_ascii() && self.pattern.is_ascii() {
+            line_trimmed.eq_ignore_ascii_case(self.pattern)
+        } else {
+            line_trimmed.to_lowercase() == self.pattern_lower
+        };
 
         // Base score
-        let mut score = if line_lower == pattern_lower {
+        let mut score = if is_exact_line {
             0.9 // Exact line match
         } else if match_start == 0
             || line
@@ -139,7 +162,7 @@ impl Sink for MatchSink<'_> {
         // Find match position within line for scoring
         let match_start = line_content
             .to_lowercase()
-            .find(&self.pattern.to_lowercase())
+            .find(&self.pattern_lower)
             .unwrap_or(0);
 
         let match_end = match_start + self.pattern.len();
@@ -237,5 +260,27 @@ mod tests {
 
         // Exact match should have highest score
         assert!(matches[0].score > matches[2].score);
+    }
+
+    #[test]
+    fn test_regex_search_rejects_oversized_pattern() {
+        let searcher = TextSearcher::new(true);
+        let content = "fn main() {}";
+        let long_pattern = "a".repeat(1001);
+
+        let result = searcher.search_regex(content, &long_pattern);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("maximum length"));
+    }
+
+    #[test]
+    fn test_regex_search_accepts_max_length_pattern() {
+        let searcher = TextSearcher::new(true);
+        let content = "fn main() {}";
+        let pattern = "a".repeat(1000);
+
+        // Should not error on length validation (may not match, but shouldn't panic)
+        let result = searcher.search_regex(content, &pattern);
+        assert!(result.is_ok());
     }
 }

@@ -10,11 +10,23 @@ mod threshold;
 use crate::threshold::{CollectorConfig, DistanceCollector, ThresholdConfig};
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_index::IndexStore;
-use std::sync::{Arc, RwLock};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 use tracing::debug;
 
 // Re-export types
 pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
+
+/// Cached list of walkable file paths with a TTL to avoid re-walking the
+/// directory tree on every `search_text()` call within the same session.
+pub(crate) struct FileListCache {
+    paths: Vec<PathBuf>,
+    created_at: Instant,
+}
+
+/// TTL for the file list cache (30 seconds).
+const FILE_LIST_CACHE_TTL_SECS: u64 = 30;
 
 /// The main search and retrieval engine.
 pub struct RetrievalEngine {
@@ -25,6 +37,8 @@ pub struct RetrievalEngine {
     pub(crate) threshold_config: Arc<RwLock<ThresholdConfig>>,
     /// Distance collector for ML calibration (optional).
     pub(crate) distance_collector: Option<DistanceCollector>,
+    /// Cached file list for text search to avoid re-walking the tree.
+    pub(crate) file_list_cache: Mutex<Option<FileListCache>>,
 }
 
 impl RetrievalEngine {
@@ -80,6 +94,7 @@ impl RetrievalEngine {
             embedding_model,
             threshold_config: Arc::new(RwLock::new(threshold_config)),
             distance_collector,
+            file_list_cache: Mutex::new(None),
         }
     }
 

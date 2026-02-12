@@ -1,7 +1,11 @@
 use anyhow::Result;
 use rmcp::{
     ServerHandler,
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{
+        Implementation, LoggingLevel, LoggingMessageNotificationParam, ServerCapabilities,
+        ServerInfo,
+    },
+    service::{Peer, RequestContext, RoleServer},
     tool,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
@@ -12,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::version_check::{VersionCheckConfig, check_for_update, notify_update};
+use crate::version_check::{VersionCheckConfig, check_for_update};
 
 #[derive(Clone)]
 pub struct SemantiqServer {
@@ -47,9 +51,6 @@ impl SemantiqServer {
             }
         };
 
-        // Spawn background version check (non-blocking)
-        Self::spawn_version_check();
-
         Ok(Self {
             engine,
             store,
@@ -57,16 +58,32 @@ impl SemantiqServer {
         })
     }
 
-    fn spawn_version_check() {
-        tokio::spawn(async {
-            tokio::task::spawn_blocking(|| {
+    /// Spawn a background version check that notifies the MCP client if an update is available.
+    fn spawn_version_check(peer: Peer<RoleServer>) {
+        tokio::spawn(async move {
+            let info = tokio::task::spawn_blocking(|| {
                 let config = VersionCheckConfig::from_env();
-                if let Some(info) = check_for_update(env!("CARGO_PKG_VERSION"), &config) {
-                    notify_update(&info);
-                }
+                check_for_update(env!("CARGO_PKG_VERSION"), &config)
             })
             .await
-            .ok();
+            .ok()
+            .flatten();
+
+            if let Some(info) = info
+                && info.update_available
+            {
+                let message = format!(
+                    "Update available: {} -> {} | Run: npm install -g semantiq-mcp | Or: https://github.com/so-keyldzn/semantiq/releases",
+                    info.current_version, info.latest_version
+                );
+                let _ = peer
+                    .notify_logging_message(LoggingMessageNotificationParam {
+                        level: LoggingLevel::Warning,
+                        logger: Some("semantiq".into()),
+                        data: serde_json::json!(message),
+                    })
+                    .await;
+            }
         });
     }
 
@@ -445,6 +462,17 @@ impl ServerHandler for SemantiqServer {
             ),
         }
     }
+
+    async fn initialize(
+        &self,
+        _request: rmcp::model::InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<rmcp::model::InitializeResult, rmcp::Error> {
+        // Now that we have a peer connection, spawn the version check
+        Self::spawn_version_check(context.peer.clone());
+
+        Ok(self.get_info())
+    }
 }
 
 #[cfg(test)]
@@ -740,6 +768,37 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("0 dependencies"));
+    }
+
+    #[tokio::test]
+    async fn test_deps_shows_reverse_dependencies() {
+        let (server, _temp) = create_test_server();
+
+        // Create the target file (utils.rs) and a file that imports it (main.rs)
+        index_test_file(&server.store, "utils.rs", "pub fn helper() {}", "rust");
+        let main_id = index_test_file(&server.store, "main.rs", "use crate::utils;", "rust");
+
+        // main.rs depends on utils.rs
+        server
+            .store
+            .insert_dependency(main_id, "crate::utils", Some("utils"), "local")
+            .expect("Failed to insert dependency");
+
+        // Query reverse deps for utils.rs — should show main.rs as importer
+        let result = server.semantiq_deps("utils.rs".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            output.contains("Imported by"),
+            "Expected 'Imported by' section in output: {}",
+            output
+        );
+        assert!(
+            output.contains("main.rs"),
+            "Expected 'main.rs' as reverse dependency in output: {}",
+            output
+        );
     }
 
     // ==================== semantiq_explain tests ====================
