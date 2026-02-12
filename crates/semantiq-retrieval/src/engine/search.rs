@@ -8,7 +8,7 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use semantiq_index::should_exclude_entry;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -335,6 +335,9 @@ impl RetrievalEngine {
     }
 
     /// Search text content using grep-like matching.
+    ///
+    /// Uses a cached file list (with TTL) to avoid re-walking the directory
+    /// tree on every call within the same session.
     pub(crate) fn search_text(
         &self,
         query: &Query,
@@ -348,23 +351,11 @@ impl RetrievalEngine {
             return Ok(results);
         }
 
-        let walker = WalkBuilder::new(root)
-            .hidden(true) // Exclude hidden directories (.git, .env, etc.)
-            .git_ignore(true)
-            .filter_entry(|entry| {
-                let name = entry.file_name().to_string_lossy();
-                !should_exclude_entry(&name)
-            })
-            .build();
+        let file_paths = self.get_cached_file_list(root)?;
 
-        for entry in walker.filter_map(|e| e.ok()) {
+        for path in &file_paths {
             if results.len() >= limit {
                 break;
-            }
-
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
             }
 
             let accepted = path
@@ -404,6 +395,46 @@ impl RetrievalEngine {
         }
 
         Ok(results)
+    }
+
+    /// Get the cached file list, rebuilding it if the cache has expired.
+    fn get_cached_file_list(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        use super::{FILE_LIST_CACHE_TTL_SECS, FileListCache};
+        use std::time::Duration;
+
+        let mut cache = self
+            .file_list_cache
+            .lock()
+            .map_err(|e| anyhow::anyhow!("File list cache lock poisoned: {}", e))?;
+
+        if let Some(ref cached) = *cache
+            && cached.created_at.elapsed() < Duration::from_secs(FILE_LIST_CACHE_TTL_SECS)
+        {
+            return Ok(cached.paths.clone());
+        }
+
+        // Rebuild the file list
+        let walker = WalkBuilder::new(root)
+            .hidden(true)
+            .git_ignore(true)
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !should_exclude_entry(&name)
+            })
+            .build();
+
+        let paths: Vec<PathBuf> = walker
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .map(|e| e.into_path())
+            .collect();
+
+        *cache = Some(FileListCache {
+            paths: paths.clone(),
+            created_at: std::time::Instant::now(),
+        });
+
+        Ok(paths)
     }
 
     /// Find text matches in content.

@@ -7,13 +7,21 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     # instant is unmaintained but used transitively by notify via notify-types
-    # No action needed as notify will eventually update
+    # Dep chain: notify -> notify-types -> instant
+    # Tracking: https://github.com/notify-rs/notify/issues — awaiting removal of `instant`
+    # Remove when: notify drops `instant` (replaced by `web-time` or std)
     "RUSTSEC-2024-0384",
+
     # paste is unmaintained but used transitively by rmcp
-    # Waiting for rmcp to migrate to pastey
+    # Dep chain: rmcp -> paste
+    # Tracking: https://github.com/aspect-build/rules_lint/issues — awaiting migration to `pastey`
+    # Remove when: rmcp migrates from `paste` to `pastey`
     "RUSTSEC-2024-0436",
+
     # number_prefix is unmaintained but used transitively by tokenizers via indicatif
-    # Waiting for indicatif/tokenizers to update
+    # Dep chain: tokenizers -> indicatif -> number_prefix
+    # Tracking: https://github.com/huggingface/tokenizers/issues
+    # Remove when: indicatif drops `number_prefix` or tokenizers updates indicatif
     "RUSTSEC-2025-0119",
 ]
 

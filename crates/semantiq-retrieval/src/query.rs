@@ -174,7 +174,16 @@ impl QueryExpander {
         if let Some(first) = chars.next()
             && first.is_uppercase()
         {
-            return chars.any(|c| c.is_uppercase() || c.is_lowercase());
+            // Require at least one lower->upper transition (e.g., "HelloWorld")
+            // to distinguish PascalCase from plain capitalized words ("Hello").
+            let mut prev_lower = false;
+            for c in chars {
+                if c.is_lowercase() {
+                    prev_lower = true;
+                } else if c.is_uppercase() && prev_lower {
+                    return true;
+                }
+            }
         }
         false
     }
@@ -361,6 +370,9 @@ mod tests {
         assert!(expander.is_pascal_case("HelloWorld"));
         assert!(expander.is_pascal_case("GetUser"));
         assert!(!expander.is_pascal_case("helloWorld")); // camelCase
+        assert!(!expander.is_pascal_case("Hello")); // Single capitalized word, no case transition
+        assert!(!expander.is_pascal_case("HELLO")); // All uppercase, not PascalCase
+        assert!(expander.is_pascal_case("MyStruct")); // Two case transitions
     }
 
     #[test]

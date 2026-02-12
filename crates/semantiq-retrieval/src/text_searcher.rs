@@ -94,20 +94,32 @@ impl Default for TextSearcher {
 struct MatchSink<'a> {
     matches: &'a mut Vec<TextMatch>,
     pattern: &'a str,
+    /// Pre-computed lowercase pattern to avoid re-allocating on every line.
+    pattern_lower: String,
 }
 
 impl<'a> MatchSink<'a> {
     fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str) -> Self {
-        Self { matches, pattern }
+        Self {
+            matches,
+            pattern_lower: pattern.to_lowercase(),
+            pattern,
+        }
     }
 
     fn calculate_score(&self, line: &str, match_start: usize) -> f32 {
         let line_trimmed = line.trim();
-        let pattern_lower = self.pattern.to_lowercase();
-        let line_lower = line_trimmed.to_lowercase();
+
+        // Use eq_ignore_ascii_case for the common ASCII path, avoiding allocation.
+        // Fall back to full Unicode lowercase only when ASCII comparison fails.
+        let is_exact_line = if line_trimmed.is_ascii() && self.pattern.is_ascii() {
+            line_trimmed.eq_ignore_ascii_case(self.pattern)
+        } else {
+            line_trimmed.to_lowercase() == self.pattern_lower
+        };
 
         // Base score
-        let mut score = if line_lower == pattern_lower {
+        let mut score = if is_exact_line {
             0.9 // Exact line match
         } else if match_start == 0
             || line
@@ -150,7 +162,7 @@ impl Sink for MatchSink<'_> {
         // Find match position within line for scoring
         let match_start = line_content
             .to_lowercase()
-            .find(&self.pattern.to_lowercase())
+            .find(&self.pattern_lower)
             .unwrap_or(0);
 
         let match_end = match_start + self.pattern.len();

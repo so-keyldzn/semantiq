@@ -770,6 +770,37 @@ mod tests {
         assert!(output.contains("0 dependencies"));
     }
 
+    #[tokio::test]
+    async fn test_deps_shows_reverse_dependencies() {
+        let (server, _temp) = create_test_server();
+
+        // Create the target file (utils.rs) and a file that imports it (main.rs)
+        index_test_file(&server.store, "utils.rs", "pub fn helper() {}", "rust");
+        let main_id = index_test_file(&server.store, "main.rs", "use crate::utils;", "rust");
+
+        // main.rs depends on utils.rs
+        server
+            .store
+            .insert_dependency(main_id, "crate::utils", Some("utils"), "local")
+            .expect("Failed to insert dependency");
+
+        // Query reverse deps for utils.rs — should show main.rs as importer
+        let result = server.semantiq_deps("utils.rs".to_string()).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            output.contains("Imported by"),
+            "Expected 'Imported by' section in output: {}",
+            output
+        );
+        assert!(
+            output.contains("main.rs"),
+            "Expected 'main.rs' as reverse dependency in output: {}",
+            output
+        );
+    }
+
     // ==================== semantiq_explain tests ====================
 
     #[tokio::test]
