@@ -3,6 +3,8 @@
 //! Exposes the MCP tools via HTTP REST endpoints for the interactive demo.
 
 mod routes;
+#[cfg(test)]
+mod tests;
 mod types;
 
 pub use routes::create_router;
@@ -13,12 +15,16 @@ use axum::Router;
 use semantiq_mcp::SemantiqServer;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 /// Maximum request body size (1 MB). Prevents OOM from oversized payloads.
 const MAX_BODY_SIZE: usize = 1024 * 1024;
+
+/// Maximum concurrent requests. Prevents resource exhaustion from abuse.
+const MAX_CONCURRENT_REQUESTS: usize = 50;
 
 /// Start the HTTP API server
 pub async fn serve_http(server: SemantiqServer, port: u16, cors_origin: Option<String>) -> Result<()> {
@@ -37,6 +43,7 @@ pub async fn serve_http(server: SemantiqServer, port: u16, cors_origin: Option<S
 
     let app: Router = create_router(server)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
+        .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 

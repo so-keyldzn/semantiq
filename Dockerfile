@@ -64,4 +64,4 @@ USER semantiq
 
 # Run the server
 # First index, then serve
-CMD ["sh", "-c", "semantiq index --project /app/semantiq-repo && semantiq serve --project /app/semantiq-repo --http-port ${HTTP_PORT}"]
+CMD ["sh", "-c", "semantiq index /app/semantiq-repo && semantiq serve --project /app/semantiq-repo --http-port ${HTTP_PORT}"]

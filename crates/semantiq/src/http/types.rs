@@ -15,7 +15,7 @@ pub struct SearchRequest {
     pub symbol_kind: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
     pub file_path: String,
     pub start_line: u32,
@@ -25,13 +25,13 @@ pub struct SearchResult {
     pub metadata: SearchMetadata,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchMetadata {
     pub symbol_name: Option<String>,
     pub symbol_kind: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub total_count: usize,
@@ -48,7 +48,7 @@ pub struct FindRefsRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Reference {
     pub file_path: String,
     pub line: u32,
@@ -57,7 +57,7 @@ pub struct Reference {
     pub context: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FindRefsResponse {
     pub symbol: String,
     pub definitions: Vec<Reference>,
@@ -75,14 +75,14 @@ pub struct DepsRequest {
     pub file_path: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Dependency {
     pub path: String,
     pub symbols: Option<Vec<String>>,
     pub kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DepsResponse {
     pub file_path: String,
     pub imports: Vec<Dependency>,
@@ -99,7 +99,7 @@ pub struct ExplainRequest {
     pub symbol: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SymbolDefinition {
     pub file_path: String,
     pub line: u32,
@@ -107,7 +107,7 @@ pub struct SymbolDefinition {
     pub documentation: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ExplainResponse {
     pub symbol: String,
     pub kind: String,
@@ -120,7 +120,7 @@ pub struct ExplainResponse {
 // Stats
 // ============================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StatsResponse {
     pub indexed_files: usize,
     pub indexed_symbols: usize,
@@ -132,7 +132,7 @@ pub struct StatsResponse {
 // Health
 // ============================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -142,7 +142,7 @@ pub struct HealthResponse {
 // Error
 // ============================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub code: String,

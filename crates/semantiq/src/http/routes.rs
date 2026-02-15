@@ -196,47 +196,39 @@ async fn find_refs(
         Ok(results) => {
             let search_time_ms = start.elapsed().as_millis() as u64;
 
-            let definitions: Vec<Reference> = results
-                .results
-                .iter()
-                .filter(|r| {
-                    r.metadata
-                        .match_type
-                        .as_ref()
-                        .map(|t| t == "definition")
-                        .unwrap_or(false)
-                })
-                .map(|r| Reference {
-                    file_path: r.file_path.clone(),
-                    line: r.start_line as u32,
-                    column: None,
-                    usage_type: "definition".to_string(),
-                    context: Some(r.content.lines().next().unwrap_or("").to_string()),
-                })
-                .collect();
+            let mut definitions: Vec<Reference> = Vec::new();
+            let mut references: Vec<Reference> = Vec::new();
 
-            let references: Vec<Reference> = results
-                .results
-                .iter()
-                .filter(|r| {
-                    r.metadata
-                        .match_type
-                        .as_ref()
-                        .map(|t| t != "definition")
-                        .unwrap_or(true)
-                })
-                .map(|r| Reference {
-                    file_path: r.file_path.clone(),
-                    line: r.start_line as u32,
-                    column: None,
-                    usage_type: r
+            for r in results.results {
+                let is_definition = r
+                    .metadata
+                    .match_type
+                    .as_deref()
+                    == Some("definition");
+
+                if is_definition {
+                    definitions.push(Reference {
+                        file_path: r.file_path,
+                        line: r.start_line as u32,
+                        column: None,
+                        usage_type: "definition".to_string(),
+                        context: Some(r.content.lines().next().unwrap_or("").to_string()),
+                    });
+                } else {
+                    let usage_type = r
                         .metadata
                         .match_type
-                        .clone()
-                        .unwrap_or_else(|| "usage".to_string()),
-                    context: Some(r.content.trim().to_string()),
-                })
-                .collect();
+                        .unwrap_or_else(|| "usage".to_string());
+                    let context = r.content.trim().to_string();
+                    references.push(Reference {
+                        file_path: r.file_path,
+                        line: r.start_line as u32,
+                        column: None,
+                        usage_type,
+                        context: Some(context),
+                    });
+                }
+            }
 
             let response = FindRefsResponse {
                 symbol: symbol.to_string(),
