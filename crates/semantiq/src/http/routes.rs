@@ -39,7 +39,9 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn stats(State(server): State<AppState>) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+async fn stats(
+    State(server): State<AppState>,
+) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let store = server.store();
 
     match store.get_stats() {
@@ -200,11 +202,7 @@ async fn find_refs(
             let mut references: Vec<Reference> = Vec::new();
 
             for r in results.results {
-                let is_definition = r
-                    .metadata
-                    .match_type
-                    .as_deref()
-                    == Some("definition");
+                let is_definition = r.metadata.match_type.as_deref() == Some("definition");
 
                 if is_definition {
                     definitions.push(Reference {
@@ -215,10 +213,7 @@ async fn find_refs(
                         context: Some(r.content.lines().next().unwrap_or("").to_string()),
                     });
                 } else {
-                    let usage_type = r
-                        .metadata
-                        .match_type
-                        .unwrap_or_else(|| "usage".to_string());
+                    let usage_type = r.metadata.match_type.unwrap_or_else(|| "usage".to_string());
                     let context = r.content.trim().to_string();
                     references.push(Reference {
                         file_path: r.file_path,

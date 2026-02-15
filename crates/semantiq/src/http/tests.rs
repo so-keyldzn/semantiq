@@ -7,8 +7,8 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::http::types::*;
     use crate::http::create_router;
+    use crate::http::types::*;
 
     /// Create a test router with an in-memory database
     fn test_router() -> axum::Router {
@@ -21,7 +21,13 @@ mod tests {
     }
 
     async fn response_body(response: axum::http::Response<Body>) -> Vec<u8> {
-        response.into_body().collect().await.unwrap().to_bytes().to_vec()
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec()
     }
 
     // ============================================

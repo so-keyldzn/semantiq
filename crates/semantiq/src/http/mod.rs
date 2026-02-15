@@ -10,8 +10,8 @@ mod types;
 pub use routes::create_router;
 
 use anyhow::Result;
-use axum::extract::DefaultBodyLimit;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use semantiq_mcp::SemantiqServer;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,7 +27,11 @@ const MAX_BODY_SIZE: usize = 1024 * 1024;
 const MAX_CONCURRENT_REQUESTS: usize = 50;
 
 /// Start the HTTP API server
-pub async fn serve_http(server: SemantiqServer, port: u16, cors_origin: Option<String>) -> Result<()> {
+pub async fn serve_http(
+    server: SemantiqServer,
+    port: u16,
+    cors_origin: Option<String>,
+) -> Result<()> {
     let server = Arc::new(server);
 
     // Build CORS layer
