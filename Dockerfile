@@ -43,7 +43,7 @@ WORKDIR /app
 COPY --from=builder /build/target/release/semantiq /usr/local/bin/semantiq
 
 # Clone the Semantiq repository for meta-demo (exploring its own code)
-RUN git clone --depth 1 https://github.com/nicobarray/semantiq.git /app/semantiq-repo
+RUN git clone --depth 1 https://github.com/so-keyldzn/semantiq.git /app/semantiq-repo
 
 # Create data directory for the index and set ownership
 RUN mkdir -p /app/data && chown -R semantiq:semantiq /app
