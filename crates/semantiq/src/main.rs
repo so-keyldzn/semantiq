@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 mod commands;
+mod http;
 
 #[derive(Parser)]
 #[command(name = "semantiq")]
@@ -37,7 +38,7 @@ enum Commands {
         path: PathBuf,
     },
 
-    /// Start the MCP server (stdio transport)
+    /// Start the MCP server (stdio transport) or HTTP API server
     Serve {
         /// Path to the project root (default: current directory)
         #[arg(short, long)]
@@ -50,6 +51,14 @@ enum Commands {
         /// Disable automatic update check
         #[arg(long)]
         no_update_check: bool,
+
+        /// Start HTTP API server on this port (instead of MCP stdio)
+        #[arg(long)]
+        http_port: Option<u16>,
+
+        /// CORS allowed origin for HTTP API (e.g., "https://example.com")
+        #[arg(long)]
+        cors_origin: Option<String>,
     },
 
     /// Index a project directory
@@ -154,7 +163,9 @@ async fn main() -> Result<()> {
             project,
             database,
             no_update_check,
-        } => commands::serve(project, database, no_update_check).await,
+            http_port,
+            cors_origin,
+        } => commands::serve(project, database, no_update_check, http_port, cors_origin).await,
         Commands::Index {
             path,
             database,

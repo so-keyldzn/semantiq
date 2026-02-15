@@ -10,3 +10,7 @@ healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+[deploy.envVars]
+RUST_LOG = "info"
+HTTP_PORT = "8080"

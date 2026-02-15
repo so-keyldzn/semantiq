@@ -1,4 +1,4 @@
-//! Start the MCP server (stdio transport)
+//! Start the MCP server (stdio transport) or HTTP API server
 
 use anyhow::{Context, Result};
 use rmcp::ServiceExt;
@@ -12,6 +12,8 @@ pub async fn serve(
     project: Option<PathBuf>,
     database: Option<PathBuf>,
     no_update_check: bool,
+    http_port: Option<u16>,
+    cors_origin: Option<String>,
 ) -> Result<()> {
     // Disable update check if flag is set (thread-safe, no unsafe needed)
     if no_update_check {
@@ -25,10 +27,6 @@ pub async fn serve(
 
     let db_path = resolve_db_path(database, &project_root);
 
-    info!("Starting Semantiq MCP server");
-    info!("Project root: {:?}", project_root);
-    info!("Database: {:?}", db_path);
-
     let project_root_str = project_root
         .to_str()
         .context("Project root path contains invalid UTF-8")?;
@@ -37,11 +35,22 @@ pub async fn serve(
     // Start auto-indexer in background
     server.start_auto_indexer();
 
-    // Run MCP server on stdio
-    let service = server.serve(rmcp::transport::stdio()).await?;
+    if let Some(port) = http_port {
+        // HTTP API mode
+        info!("Starting Semantiq HTTP API server");
+        info!("Project root: {:?}", project_root);
+        info!("Database: {:?}", db_path);
 
-    // Wait for the service to complete
-    service.waiting().await?;
+        crate::http::serve_http(server, port, cors_origin).await
+    } else {
+        // MCP stdio mode
+        info!("Starting Semantiq MCP server");
+        info!("Project root: {:?}", project_root);
+        info!("Database: {:?}", db_path);
 
-    Ok(())
+        let service = server.serve(rmcp::transport::stdio()).await?;
+        service.waiting().await?;
+
+        Ok(())
+    }
 }
