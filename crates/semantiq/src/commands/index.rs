@@ -163,12 +163,7 @@ pub async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Resul
                 store.delete_dependencies(file_id)?;
                 for import in &imports {
                     let resolved = if import.kind == ImportKind::Local {
-                        resolve_local_import(
-                            &rel_path,
-                            &import.path,
-                            language,
-                            &project_root,
-                        )
+                        resolve_local_import(&rel_path, &import.path, language, &project_root)
                     } else {
                         None
                     };

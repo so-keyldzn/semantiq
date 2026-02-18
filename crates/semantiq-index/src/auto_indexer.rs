@@ -304,12 +304,7 @@ impl AutoIndexer {
                 self.store.delete_dependencies(file_id)?;
                 for import in &imports {
                     let resolved = if import.kind == ImportKind::Local {
-                        resolve_local_import(
-                            &rel_path,
-                            &import.path,
-                            language,
-                            &self.project_root,
-                        )
+                        resolve_local_import(&rel_path, &import.path, language, &self.project_root)
                     } else {
                         None
                     };

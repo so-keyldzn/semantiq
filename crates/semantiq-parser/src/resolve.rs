@@ -46,10 +46,7 @@ pub fn resolve_local_import(
         }
 
         // Try index files (JS/TS)
-        if matches!(
-            language,
-            Language::JavaScript | Language::TypeScript
-        ) {
+        if matches!(language, Language::JavaScript | Language::TypeScript) {
             for index_name in &["index.ts", "index.tsx", "index.js", "index.jsx"] {
                 let index_path = abs.join(index_name);
                 if index_path.is_file() {
@@ -247,12 +244,8 @@ mod tests {
     fn test_resolve_python_relative_import() {
         let dir = setup_project(&["pkg/sub/module.py", "pkg/main.py"]);
 
-        let resolved = resolve_local_import(
-            "pkg/main.py",
-            ".sub.module",
-            Language::Python,
-            dir.path(),
-        );
+        let resolved =
+            resolve_local_import("pkg/main.py", ".sub.module", Language::Python, dir.path());
         assert_eq!(resolved.as_deref(), Some("pkg/sub/module.py"));
     }
 
@@ -260,12 +253,7 @@ mod tests {
     fn test_resolve_python_init_import() {
         let dir = setup_project(&["pkg/utils/__init__.py", "pkg/main.py"]);
 
-        let resolved = resolve_local_import(
-            "pkg/main.py",
-            ".utils",
-            Language::Python,
-            dir.path(),
-        );
+        let resolved = resolve_local_import("pkg/main.py", ".utils", Language::Python, dir.path());
         assert_eq!(resolved.as_deref(), Some("pkg/utils/__init__.py"));
     }
 
@@ -273,12 +261,8 @@ mod tests {
     fn test_resolve_rust_crate_import() {
         let dir = setup_project(&["src/utils.rs"]);
 
-        let resolved = resolve_local_import(
-            "src/main.rs",
-            "crate::utils",
-            Language::Rust,
-            dir.path(),
-        );
+        let resolved =
+            resolve_local_import("src/main.rs", "crate::utils", Language::Rust, dir.path());
         assert_eq!(resolved.as_deref(), Some("src/utils.rs"));
     }
 
@@ -300,12 +284,8 @@ mod tests {
         let dir = setup_project(&["src/main.ts"]);
 
         // Non-relative imports should return None
-        let resolved = resolve_local_import(
-            "src/main.ts",
-            "react",
-            Language::TypeScript,
-            dir.path(),
-        );
+        let resolved =
+            resolve_local_import("src/main.ts", "react", Language::TypeScript, dir.path());
         assert!(resolved.is_none());
     }
 

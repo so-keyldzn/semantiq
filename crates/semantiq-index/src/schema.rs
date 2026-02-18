@@ -44,7 +44,10 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
 
     // v3 -> v4: add resolved_path column to dependencies
     if stored < 4 {
-        tracing::info!("Migrating schema v{} -> v4: adding resolved_path column", stored);
+        tracing::info!(
+            "Migrating schema v{} -> v4: adding resolved_path column",
+            stored
+        );
         conn.execute_batch(
             "ALTER TABLE dependencies ADD COLUMN resolved_path TEXT;
              CREATE INDEX IF NOT EXISTS idx_deps_resolved ON dependencies(resolved_path);",
@@ -426,7 +429,13 @@ mod tests {
             .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
             .unwrap();
         store
-            .insert_dependency(file_id, "crate::utils", Some("utils"), "local", Some("src/utils.rs"))
+            .insert_dependency(
+                file_id,
+                "crate::utils",
+                Some("utils"),
+                "local",
+                Some("src/utils.rs"),
+            )
             .unwrap();
 
         // Running migrate on a v4 store should not error

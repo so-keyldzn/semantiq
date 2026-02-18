@@ -856,7 +856,13 @@ fn test_get_dependents_via_resolved_path() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/app.ts", Some("typescript"), "import { helper } from './utils';", 32, 1000)
+        .insert_file(
+            "src/app.ts",
+            Some("typescript"),
+            "import { helper } from './utils';",
+            32,
+            1000,
+        )
         .unwrap();
 
     // Insert dependency WITH resolved_path
