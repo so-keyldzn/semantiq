@@ -5,7 +5,8 @@ use ignore::WalkBuilder;
 use semantiq_embeddings::create_embedding_model;
 use semantiq_index::{IndexStore, MAX_FILE_SIZE, should_exclude_entry};
 use semantiq_parser::{
-    ChunkExtractor, ImportExtractor, Language, LanguageSupport, SymbolExtractor,
+    ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, SymbolExtractor,
+    resolve_local_import,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -161,11 +162,22 @@ pub async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Resul
                 let imports = ImportExtractor::extract(&tree, &content, language)?;
                 store.delete_dependencies(file_id)?;
                 for import in &imports {
+                    let resolved = if import.kind == ImportKind::Local {
+                        resolve_local_import(
+                            &rel_path,
+                            &import.path,
+                            language,
+                            &project_root,
+                        )
+                    } else {
+                        None
+                    };
                     store.insert_dependency(
                         file_id,
                         &import.path,
                         import.name.as_deref(),
                         import.kind.as_str(),
+                        resolved.as_deref(),
                     )?;
                 }
                 dep_count += imports.len();

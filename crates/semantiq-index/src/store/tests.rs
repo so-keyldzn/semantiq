@@ -302,10 +302,10 @@ fn test_insert_and_get_dependencies() {
         .unwrap();
 
     store
-        .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+        .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
         .unwrap();
     store
-        .insert_dependency(file_id, "std::io", Some("io"), "std")
+        .insert_dependency(file_id, "std::io", Some("io"), "std", None)
         .unwrap();
 
     let deps = store.get_dependencies(file_id).unwrap();
@@ -323,7 +323,7 @@ fn test_get_dependents() {
         .unwrap();
 
     store
-        .insert_dependency(file_id, "src/utils.rs", Some("utils"), "local")
+        .insert_dependency(file_id, "src/utils.rs", Some("utils"), "local", None)
         .unwrap();
 
     let dependents = store.get_dependents("utils.rs").unwrap();
@@ -341,7 +341,7 @@ fn test_get_dependents_deduplicates() {
 
     // Insert a dependency that would match multiple LIKE patterns
     store
-        .insert_dependency(file_a, "./lib", Some("lib"), "local")
+        .insert_dependency(file_a, "./lib", Some("lib"), "local", None)
         .unwrap();
 
     // Should return exactly one result even though "./lib" matches
@@ -366,10 +366,10 @@ fn test_get_dependents_multiple_importers() {
         .unwrap();
 
     store
-        .insert_dependency(file_a, "crate::shared", Some("shared"), "local")
+        .insert_dependency(file_a, "crate::shared", Some("shared"), "local", None)
         .unwrap();
     store
-        .insert_dependency(file_b, "./shared", Some("shared"), "local")
+        .insert_dependency(file_b, "./shared", Some("shared"), "local", None)
         .unwrap();
 
     let dependents = store.get_dependents("src/shared.rs").unwrap();
@@ -401,6 +401,7 @@ fn test_get_dependents_no_false_positives() {
             "crate::something_else",
             Some("something_else"),
             "local",
+            None,
         )
         .unwrap();
 
@@ -418,7 +419,7 @@ fn test_delete_dependencies() {
         .unwrap();
 
     store
-        .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+        .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
         .unwrap();
 
     let deps = store.get_dependencies(file_id).unwrap();
@@ -848,4 +849,70 @@ fn test_get_chunk_language() {
 
     let language = store.get_chunk_language(chunk_id).unwrap();
     assert_eq!(language, Some("python".to_string()));
+}
+
+#[test]
+fn test_get_dependents_via_resolved_path() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/app.ts", Some("typescript"), "import { helper } from './utils';", 32, 1000)
+        .unwrap();
+
+    // Insert dependency WITH resolved_path
+    store
+        .insert_dependency(
+            file_a,
+            "./utils",
+            Some("helper"),
+            "local",
+            Some("src/utils.ts"),
+        )
+        .unwrap();
+
+    // Phase 1: exact match via resolved_path should find it
+    let dependents = store.get_dependents("src/utils.ts").unwrap();
+    assert_eq!(dependents.len(), 1);
+    assert_eq!(dependents[0].source_file_id, file_a);
+    assert_eq!(dependents[0].resolved_path.as_deref(), Some("src/utils.ts"));
+
+    // A non-matching resolved_path should not find it
+    let dependents = store.get_dependents("src/other.ts").unwrap();
+    assert_eq!(dependents.len(), 0);
+}
+
+#[test]
+fn test_get_dependents_mixed_resolved_and_unresolved() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/app.ts", Some("typescript"), "import stuff", 12, 1000)
+        .unwrap();
+    let file_b = store
+        .insert_file("src/main.ts", Some("typescript"), "import stuff", 12, 1000)
+        .unwrap();
+
+    // file_a has resolved_path
+    store
+        .insert_dependency(
+            file_a,
+            "./utils",
+            Some("utils"),
+            "local",
+            Some("src/utils.ts"),
+        )
+        .unwrap();
+
+    // file_b has no resolved_path (falls back to LIKE matching)
+    store
+        .insert_dependency(file_b, "./utils", Some("utils"), "local", None)
+        .unwrap();
+
+    let dependents = store.get_dependents("src/utils.ts").unwrap();
+    assert_eq!(
+        dependents.len(),
+        2,
+        "Expected 2 dependents (1 resolved + 1 fallback), got {}",
+        dependents.len()
+    );
 }

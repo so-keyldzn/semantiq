@@ -10,7 +10,7 @@ mod files;
 mod observations;
 mod symbols;
 
-use crate::schema::init_schema;
+use crate::schema::{init_schema, migrate_schema};
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, ffi::sqlite3_auto_extension};
 use sqlite_vec::sqlite3_vec_init;
@@ -59,7 +59,7 @@ static SQLITE_VEC_INIT: Once = Once::new();
 ///
 /// This function does not panic. If the extension fails to register, SQLite will
 /// return an error when attempting to use vec0 virtual tables.
-fn init_sqlite_vec() {
+pub(crate) fn init_sqlite_vec() {
     SQLITE_VEC_INIT.call_once(|| {
         // SAFETY: See function-level documentation for safety invariants.
         // The transmute is required because sqlite3_auto_extension expects an
@@ -102,6 +102,7 @@ impl IndexStore {
              PRAGMA busy_timeout=5000;",
         )?;
 
+        migrate_schema(&conn)?;
         init_schema(&conn)?;
 
         Ok(Self {

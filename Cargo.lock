@@ -2006,6 +2006,7 @@ version = "0.5.2"
 dependencies = [
  "anyhow",
  "serde",
+ "tempfile",
  "thiserror 2.0.17",
  "tracing",
  "tree-sitter",
