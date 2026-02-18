@@ -4,6 +4,26 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-02-18
+
+### Added
+- **HTTP API server** — Alternative to MCP stdio with `--http-port`, endpoints: `/health`, `/stats`, `/search`, `/find-refs`, `/deps`, `/explain`. Middleware: 1MB body limit, 50 concurrent requests, CORS configurable (`--cors-origin`)
+- **Local import resolution** — Resolution of local import paths to actual files on disk (JS/TS, Python, Rust, Go)
+- **`resolved_path` column** — Dependencies now store the resolved path, improving `find_refs` accuracy
+- **Schema migration v3→v4** — Automatic incremental migration (adds `resolved_path` column)
+- **Python stdlib detection** — Accurate classification of Python standard vs external imports (200+ modules, binary search)
+- **Symbol parent tracking** — Symbols now include their parent (e.g., method → struct/class)
+- **Dockerfile** — Multi-stage Docker image for deployment (Railway-ready)
+
+### Changed
+- Bump schema version 3 → 4 (automatic migration, no reindex required)
+- Auto-indexer and CLI `index` command use local import resolution
+
+### Fixed
+- Correct git clone URL in Dockerfile
+- Resolve clippy `module_inception` warning in HTTP tests
+- Bump Rust version in Dockerfile to support edition 2024 and let-chains
+
 ## [0.5.2] - 2026-02-10
 
 ### Security

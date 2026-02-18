@@ -5,45 +5,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-# Build the project
-cargo build
-
-# Build release version
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run tests for a specific crate
-cargo test -p semantiq-parser
-
-# Run a single test
-cargo test -p semantiq-parser test_language_from_extension
-
-# Check code without building
-cargo check
-
-# Format code
-cargo fmt
-
-# Lint code
-cargo clippy
+cargo build                          # Build (debug)
+cargo build --release                # Build (release, with LTO)
+cargo build --features semantiq-embeddings/onnx  # Build with real ONNX embeddings
+cargo test                           # Run all tests
+cargo test -p semantiq-parser        # Tests for one crate
+cargo test -p semantiq-parser test_language_from_extension  # Single test
+cargo check                          # Type-check without building
+cargo fmt                            # Format
+cargo clippy                         # Lint
 ```
 
 ## CLI Usage
 
 ```bash
-# Index a project
-cargo run -- index /path/to/project
-
-# Start MCP server
-cargo run -- serve --project /path/to/project
-
-# Search (for testing)
-cargo run -- search "query"
-
-# Show index stats
-cargo run -- stats
+cargo run -- index /path/to/project          # Index a project
+cargo run -- index --force                   # Force full reindex
+cargo run -- serve --project /path/to/project  # MCP server (stdio)
+cargo run -- serve --project . --http-port 3000  # HTTP API mode
+cargo run -- search "query"                  # CLI search (testing)
+cargo run -- stats                           # Index statistics
+cargo run -- calibrate                       # Build adaptive search thresholds (needs 500+ observations)
 ```
 
 ## Architecture
@@ -54,34 +36,75 @@ Semantiq is a Rust workspace providing semantic code understanding for AI coding
 
 ```
 crates/
-├── semantiq/           # Main binary (CLI entry point)
-├── semantiq-mcp/       # MCP server implementation (rmcp)
+├── semantiq/           # CLI binary (clap), HTTP API (axum)
+├── semantiq-mcp/       # MCP server (rmcp), tool handlers
 ├── semantiq-parser/    # Tree-sitter parsing, symbol/chunk/import extraction
-├── semantiq-index/     # SQLite storage (rusqlite), file/symbol/chunk records
-├── semantiq-retrieval/ # Search engine, query expansion, result ranking
-└── semantiq-embeddings/# Embedding model (placeholder for semantic search)
+├── semantiq-index/     # SQLite storage (rusqlite, FTS5, sqlite-vec)
+├── semantiq-retrieval/ # Search engine (3 strategies), query expansion, ranking
+└── semantiq-embeddings/# ONNX embedding model (feature-gated, stub by default)
 ```
 
 ### Data Flow
 
-1. **Indexing**: `semantiq index` walks project files → `semantiq-parser` extracts symbols/chunks/imports using tree-sitter → `semantiq-index` stores in SQLite (`.semantiq.db`)
+1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
 
-2. **Serving**: `semantiq serve` starts MCP server on stdio → tools call `semantiq-retrieval` → queries `semantiq-index`
+2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
 
-### MCP Tools
+3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP API (`--http-port`). These are mutually exclusive modes.
 
-- `semantiq_search` - Semantic + lexical code search
-- `semantiq_find_refs` - Find all references to a symbol
-- `semantiq_deps` - Analyze file dependency graph
-- `semantiq_explain` - Get detailed symbol explanation
+### Key Internal Conventions
 
-### Supported Languages
+- **DB access**: Always use `IndexStore::with_conn(|conn| { ... })` — never lock the mutex directly. Exception: `check_and_prepare_for_reindex()` for multi-step transactions.
+- **FTS5 queries**: Always use `IndexStore::escape_fts5_query()` when passing user input to `symbols_fts MATCH`.
+- **Parameterized SQL**: Use `params![]` with positional `?1`, `?2` — never string interpolation.
+- **File paths in DB**: Always stored as relative paths from project root (via `strip_prefix`).
+- **MCP stdout is reserved** for protocol messages. All logs go to stderr (`tracing` with `.with_writer(std::io::stderr)`). JSON log format is automatic in serve mode.
+- **Error handling**: `anyhow::Result` internally. MCP tool handlers return `Result<String, String>` — `Err` strings are deliberately opaque to avoid leaking internals.
 
-Rust, TypeScript, JavaScript, Python, Go, Java, C, C++, PHP - all via tree-sitter grammars.
+### Versioning That Triggers Reindex
+
+- **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
+- **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. No automatic migration — version stored in `metadata` table.
+
+### Embedding Model
+
+- **Feature-gated**: The `onnx` feature on `semantiq-embeddings` is **off by default**. Without it, `StubEmbeddingModel` returns zero vectors — semantic search runs but produces meaningless results.
+- Model: `all-MiniLM-L6-v2` (384-dim, ~90MB), downloaded from HuggingFace on first run to `dirs::data_dir()/semantiq/models/`.
+- ONNX session wrapped in `Mutex<Session>` (not `Send`). Thread count: `SEMANTIQ_ONNX_THREADS` env var (default: `min(cpu_count, 8)`).
+- Adaptive thresholds: After 500+ search observations, `semantiq calibrate` computes per-language distance thresholds. Fallback cascade: language-specific → global → hardcoded defaults (`max_distance=1.2`, `min_similarity=0.3`).
+
+### Thread Safety
+
+- `IndexStore`: `Arc<Mutex<Connection>>` — serialized single connection.
+- `LanguageSupport`: Wrapped in `Mutex` in `AutoIndexer` (tree-sitter parsers are `!Send`).
+- `OnnxEmbeddingModel`: `Mutex<Session>`.
+- `RetrievalEngine`: `Arc<RwLock<ThresholdConfig>>` for thresholds, `Mutex<Option<FileListCache>>` (30s TTL) for text search file list.
+
+### HTTP API (`--http-port`)
+
+Alternative to MCP stdio. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /find-refs`, `POST /deps`, `POST /explain`. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SEMANTIQ_ONNX_THREADS` | `min(cpu_count, 8)` | ONNX intra-op parallelism |
+| `SEMANTIQ_UPDATE_CHECK` | `true` | `"0"` or `"false"` to disable version check |
+| `SEMANTIQ_UPDATE_CACHE_HOURS` | `24` | Hours to cache GitHub version check |
+| `RUST_LOG` | `info,ort=warn` | Tracing filter (`--verbose` sets `debug`) |
+
+### Testing Patterns
+
+- **In-memory DB**: `IndexStore::open_in_memory()` is the standard test fixture — no temp files needed for DB tests.
+- **MCP server tests**: `create_test_server()` in `server.rs` builds a server without background tasks. Uses `TempDir` for tests needing physical files.
+- **Async tests**: MCP tool handlers use `#[tokio::test]`.
+- **Parser tests**: `LanguageSupport::new()` + `support.parse(Language::X, source)`.
 
 ### Key Types
 
-- `Language` / `LanguageSupport` - Multi-language tree-sitter parsing (`semantiq-parser/src/language.rs`)
-- `IndexStore` - SQLite wrapper with FTS5 search (`semantiq-index/src/store.rs`)
-- `RetrievalEngine` - Query execution and result ranking (`semantiq-retrieval/src/engine.rs`)
-- `SemantiqServer` - MCP server with tool handlers (`semantiq-mcp/src/server.rs`)
+- `Language` / `LanguageSupport` — Multi-language tree-sitter parsing (`semantiq-parser/src/language.rs`)
+- `IndexStore` — SQLite wrapper with FTS5 + sqlite-vec (`semantiq-index/src/store.rs`)
+- `RetrievalEngine` — Query execution and 3-strategy ranking (`semantiq-retrieval/src/engine.rs`)
+- `SemantiqServer` — MCP server with tool handlers (`semantiq-mcp/src/server.rs`)
+- `AutoIndexer` — File watcher + incremental reindexing (`semantiq-index/src/auto_indexer.rs`)
+- `QueryExpander` — snake_case/camelCase/PascalCase/kebab-case conversion (`semantiq-retrieval/src/query.rs`)
