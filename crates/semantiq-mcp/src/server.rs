@@ -729,7 +729,7 @@ mod tests {
         // Add a dependency
         server
             .store
-            .insert_dependency(file_id, "crate::utils", Some("utils"), "local")
+            .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
             .expect("Failed to insert dependency");
 
         let result = server.semantiq_deps("main.rs".to_string()).await;
@@ -748,7 +748,7 @@ mod tests {
 
         server
             .store
-            .insert_dependency(file_id, "std::io", Some("io"), "std")
+            .insert_dependency(file_id, "std::io", Some("io"), "std", None)
             .expect("Failed to insert dependency");
 
         let result = server.semantiq_deps("app.rs".to_string()).await;
@@ -781,7 +781,7 @@ mod tests {
         // main.rs depends on utils.rs
         server
             .store
-            .insert_dependency(main_id, "crate::utils", Some("utils"), "local")
+            .insert_dependency(main_id, "crate::utils", Some("utils"), "local", None)
             .expect("Failed to insert dependency");
 
         // Query reverse deps for utils.rs — should show main.rs as importer

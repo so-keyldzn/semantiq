@@ -69,22 +69,26 @@ impl SymbolExtractor {
         source: &str,
         language: Language,
         symbols: &mut Vec<Symbol>,
-        parent: Option<&str>,
+        parent_path: Option<&str>,
     ) -> Result<()> {
-        if let Some(symbol) = Self::node_to_symbol(node, source, language, parent) {
-            let parent_name = symbol.name.clone();
+        if let Some(symbol) = Self::node_to_symbol(node, source, language, parent_path) {
+            // Build full hierarchical path for children
+            let full_path = match parent_path {
+                Some(pp) => format!("{}::{}", pp, symbol.name),
+                None => symbol.name.clone(),
+            };
             symbols.push(symbol);
 
             // Extract children with this as parent
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                Self::extract_recursive(&child, source, language, symbols, Some(&parent_name))?;
+                Self::extract_recursive(&child, source, language, symbols, Some(&full_path))?;
             }
         } else {
             // Continue traversing
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                Self::extract_recursive(&child, source, language, symbols, parent)?;
+                Self::extract_recursive(&child, source, language, symbols, parent_path)?;
             }
         }
 
@@ -795,8 +799,41 @@ impl Calculator {
         let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
 
         // The impl block should be detected, and functions inside should have parent
-        let add_func = symbols.iter().find(|s| s.name == "add");
-        assert!(add_func.is_some());
+        let add_func = symbols.iter().find(|s| s.name == "add").unwrap();
+        assert_eq!(add_func.parent.as_deref(), Some("Calculator"));
+
+        let sub_func = symbols.iter().find(|s| s.name == "subtract").unwrap();
+        assert_eq!(sub_func.parent.as_deref(), Some("Calculator"));
+    }
+
+    #[test]
+    fn test_deeply_nested_parent_path() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+class Outer:
+    class Middle:
+        class Inner:
+            def deep_method(self):
+                pass
+        def mid_method(self):
+            pass
+    def outer_method(self):
+        pass
+"#;
+        let tree = support.parse(Language::Python, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Python).unwrap();
+
+        let inner = symbols.iter().find(|s| s.name == "Inner").unwrap();
+        assert_eq!(inner.parent.as_deref(), Some("Outer::Middle"));
+
+        let deep = symbols.iter().find(|s| s.name == "deep_method").unwrap();
+        assert_eq!(deep.parent.as_deref(), Some("Outer::Middle::Inner"));
+
+        let mid = symbols.iter().find(|s| s.name == "mid_method").unwrap();
+        assert_eq!(mid.parent.as_deref(), Some("Outer::Middle"));
+
+        let outer = symbols.iter().find(|s| s.name == "outer_method").unwrap();
+        assert_eq!(outer.parent.as_deref(), Some("Outer"));
     }
 
     #[test]

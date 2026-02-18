@@ -31,6 +31,213 @@ impl ImportKind {
     }
 }
 
+/// Python 3.10+ standard library modules (sorted for binary_search).
+const PYTHON_STD_MODULES: &[&str] = &[
+    "__future__",
+    "_thread",
+    "abc",
+    "aifc",
+    "argparse",
+    "array",
+    "ast",
+    "asynchat",
+    "asyncio",
+    "asyncore",
+    "atexit",
+    "audioop",
+    "base64",
+    "bdb",
+    "binascii",
+    "binhex",
+    "bisect",
+    "builtins",
+    "bz2",
+    "cProfile",
+    "calendar",
+    "cgi",
+    "cgitb",
+    "chunk",
+    "cmath",
+    "cmd",
+    "code",
+    "codecs",
+    "codeop",
+    "collections",
+    "colorsys",
+    "compileall",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "contextvars",
+    "copy",
+    "copyreg",
+    "crypt",
+    "csv",
+    "ctypes",
+    "curses",
+    "dataclasses",
+    "datetime",
+    "dbm",
+    "decimal",
+    "difflib",
+    "dis",
+    "distutils",
+    "doctest",
+    "email",
+    "encodings",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "filecmp",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "getopt",
+    "getpass",
+    "gettext",
+    "glob",
+    "grp",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "idlelib",
+    "imaplib",
+    "imghdr",
+    "imp",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "lib2to3",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "mailbox",
+    "mailcap",
+    "marshal",
+    "math",
+    "mimetypes",
+    "mmap",
+    "modulefinder",
+    "multiprocessing",
+    "netrc",
+    "nis",
+    "nntplib",
+    "numbers",
+    "operator",
+    "optparse",
+    "os",
+    "ossaudiodev",
+    "pathlib",
+    "pdb",
+    "pickle",
+    "pickletools",
+    "pipes",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "poplib",
+    "posix",
+    "posixpath",
+    "pprint",
+    "profile",
+    "pstats",
+    "pty",
+    "pwd",
+    "py_compile",
+    "pyclbr",
+    "pydoc",
+    "queue",
+    "quopri",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "rlcompleter",
+    "runpy",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtpd",
+    "smtplib",
+    "sndhdr",
+    "socket",
+    "socketserver",
+    "sqlite3",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "stringprep",
+    "struct",
+    "subprocess",
+    "sunau",
+    "symtable",
+    "sys",
+    "sysconfig",
+    "syslog",
+    "tabnanny",
+    "tarfile",
+    "telnetlib",
+    "tempfile",
+    "termios",
+    "test",
+    "textwrap",
+    "threading",
+    "time",
+    "timeit",
+    "tkinter",
+    "token",
+    "tokenize",
+    "tomllib",
+    "trace",
+    "traceback",
+    "tracemalloc",
+    "tty",
+    "turtle",
+    "turtledemo",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uu",
+    "uuid",
+    "venv",
+    "warnings",
+    "wave",
+    "weakref",
+    "webbrowser",
+    "winreg",
+    "winsound",
+    "wsgiref",
+    "xdrlib",
+    "xml",
+    "xmlrpc",
+    "zipapp",
+    "zipfile",
+    "zipimport",
+    "zlib",
+];
+
 pub struct ImportExtractor;
 
 impl ImportExtractor {
@@ -235,31 +442,7 @@ impl ImportExtractor {
     fn classify_python_import(path: &str) -> ImportKind {
         let first_segment = path.split('.').next().unwrap_or(path);
 
-        // Common Python standard library modules
-        let std_modules = [
-            "os",
-            "sys",
-            "re",
-            "json",
-            "pathlib",
-            "collections",
-            "itertools",
-            "functools",
-            "typing",
-            "dataclasses",
-            "abc",
-            "io",
-            "time",
-            "datetime",
-            "logging",
-            "unittest",
-            "argparse",
-            "subprocess",
-            "threading",
-            "asyncio",
-        ];
-
-        if std_modules.contains(&first_segment) {
+        if PYTHON_STD_MODULES.binary_search(&first_segment).is_ok() {
             ImportKind::Std
         } else {
             ImportKind::External
@@ -817,6 +1000,98 @@ import com.google.gson.Gson;
                 .iter()
                 .any(|i| i.path == "myheader.h" && i.kind == ImportKind::Local)
         );
+    }
+
+    #[test]
+    fn test_classify_python_stdlib_comprehensive() {
+        // Standard library modules should be classified as Std
+        let std_imports = [
+            "hashlib",
+            "math",
+            "sqlite3",
+            "http",
+            "xml",
+            "email",
+            "os",
+            "sys",
+            "json",
+            "collections",
+            "itertools",
+            "functools",
+            "typing",
+            "dataclasses",
+            "abc",
+            "io",
+            "time",
+            "datetime",
+            "logging",
+            "unittest",
+            "argparse",
+            "subprocess",
+            "threading",
+            "asyncio",
+            "pathlib",
+            "re",
+            "uuid",
+            "urllib",
+            "csv",
+            "struct",
+            "socket",
+            "ssl",
+            "tempfile",
+            "shutil",
+            "glob",
+            "pickle",
+            "enum",
+            "secrets",
+            "statistics",
+        ];
+        for module in &std_imports {
+            assert_eq!(
+                ImportExtractor::classify_python_import(module),
+                ImportKind::Std,
+                "'{}' should be classified as Std",
+                module
+            );
+        }
+
+        // External packages should NOT be classified as Std
+        let external_imports = ["numpy", "pandas", "requests", "flask", "django", "pytest"];
+        for module in &external_imports {
+            assert_eq!(
+                ImportExtractor::classify_python_import(module),
+                ImportKind::External,
+                "'{}' should be classified as External",
+                module
+            );
+        }
+
+        // Dotted paths should classify by first segment
+        assert_eq!(
+            ImportExtractor::classify_python_import("os.path"),
+            ImportKind::Std
+        );
+        assert_eq!(
+            ImportExtractor::classify_python_import("http.server"),
+            ImportKind::Std
+        );
+        assert_eq!(
+            ImportExtractor::classify_python_import("numpy.linalg"),
+            ImportKind::External
+        );
+    }
+
+    #[test]
+    fn test_python_std_modules_sorted() {
+        // Verify the list is sorted (required for binary_search)
+        for window in PYTHON_STD_MODULES.windows(2) {
+            assert!(
+                window[0] < window[1],
+                "PYTHON_STD_MODULES is not sorted: '{}' >= '{}'",
+                window[0],
+                window[1]
+            );
+        }
     }
 
     #[test]
