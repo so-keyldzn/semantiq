@@ -533,7 +533,7 @@ mod tests {
         let (server, _temp) = create_test_server();
 
         let result = server
-            .semantiq_search("".to_string(), None, None, None, None)
+            .semantiq_search(String::new(), None, None, None, None)
             .await;
 
         assert!(result.is_err());

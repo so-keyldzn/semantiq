@@ -18,7 +18,7 @@ pub fn resolve_local_import(
     let source_dir = Path::new(source_rel_path).parent().unwrap_or(Path::new(""));
 
     let raw = match language {
-        Language::Python => resolve_python_import(source_dir, import_path),
+        Language::Python => Some(resolve_python_import(source_dir, import_path)),
         Language::Rust => resolve_rust_import(source_rel_path, import_path),
         Language::TypeScript | Language::JavaScript => resolve_js_import(source_dir, import_path),
         _ => resolve_generic_import(source_dir, import_path),
@@ -84,7 +84,7 @@ fn normalize_path(path: &Path) -> PathBuf {
     components.iter().collect()
 }
 
-fn resolve_python_import(source_dir: &Path, import_path: &str) -> Option<Vec<PathBuf>> {
+fn resolve_python_import(source_dir: &Path, import_path: &str) -> Vec<PathBuf> {
     if import_path.starts_with('.') {
         // Relative import: count leading dots
         let dots = import_path.chars().take_while(|c| *c == '.').count();
@@ -97,15 +97,15 @@ fn resolve_python_import(source_dir: &Path, import_path: &str) -> Option<Vec<Pat
         }
 
         if rest.is_empty() {
-            Some(vec![base])
+            vec![base]
         } else {
             let file_path = base.join(rest.replace('.', "/"));
-            Some(vec![file_path])
+            vec![file_path]
         }
     } else {
         // Absolute Python import — resolve as path from project root
         let file_path = PathBuf::from(import_path.replace('.', "/"));
-        Some(vec![file_path])
+        vec![file_path]
     }
 }
 

@@ -12,12 +12,16 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error};
 
-use super::types::*;
+use super::types::{
+    Dependency, DepsRequest, DepsResponse, ErrorResponse, ExplainRequest, ExplainResponse,
+    FindRefsRequest, FindRefsResponse, HealthResponse, Reference, SearchMetadata, SearchRequest,
+    SearchResponse, SearchResult, StatsResponse, SymbolDefinition,
+};
 
 type AppState = Arc<SemantiqServer>;
 
 /// Create the router with all API endpoints
-pub fn create_router(server: AppState) -> Router {
+pub(crate) fn create_router(server: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/stats", get(stats))
