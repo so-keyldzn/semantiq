@@ -7,7 +7,7 @@ use std::path::Path;
 use super::common::resolve_project_root;
 use super::index::index;
 
-pub async fn init(path: &Path) -> Result<()> {
+pub(crate) async fn init(path: &Path) -> Result<()> {
     let project_root = resolve_project_root(path)?;
 
     println!("Initializing Semantiq for {:?}", project_root);

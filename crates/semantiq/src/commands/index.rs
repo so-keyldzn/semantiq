@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 
 use super::common::{resolve_db_path, resolve_project_root};
 
-pub async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()> {
+pub(crate) async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()> {
     let project_root = resolve_project_root(path)?;
     let db_path = resolve_db_path(database, &project_root);
 

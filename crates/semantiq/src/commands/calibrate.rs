@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use super::common::resolve_db_path;
 
 /// Run threshold calibration.
-pub async fn calibrate(
+pub(crate) async fn calibrate(
     database: Option<PathBuf>,
     language: Option<String>,
     dry_run: bool,

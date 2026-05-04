@@ -6,14 +6,14 @@ use std::collections::HashMap;
 
 /// Default maximum L2 distance threshold for semantic search.
 /// Results with distance above this are excluded.
-pub const DEFAULT_MAX_DISTANCE: f32 = 1.2;
+pub(super) const DEFAULT_MAX_DISTANCE: f32 = 1.2;
 
 /// Default minimum similarity score (converted from distance).
 /// Score = 1.0 / (1.0 + distance), so 0.3 corresponds to distance ~2.33
-pub const DEFAULT_MIN_SIMILARITY: f32 = 0.3;
+pub(super) const DEFAULT_MIN_SIMILARITY: f32 = 0.3;
 
 /// Minimum number of observations required for calibration.
-pub const MIN_SAMPLES_FOR_CALIBRATION: usize = 100;
+pub(super) const MIN_SAMPLES_FOR_CALIBRATION: usize = 100;
 
 /// Confidence level for calibrated thresholds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

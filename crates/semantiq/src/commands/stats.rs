@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use super::common::resolve_db_path;
 
-pub async fn stats(database: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
     let db_path = resolve_db_path(database, &cwd);
 

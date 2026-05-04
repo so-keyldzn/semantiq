@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::common::resolve_db_path;
 
-pub async fn search(
+pub(crate) async fn search(
     query: &str,
     database: Option<PathBuf>,
     limit: usize,

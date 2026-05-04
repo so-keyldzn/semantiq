@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Default database filename
-pub const DEFAULT_DB_NAME: &str = ".semantiq.db";
+pub(super) const DEFAULT_DB_NAME: &str = ".semantiq.db";
 
 /// Resolves a path to an absolute, canonicalized project root path.
 /// If the path is relative, it's joined with the current directory.
 /// The result is canonicalized to resolve `..` components and symlinks.
-pub fn resolve_project_root(path: &Path) -> Result<PathBuf> {
+pub(super) fn resolve_project_root(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -24,7 +24,7 @@ pub fn resolve_project_root(path: &Path) -> Result<PathBuf> {
 
 /// Returns the database path, using the provided path or defaulting to
 /// `DEFAULT_DB_NAME` in the project root.
-pub fn resolve_db_path(database: Option<PathBuf>, project_root: &Path) -> PathBuf {
+pub(super) fn resolve_db_path(database: Option<PathBuf>, project_root: &Path) -> PathBuf {
     database.unwrap_or_else(|| project_root.join(DEFAULT_DB_NAME))
 }
 

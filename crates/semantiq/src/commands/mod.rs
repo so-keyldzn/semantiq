@@ -9,10 +9,10 @@ mod search;
 mod serve;
 mod stats;
 
-pub use calibrate::calibrate;
-pub use index::index;
-pub use init::init;
-pub use init_cursor::init_cursor;
-pub use search::search;
-pub use serve::serve;
-pub use stats::stats;
+pub(crate) use calibrate::calibrate;
+pub(crate) use index::index;
+pub(crate) use init::init;
+pub(crate) use init_cursor::init_cursor;
+pub(crate) use search::search;
+pub(crate) use serve::serve;
+pub(crate) use stats::stats;

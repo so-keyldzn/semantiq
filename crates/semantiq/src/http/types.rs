@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 // ============================================
 
 #[derive(Debug, Deserialize)]
-pub struct SearchRequest {
+pub(super) struct SearchRequest {
     pub query: String,
     pub limit: Option<usize>,
     pub min_score: Option<f32>,
@@ -16,7 +16,7 @@ pub struct SearchRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchResult {
+pub(super) struct SearchResult {
     pub file_path: String,
     pub start_line: u32,
     pub end_line: u32,
@@ -26,13 +26,13 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchMetadata {
+pub(super) struct SearchMetadata {
     pub symbol_name: Option<String>,
     pub symbol_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchResponse {
+pub(super) struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub total_count: usize,
     pub search_time_ms: u64,
@@ -43,13 +43,13 @@ pub struct SearchResponse {
 // ============================================
 
 #[derive(Debug, Deserialize)]
-pub struct FindRefsRequest {
+pub(super) struct FindRefsRequest {
     pub symbol: String,
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Reference {
+pub(super) struct Reference {
     pub file_path: String,
     pub line: u32,
     pub column: Option<u32>,
@@ -58,7 +58,7 @@ pub struct Reference {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FindRefsResponse {
+pub(super) struct FindRefsResponse {
     pub symbol: String,
     pub definitions: Vec<Reference>,
     pub references: Vec<Reference>,
@@ -71,19 +71,19 @@ pub struct FindRefsResponse {
 // ============================================
 
 #[derive(Debug, Deserialize)]
-pub struct DepsRequest {
+pub(super) struct DepsRequest {
     pub file_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Dependency {
+pub(super) struct Dependency {
     pub path: String,
     pub symbols: Option<Vec<String>>,
     pub kind: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DepsResponse {
+pub(super) struct DepsResponse {
     pub file_path: String,
     pub imports: Vec<Dependency>,
     pub imported_by: Vec<Dependency>,
@@ -95,12 +95,12 @@ pub struct DepsResponse {
 // ============================================
 
 #[derive(Debug, Deserialize)]
-pub struct ExplainRequest {
+pub(super) struct ExplainRequest {
     pub symbol: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SymbolDefinition {
+pub(super) struct SymbolDefinition {
     pub file_path: String,
     pub line: u32,
     pub signature: Option<String>,
@@ -108,7 +108,7 @@ pub struct SymbolDefinition {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExplainResponse {
+pub(super) struct ExplainResponse {
     pub symbol: String,
     pub kind: String,
     pub definitions: Vec<SymbolDefinition>,
@@ -121,7 +121,7 @@ pub struct ExplainResponse {
 // ============================================
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct StatsResponse {
+pub(super) struct StatsResponse {
     pub indexed_files: usize,
     pub indexed_symbols: usize,
     pub indexed_chunks: usize,
@@ -133,7 +133,7 @@ pub struct StatsResponse {
 // ============================================
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HealthResponse {
+pub(super) struct HealthResponse {
     pub status: String,
     pub version: String,
 }
@@ -143,7 +143,7 @@ pub struct HealthResponse {
 // ============================================
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorResponse {
+pub(super) struct ErrorResponse {
     pub error: String,
     pub code: String,
 }

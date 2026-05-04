@@ -19,7 +19,7 @@ fn write_if_not_exists(path: &Path, content: &str, name: &str) -> Result<bool> {
     }
 }
 
-pub async fn init_cursor(path: &Path) -> Result<()> {
+pub(crate) async fn init_cursor(path: &Path) -> Result<()> {
     let project_root = resolve_project_root(path)?;
 
     println!("Initializing Cursor/VS Code config for {:?}", project_root);

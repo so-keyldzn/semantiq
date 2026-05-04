@@ -8,7 +8,7 @@ use tracing::info;
 
 use super::common::resolve_db_path;
 
-pub async fn serve(
+pub(crate) async fn serve(
     project: Option<PathBuf>,
     database: Option<PathBuf>,
     no_update_check: bool,
