@@ -4,6 +4,20 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-04
+
+### Fixed
+- Persist `SCHEMA_VERSION` in `metadata` after migration so future migrations can correctly detect that `v3 → v4` was applied
+- `IndexStore::open_in_memory` now runs `migrate_schema`, so test fixtures exercise the migration path
+- Added regression tests for path-traversal-escaping imports and Python 3-dot relative imports (`from ...top`)
+
+### Changed
+- Extracted `PYTHON_STD_MODULES` from `imports.rs` (1148 → 929 lines) into a dedicated `python_stdlib` module
+- Converted 10 `unused_self` methods to associated functions in `ChunkExtractor`, `QueryExpander`, `RetrievalEngine`, and `ThresholdCalibrator`
+- Tightened visibility of internal items in `semantiq` and `semantiq-retrieval` from `pub` to `pub(crate)` / `pub(super)`
+- Replaced wildcard `use super::types::*` in HTTP routes with explicit imports
+- `resolve_python_import` now returns `Vec<PathBuf>` instead of always-`Some` `Option<Vec<PathBuf>>`
+
 ## [0.6.0] - 2026-02-18
 
 ### Added
