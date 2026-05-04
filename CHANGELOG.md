@@ -4,6 +4,22 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-04
+
+### Security
+- **HIGH**: Bumped `rustls-webpki` 0.103.9 → 0.103.13 to fix four CVEs:
+  - RUSTSEC-2026-0049 — CRLs not considered authoritative by Distribution Point due to faulty matching logic
+  - RUSTSEC-2026-0098 — Name constraints for URI names were incorrectly accepted
+  - RUSTSEC-2026-0099 — Name constraints accepted for certificates asserting a wildcard name
+  - RUSTSEC-2026-0104 — Reachable panic in certificate revocation list parsing
+- **LOW**: Bumped `rand` 0.9.2 → 0.9.4 (RUSTSEC-2026-0097, unsoundness with custom logger)
+- Bumped `openssl` 0.10.75 → 0.10.79
+
+### Changed
+- Split `crates/semantiq-mcp/src/server.rs` test module into per-tool files
+  (`server/tests/{search,find_refs,deps,explain,server_handler,edge_cases}.rs`).
+  `server.rs` shrinks from 931 to 479 lines; no behavior change.
+
 ## [0.6.1] - 2026-05-04
 
 ### Fixed
