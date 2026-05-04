@@ -79,31 +79,31 @@ impl QueryExpander {
 
         // snake_case to camelCase
         if term.contains('_') {
-            variations.push(self.snake_to_camel(term));
-            variations.push(self.snake_to_pascal(term));
+            variations.push(Self::snake_to_camel(term));
+            variations.push(Self::snake_to_pascal(term));
         }
 
         // camelCase to snake_case
-        if self.is_camel_case(term) {
-            variations.push(self.camel_to_snake(term));
+        if Self::is_camel_case(term) {
+            variations.push(Self::camel_to_snake(term));
         }
 
         // PascalCase to snake_case
-        if self.is_pascal_case(term) {
-            variations.push(self.camel_to_snake(term));
-            variations.push(self.pascal_to_camel(term));
+        if Self::is_pascal_case(term) {
+            variations.push(Self::camel_to_snake(term));
+            variations.push(Self::pascal_to_camel(term));
         }
 
         // kebab-case variations
         if term.contains('-') {
             variations.push(term.replace('-', "_"));
-            variations.push(self.kebab_to_camel(term));
+            variations.push(Self::kebab_to_camel(term));
         }
 
         variations
     }
 
-    fn snake_to_camel(&self, s: &str) -> String {
+    fn snake_to_camel(s: &str) -> String {
         let mut result = String::new();
         let mut capitalize_next = false;
 
@@ -121,8 +121,8 @@ impl QueryExpander {
         result
     }
 
-    fn snake_to_pascal(&self, s: &str) -> String {
-        let camel = self.snake_to_camel(s);
+    fn snake_to_pascal(s: &str) -> String {
+        let camel = Self::snake_to_camel(s);
         let mut chars = camel.chars();
         match chars.next() {
             Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
@@ -130,7 +130,7 @@ impl QueryExpander {
         }
     }
 
-    fn camel_to_snake(&self, s: &str) -> String {
+    fn camel_to_snake(s: &str) -> String {
         let mut result = String::new();
 
         for (i, c) in s.chars().enumerate() {
@@ -147,7 +147,7 @@ impl QueryExpander {
         result
     }
 
-    fn pascal_to_camel(&self, s: &str) -> String {
+    fn pascal_to_camel(s: &str) -> String {
         let mut chars = s.chars();
         match chars.next() {
             Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
@@ -155,11 +155,11 @@ impl QueryExpander {
         }
     }
 
-    fn kebab_to_camel(&self, s: &str) -> String {
-        self.snake_to_camel(&s.replace('-', "_"))
+    fn kebab_to_camel(s: &str) -> String {
+        Self::snake_to_camel(&s.replace('-', "_"))
     }
 
-    fn is_camel_case(&self, s: &str) -> bool {
+    fn is_camel_case(s: &str) -> bool {
         let mut chars = s.chars();
         if let Some(first) = chars.next()
             && first.is_lowercase()
@@ -169,7 +169,7 @@ impl QueryExpander {
         false
     }
 
-    fn is_pascal_case(&self, s: &str) -> bool {
+    fn is_pascal_case(s: &str) -> bool {
         let mut chars = s.chars();
         if let Some(first) = chars.next()
             && first.is_uppercase()
@@ -315,16 +315,20 @@ mod tests {
 
     #[test]
     fn test_snake_to_camel() {
-        let expander = QueryExpander::new();
-        assert_eq!(expander.snake_to_camel("hello_world"), "helloWorld");
-        assert_eq!(expander.snake_to_camel("get_user_by_id"), "getUserById");
+        assert_eq!(QueryExpander::snake_to_camel("hello_world"), "helloWorld");
+        assert_eq!(
+            QueryExpander::snake_to_camel("get_user_by_id"),
+            "getUserById"
+        );
     }
 
     #[test]
     fn test_camel_to_snake() {
-        let expander = QueryExpander::new();
-        assert_eq!(expander.camel_to_snake("helloWorld"), "hello_world");
-        assert_eq!(expander.camel_to_snake("getUserById"), "get_user_by_id");
+        assert_eq!(QueryExpander::camel_to_snake("helloWorld"), "hello_world");
+        assert_eq!(
+            QueryExpander::camel_to_snake("getUserById"),
+            "get_user_by_id"
+        );
     }
 
     #[test]
@@ -335,44 +339,42 @@ mod tests {
 
     #[test]
     fn test_snake_to_pascal() {
-        let expander = QueryExpander::new();
-        assert_eq!(expander.snake_to_pascal("hello_world"), "HelloWorld");
-        assert_eq!(expander.snake_to_pascal("get_user"), "GetUser");
+        assert_eq!(QueryExpander::snake_to_pascal("hello_world"), "HelloWorld");
+        assert_eq!(QueryExpander::snake_to_pascal("get_user"), "GetUser");
     }
 
     #[test]
     fn test_pascal_to_camel() {
-        let expander = QueryExpander::new();
-        assert_eq!(expander.pascal_to_camel("HelloWorld"), "helloWorld");
-        assert_eq!(expander.pascal_to_camel("GetUser"), "getUser");
+        assert_eq!(QueryExpander::pascal_to_camel("HelloWorld"), "helloWorld");
+        assert_eq!(QueryExpander::pascal_to_camel("GetUser"), "getUser");
     }
 
     #[test]
     fn test_kebab_to_camel() {
-        let expander = QueryExpander::new();
-        assert_eq!(expander.kebab_to_camel("hello-world"), "helloWorld");
-        assert_eq!(expander.kebab_to_camel("get-user-by-id"), "getUserById");
+        assert_eq!(QueryExpander::kebab_to_camel("hello-world"), "helloWorld");
+        assert_eq!(
+            QueryExpander::kebab_to_camel("get-user-by-id"),
+            "getUserById"
+        );
     }
 
     #[test]
     fn test_is_camel_case() {
-        let expander = QueryExpander::new();
-        assert!(expander.is_camel_case("helloWorld"));
-        assert!(expander.is_camel_case("getUser"));
-        assert!(!expander.is_camel_case("HelloWorld")); // PascalCase
-        assert!(!expander.is_camel_case("hello")); // All lowercase
-        assert!(!expander.is_camel_case("HELLO")); // All uppercase
+        assert!(QueryExpander::is_camel_case("helloWorld"));
+        assert!(QueryExpander::is_camel_case("getUser"));
+        assert!(!QueryExpander::is_camel_case("HelloWorld")); // PascalCase
+        assert!(!QueryExpander::is_camel_case("hello")); // All lowercase
+        assert!(!QueryExpander::is_camel_case("HELLO")); // All uppercase
     }
 
     #[test]
     fn test_is_pascal_case() {
-        let expander = QueryExpander::new();
-        assert!(expander.is_pascal_case("HelloWorld"));
-        assert!(expander.is_pascal_case("GetUser"));
-        assert!(!expander.is_pascal_case("helloWorld")); // camelCase
-        assert!(!expander.is_pascal_case("Hello")); // Single capitalized word, no case transition
-        assert!(!expander.is_pascal_case("HELLO")); // All uppercase, not PascalCase
-        assert!(expander.is_pascal_case("MyStruct")); // Two case transitions
+        assert!(QueryExpander::is_pascal_case("HelloWorld"));
+        assert!(QueryExpander::is_pascal_case("GetUser"));
+        assert!(!QueryExpander::is_pascal_case("helloWorld")); // camelCase
+        assert!(!QueryExpander::is_pascal_case("Hello")); // Single capitalized word, no case transition
+        assert!(!QueryExpander::is_pascal_case("HELLO")); // All uppercase, not PascalCase
+        assert!(QueryExpander::is_pascal_case("MyStruct")); // Two case transitions
     }
 
     #[test]
@@ -479,9 +481,8 @@ mod tests {
 
     #[test]
     fn test_query_expander_default() {
-        let expander = QueryExpander::new();
         // Should work the same as new()
-        assert_eq!(expander.snake_to_camel("test_case"), "testCase");
+        assert_eq!(QueryExpander::snake_to_camel("test_case"), "testCase");
     }
 
     // SearchOptions tests

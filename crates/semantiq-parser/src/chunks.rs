@@ -61,7 +61,7 @@ impl ChunkExtractor {
 
                 if content_size >= self.chunk_size && !current_symbols.is_empty() {
                     // Create a chunk
-                    let chunk = self.create_chunk(
+                    let chunk = Self::create_chunk(
                         source,
                         &lines,
                         current_start,
@@ -80,7 +80,7 @@ impl ChunkExtractor {
         // Handle remaining content
         if current_start < lines.len() {
             let chunk =
-                self.create_chunk(source, &lines, current_start, lines.len(), &current_symbols);
+                Self::create_chunk(source, &lines, current_start, lines.len(), &current_symbols);
             chunks.push(chunk);
         }
 
@@ -106,8 +106,8 @@ impl ChunkExtractor {
         language: Language,
         boundaries: &mut Vec<SemanticBoundary>,
     ) {
-        if self.is_boundary_node(node.kind(), language)
-            && let Some(name) = self.get_node_name(node, source)
+        if Self::is_boundary_node(node.kind(), language)
+            && let Some(name) = Self::get_node_name(node, source)
         {
             boundaries.push(SemanticBoundary {
                 name,
@@ -122,7 +122,7 @@ impl ChunkExtractor {
         }
     }
 
-    fn is_boundary_node(&self, kind: &str, language: Language) -> bool {
+    fn is_boundary_node(kind: &str, language: Language) -> bool {
         match language {
             Language::Rust => matches!(
                 kind,
@@ -194,7 +194,7 @@ impl ChunkExtractor {
         }
     }
 
-    fn get_node_name(&self, node: &tree_sitter::Node, source: &str) -> Option<String> {
+    fn get_node_name(node: &tree_sitter::Node, source: &str) -> Option<String> {
         let source_bytes = source.as_bytes();
 
         // Try common name fields
@@ -220,7 +220,6 @@ impl ChunkExtractor {
     }
 
     fn create_chunk(
-        &self,
         source: &str,
         lines: &[&str],
         start_line: usize,
@@ -257,7 +256,7 @@ impl ChunkExtractor {
                 current_end += 1;
             }
 
-            let chunk = self.create_chunk(source, lines, current_start, current_end, &[]);
+            let chunk = Self::create_chunk(source, lines, current_start, current_end, &[]);
             chunks.push(chunk);
 
             current_start = current_end.saturating_sub(OVERLAP_LINES);

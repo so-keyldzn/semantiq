@@ -162,12 +162,12 @@ impl ThresholdCalibrator {
         // Use percentile-based thresholds
         // max_distance: 90th percentile of distances (includes 90% of results)
         let max_distance =
-            self.compute_percentile_threshold(stats, self.config.distance_percentile);
+            Self::compute_percentile_threshold(stats, self.config.distance_percentile);
 
         // min_similarity: derived from 10th percentile of distances
         // Low distance = high similarity, so we want low distances to have high similarity
         let low_distance =
-            self.compute_percentile_threshold(stats, self.config.similarity_percentile);
+            Self::compute_percentile_threshold(stats, self.config.similarity_percentile);
         let min_similarity = DistanceStats::distance_to_similarity(low_distance);
 
         // Apply sanity bounds
@@ -186,7 +186,7 @@ impl ThresholdCalibrator {
     }
 
     /// Get a percentile value from stats based on the configured percentile.
-    fn compute_percentile_threshold(&self, stats: &DistanceStats, percentile: f32) -> f32 {
+    fn compute_percentile_threshold(stats: &DistanceStats, percentile: f32) -> f32 {
         match percentile as i32 {
             0..=15 => stats.p10,
             16..=30 => stats.p25,

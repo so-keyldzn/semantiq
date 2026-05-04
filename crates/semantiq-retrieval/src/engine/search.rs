@@ -369,7 +369,7 @@ impl RetrievalEngine {
             }
 
             if let Ok(content) = fs::read_to_string(path) {
-                let matches = self.find_text_matches(&content, query);
+                let matches = Self::find_text_matches(&content, query);
 
                 for (line_num, line_content, score) in matches {
                     let rel_path = path
@@ -438,11 +438,7 @@ impl RetrievalEngine {
     }
 
     /// Find text matches in content.
-    pub(crate) fn find_text_matches(
-        &self,
-        content: &str,
-        query: &Query,
-    ) -> Vec<(usize, String, f32)> {
+    pub(crate) fn find_text_matches(content: &str, query: &Query) -> Vec<(usize, String, f32)> {
         let searcher = TextSearcher::new(true);
         let terms = query.all_terms();
         let mut matches = Vec::new();
