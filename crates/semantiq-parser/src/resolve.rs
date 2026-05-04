@@ -300,4 +300,42 @@ mod tests {
             PathBuf::from("src/utils")
         );
     }
+
+    #[test]
+    fn test_resolve_blocks_path_traversal() {
+        // Even if a sibling file exists outside the project root, an import that
+        // escapes the root via `..` must not resolve to it. The resolver only
+        // checks files inside `project_root`.
+        let outer = TempDir::new().unwrap();
+        // A "secret" file outside the project root
+        fs::write(outer.path().join("secret.ts"), "// secret").unwrap();
+
+        let project_root = outer.path().join("project");
+        fs::create_dir_all(project_root.join("src")).unwrap();
+        fs::write(project_root.join("src/app.ts"), "// app").unwrap();
+
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "../../secret",
+            Language::TypeScript,
+            &project_root,
+        );
+        assert!(
+            resolved.is_none(),
+            "imports escaping project_root must not resolve, got {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn test_python_grandparent_relative_import() {
+        // `from ...module import x` (3 dots) should walk up 2 directories from
+        // the source file's directory.
+        // Layout: pkg/a/b/leaf.py imports `...top` -> pkg/top.py
+        let dir = setup_project(&["pkg/a/b/leaf.py", "pkg/top.py"]);
+
+        let resolved =
+            resolve_local_import("pkg/a/b/leaf.py", "...top", Language::Python, dir.path());
+        assert_eq!(resolved.as_deref(), Some("pkg/top.py"));
+    }
 }

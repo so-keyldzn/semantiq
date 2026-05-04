@@ -57,6 +57,14 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
     // Future migrations go here:
     // if stored < 5 { ... }
 
+    // Persist the new schema version so subsequent migrations know which steps
+    // have already been applied. Without this, a future v4->v5 migration on a
+    // database that was bumped from v3->v4 here would still see stored=3.
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
+        [SCHEMA_VERSION.to_string()],
+    )?;
+
     Ok(())
 }
 

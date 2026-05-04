@@ -116,6 +116,7 @@ impl IndexStore {
         init_sqlite_vec();
 
         let conn = Connection::open_in_memory()?;
+        migrate_schema(&conn)?;
         init_schema(&conn)?;
 
         Ok(Self {
