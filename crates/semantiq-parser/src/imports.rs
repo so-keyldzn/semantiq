@@ -50,7 +50,7 @@ impl ImportExtractor {
         language: Language,
         imports: &mut Vec<Import>,
     ) -> Result<()> {
-        if let Some(import) = Self::node_to_import(node, source, language) {
+        for import in Self::node_to_import(node, source, language) {
             imports.push(import);
         }
 
@@ -62,49 +62,66 @@ impl ImportExtractor {
         Ok(())
     }
 
-    fn node_to_import(node: &Node, source: &str, language: Language) -> Option<Import> {
+    fn node_to_import(node: &Node, source: &str, language: Language) -> Vec<Import> {
         match language {
             Language::Rust => Self::extract_rust_import(node, source),
-            Language::TypeScript | Language::JavaScript => Self::extract_ts_import(node, source),
-            Language::Python => Self::extract_python_import(node, source),
-            Language::Go => Self::extract_go_import(node, source),
-            Language::Java => Self::extract_java_import(node, source),
-            Language::C | Language::Cpp => Self::extract_c_import(node, source),
-            Language::Php => Self::extract_php_import(node, source),
-            Language::Ruby => Self::extract_ruby_import(node, source),
-            Language::CSharp => Self::extract_csharp_import(node, source),
-            Language::Kotlin => Self::extract_kotlin_import(node, source),
-            Language::Scala => Self::extract_scala_import(node, source),
+            Language::TypeScript | Language::JavaScript => {
+                Self::extract_ts_import(node, source).into_iter().collect()
+            }
+            Language::Python => Self::extract_python_import(node, source).into_iter().collect(),
+            Language::Go => Self::extract_go_import(node, source).into_iter().collect(),
+            Language::Java => Self::extract_java_import(node, source).into_iter().collect(),
+            Language::C | Language::Cpp => {
+                Self::extract_c_import(node, source).into_iter().collect()
+            }
+            Language::Php => Self::extract_php_import(node, source).into_iter().collect(),
+            Language::Ruby => Self::extract_ruby_import(node, source).into_iter().collect(),
+            Language::CSharp => Self::extract_csharp_import(node, source).into_iter().collect(),
+            Language::Kotlin => Self::extract_kotlin_import(node, source).into_iter().collect(),
+            Language::Scala => Self::extract_scala_import(node, source).into_iter().collect(),
             // Markup/config languages don't have traditional imports
-            Language::Html | Language::Json | Language::Yaml | Language::Toml => None,
-            Language::Bash => Self::extract_bash_import(node, source),
-            Language::Elixir => Self::extract_elixir_import(node, source),
+            Language::Html | Language::Json | Language::Yaml | Language::Toml => Vec::new(),
+            Language::Bash => Self::extract_bash_import(node, source).into_iter().collect(),
+            Language::Elixir => Self::extract_elixir_import(node, source).into_iter().collect(),
         }
     }
 
-    fn extract_rust_import(node: &Node, source: &str) -> Option<Import> {
+    fn extract_rust_import(node: &Node, source: &str) -> Vec<Import> {
         if node.kind() != "use_declaration" {
-            return None;
+            return Vec::new();
         }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
 
-        // Get the full use path
+        // Get the full use path text
         let text = &source[node.start_byte()..node.end_byte()];
 
-        // Extract the path from "use path::to::module;"
-        let path = Self::parse_rust_use_path(text)?;
-        let kind = Self::classify_rust_import(&path);
-        let name = Self::extract_rust_import_name(&path);
+        // Extract the path body from "use path::to::module;" / "pub use ...;"
+        let body = match Self::parse_rust_use_path(text) {
+            Some(b) => b,
+            None => return Vec::new(),
+        };
 
-        Some(Import {
-            path,
-            name,
-            kind,
-            start_line,
-            end_line,
-        })
+        // Expand brace groups into one (path, name) leaf per import.
+        // `name` is the binding name: alias if present, last segment otherwise,
+        // or None for glob imports.
+        let mut leaves: Vec<(String, Option<String>)> = Vec::new();
+        Self::expand_rust_use("", &body, &mut leaves);
+
+        leaves
+            .into_iter()
+            .map(|(path, name)| {
+                let kind = Self::classify_rust_import(&path);
+                Import {
+                    path,
+                    name,
+                    kind,
+                    start_line,
+                    end_line,
+                }
+            })
+            .collect()
     }
 
     fn parse_rust_use_path(text: &str) -> Option<String> {
@@ -119,6 +136,168 @@ impl ImportExtractor {
         Some(text.to_string())
     }
 
+    /// Recursively expand a Rust `use` path body into a list of (full_path, name) leaves.
+    ///
+    /// `name` is the binding produced by the import: the alias if present, otherwise
+    /// the last path segment. `None` indicates a glob (`foo::*`) — no single binding.
+    ///
+    /// Examples:
+    /// - prefix="" body="std::io::{Read, Write}"
+    ///   -> [("std::io::Read", Some("Read")), ("std::io::Write", Some("Write"))]
+    /// - prefix="" body="foo::{A as X, B}"
+    ///   -> [("foo::A", Some("X")), ("foo::B", Some("B"))]
+    /// - prefix="" body="foo::*"
+    ///   -> [("foo", None)]  // glob: keep prefix, no name
+    /// - prefix="" body="foo::{a::{X, Y}, B}"
+    ///   -> [("foo::a::X", Some("X")), ("foo::a::Y", Some("Y")), ("foo::B", Some("B"))]
+    fn expand_rust_use(prefix: &str, body: &str, out: &mut Vec<(String, Option<String>)>) {
+        let body = body.trim();
+        if body.is_empty() {
+            return;
+        }
+
+        // Find a top-level brace group (depth 0). If present, split into
+        // "before::{contents}[::after]" and expand each comma-separated item
+        // inside the braces with the new prefix = before.
+        if let Some(brace_start) = Self::find_top_level_char(body, '{') {
+            // Match the corresponding closing brace.
+            let brace_end = match Self::find_matching_brace(body, brace_start) {
+                Some(e) => e,
+                None => return,
+            };
+
+            // Everything before the "{" should end with "::" (or be empty for "use {a, b};").
+            let before = body[..brace_start].trim_end_matches("::").trim();
+            let inner = &body[brace_start + 1..brace_end];
+
+            let new_prefix = if before.is_empty() {
+                prefix.trim_end_matches("::").to_string()
+            } else if prefix.is_empty() {
+                before.to_string()
+            } else {
+                format!("{}::{}", prefix.trim_end_matches("::"), before)
+            };
+
+            for item in Self::split_top_level_commas(inner) {
+                Self::expand_rust_use(&new_prefix, item.trim(), out);
+            }
+            return;
+        }
+
+        // No braces: this is a leaf. Handle "X as Y", "*", "self".
+        let (raw_path, alias) = if let Some(idx) = body.find(" as ") {
+            (body[..idx].trim().to_string(), Some(body[idx + 4..].trim().to_string()))
+        } else {
+            (body.to_string(), None)
+        };
+
+        // Glob: "*" alone or trailing "::*" -> keep the path before the glob, name=None.
+        if raw_path == "*" {
+            if !prefix.is_empty() {
+                out.push((prefix.to_string(), None));
+            }
+            return;
+        }
+        if let Some(stripped) = raw_path.strip_suffix("::*") {
+            let combined = if prefix.is_empty() {
+                stripped.to_string()
+            } else if stripped.is_empty() {
+                prefix.to_string()
+            } else {
+                format!("{}::{}", prefix, stripped)
+            };
+            if !combined.is_empty() {
+                out.push((combined, None));
+            }
+            return;
+        }
+
+        // "self" alone refers to the prefix module itself: "use foo::{self, Bar};" -> "foo"
+        if raw_path == "self" {
+            if !prefix.is_empty() {
+                let name = alias.or_else(|| {
+                    prefix.rsplit("::").next().map(String::from)
+                });
+                out.push((prefix.to_string(), name));
+            }
+            return;
+        }
+
+        let full = if prefix.is_empty() {
+            raw_path.clone()
+        } else if raw_path.is_empty() {
+            prefix.to_string()
+        } else {
+            format!("{}::{}", prefix, raw_path)
+        };
+
+        // Binding name: alias takes precedence, otherwise last segment of the leaf path.
+        let name = alias.or_else(|| raw_path.rsplit("::").next().map(String::from));
+        out.push((full, name));
+    }
+
+    /// Find the first occurrence of `target` at brace depth 0. Returns byte index.
+    fn find_top_level_char(s: &str, target: char) -> Option<usize> {
+        let mut depth: i32 = 0;
+        for (i, c) in s.char_indices() {
+            match c {
+                '{' => {
+                    if c == target && depth == 0 {
+                        return Some(i);
+                    }
+                    depth += 1;
+                }
+                '}' => depth -= 1,
+                _ => {
+                    if c == target && depth == 0 {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Given a `{` position, find the matching `}` byte index.
+    fn find_matching_brace(s: &str, open: usize) -> Option<usize> {
+        let mut depth: i32 = 0;
+        for (i, c) in s.char_indices().skip_while(|(i, _)| *i < open) {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Split `s` on commas at brace depth 0.
+    fn split_top_level_commas(s: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut depth: i32 = 0;
+        let mut start = 0usize;
+        for (i, c) in s.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(&s[start..i]);
+                    start = i + c.len_utf8();
+                }
+                _ => {}
+            }
+        }
+        if start <= s.len() {
+            out.push(&s[start..]);
+        }
+        out
+    }
+
     fn classify_rust_import(path: &str) -> ImportKind {
         let first_segment = path.split("::").next().unwrap_or(path);
 
@@ -127,16 +306,6 @@ impl ImportExtractor {
             "crate" | "self" | "super" => ImportKind::Local,
             _ => ImportKind::External,
         }
-    }
-
-    fn extract_rust_import_name(path: &str) -> Option<String> {
-        // Get the last segment of the path
-        // Handle cases like "use foo::bar::{A, B}" -> return None
-        if path.contains('{') {
-            return None;
-        }
-
-        path.rsplit("::").next().map(String::from)
     }
 
     fn extract_ts_import(node: &Node, source: &str) -> Option<Import> {
@@ -891,9 +1060,98 @@ use std::collections::{HashMap, HashSet};
         let tree = support.parse(Language::Rust, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
 
+        // Brace imports are now expanded into one Import per leaf.
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].path, "std::collections::HashMap");
+        assert_eq!(imports[0].name.as_deref(), Some("HashMap"));
+        assert_eq!(imports[0].kind, ImportKind::Std);
+        assert_eq!(imports[1].path, "std::collections::HashSet");
+        assert_eq!(imports[1].name.as_deref(), Some("HashSet"));
+        assert_eq!(imports[1].kind, ImportKind::Std);
+    }
+
+    #[test]
+    fn test_rust_brace_import_std_io() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use std::io::{Read, Write};
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].path, "std::io::Read");
+        assert_eq!(imports[0].name.as_deref(), Some("Read"));
+        assert_eq!(imports[0].kind, ImportKind::Std);
+        assert_eq!(imports[1].path, "std::io::Write");
+        assert_eq!(imports[1].name.as_deref(), Some("Write"));
+        assert_eq!(imports[1].kind, ImportKind::Std);
+    }
+
+    #[test]
+    fn test_rust_brace_import_with_alias() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use foo::{A as X, B};
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].path, "foo::A");
+        // Alias takes precedence over the original symbol name.
+        assert_eq!(imports[0].name.as_deref(), Some("X"));
+        assert_eq!(imports[1].path, "foo::B");
+        assert_eq!(imports[1].name.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_rust_brace_import_with_nested_prefix() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use foo::nested::{A, B};
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].path, "foo::nested::A");
+        assert_eq!(imports[0].name.as_deref(), Some("A"));
+        assert_eq!(imports[1].path, "foo::nested::B");
+        assert_eq!(imports[1].name.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_rust_glob_import() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use foo::*;
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
         assert_eq!(imports.len(), 1);
-        // Import with braces should have no specific name
+        // Glob: keep at least the prefix, name is None.
+        assert_eq!(imports[0].path, "foo");
         assert!(imports[0].name.is_none());
+    }
+
+    #[test]
+    fn test_rust_brace_import_nested_nested() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = r#"
+use foo::{a::{X, Y}, B};
+"#;
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
+
+        assert_eq!(imports.len(), 3);
+        assert_eq!(imports[0].path, "foo::a::X");
+        assert_eq!(imports[0].name.as_deref(), Some("X"));
+        assert_eq!(imports[1].path, "foo::a::Y");
+        assert_eq!(imports[1].name.as_deref(), Some("Y"));
+        assert_eq!(imports[2].path, "foo::B");
+        assert_eq!(imports[2].name.as_deref(), Some("B"));
     }
 
     #[test]
