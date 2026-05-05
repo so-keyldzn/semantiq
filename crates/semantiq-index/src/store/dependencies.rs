@@ -173,6 +173,130 @@ impl IndexStore {
         })
     }
 
+    /// Get all files that depend on the given target path, returning each
+    /// dependent record together with the source file's path.
+    ///
+    /// Equivalent to `get_dependents` followed by `get_file_path_by_id` for
+    /// each row, but performed as a single query with a JOIN to avoid the
+    /// N+1 lookup pattern.
+    ///
+    /// # SQL Safety Invariant
+    ///
+    /// The dynamic SQL in the fallback phase is safe from injection because:
+    /// 1. The number of `?N` placeholders is deterministic (5 or 6), derived from
+    ///    the fixed set of pattern templates in `build_dependent_patterns()` —
+    ///    never from user input.
+    /// 2. All actual values are passed as parameterized bind values via
+    ///    `params.as_slice()`, never interpolated into the SQL string.
+    /// 3. Special LIKE characters (`%`, `_`, `\`) in path components are escaped
+    ///    via `escape_like()` before being used as bind values.
+    pub fn get_dependents_with_source_path(
+        &self,
+        target_path: &str,
+    ) -> Result<Vec<(DependencyRecord, String)>> {
+        self.with_conn(|conn| {
+            let mut seen_ids: HashSet<i64> = HashSet::new();
+            let mut all_results: Vec<(DependencyRecord, String)> = Vec::new();
+
+            // Phase 1: Exact match via resolved_path (fast, precise)
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, f.path
+                     FROM dependencies d
+                     JOIN files f ON d.source_file_id = f.id
+                     WHERE d.resolved_path = ?1",
+                )?;
+
+                let exact_results: Vec<(DependencyRecord, String)> = stmt
+                    .query_map([target_path], |row| {
+                        Ok((
+                            DependencyRecord {
+                                id: row.get(0)?,
+                                source_file_id: row.get(1)?,
+                                target_path: row.get(2)?,
+                                import_name: row.get(3)?,
+                                kind: row.get(4)?,
+                                resolved_path: row.get(5)?,
+                            },
+                            row.get::<_, String>(6)?,
+                        ))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .filter(|(rec, _)| seen_ids.insert(rec.id))
+                    .collect();
+
+                all_results.extend(exact_results);
+            }
+
+            // Phase 2: Fallback LIKE for imports without resolved_path
+            {
+                let patterns = Self::build_dependent_patterns(target_path);
+
+                // Safety: placeholder count is deterministic (patterns.len() is 5 or 6).
+                let conditions: Vec<String> = (1..=patterns.len())
+                    .map(|i| format!("d.target_path LIKE ?{} ESCAPE '\\'", i))
+                    .collect();
+                let query = format!(
+                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, f.path
+                     FROM dependencies d
+                     JOIN files f ON d.source_file_id = f.id
+                     WHERE d.resolved_path IS NULL AND ({})",
+                    conditions.join(" OR ")
+                );
+
+                let path = std::path::Path::new(target_path);
+                let basename = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(target_path);
+                let filename = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(target_path);
+
+                let mut stmt = conn.prepare(&query)?;
+                let params: Vec<&dyn rusqlite::ToSql> =
+                    patterns.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+
+                let basename_lower = basename.to_lowercase();
+
+                let fallback_results: Vec<(DependencyRecord, String)> = stmt
+                    .query_map(params.as_slice(), |row| {
+                        Ok((
+                            DependencyRecord {
+                                id: row.get(0)?,
+                                source_file_id: row.get(1)?,
+                                target_path: row.get(2)?,
+                                import_name: row.get(3)?,
+                                kind: row.get(4)?,
+                                resolved_path: row.get(5)?,
+                            },
+                            row.get::<_, String>(6)?,
+                        ))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .filter(|(rec, _)| {
+                        let import = &rec.target_path;
+                        let import_lower = import.to_lowercase();
+                        import.ends_with(basename)
+                            || import.ends_with(filename)
+                            || import.ends_with(&format!("{}.ts", basename))
+                            || import.ends_with(&format!("{}.tsx", basename))
+                            || import.ends_with(&format!("{}.js", basename))
+                            || import.ends_with(&format!("{}.jsx", basename))
+                            || import.ends_with(&format!("{}.rs", basename))
+                            || import_lower.ends_with(&basename_lower)
+                    })
+                    .filter(|(rec, _)| seen_ids.insert(rec.id))
+                    .collect();
+
+                all_results.extend(fallback_results);
+            }
+
+            Ok(all_results)
+        })
+    }
+
     /// Build LIKE patterns for reverse dependency matching.
     ///
     /// Returns 5 or 6 patterns depending on whether the path has a parent

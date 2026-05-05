@@ -888,6 +888,126 @@ fn test_get_dependents_via_resolved_path() {
 }
 
 #[test]
+fn test_get_dependents_with_source_path_resolved() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file(
+            "src/app.ts",
+            Some("typescript"),
+            "import { helper } from './utils';",
+            32,
+            1000,
+        )
+        .unwrap();
+
+    store
+        .insert_dependency(
+            file_a,
+            "./utils",
+            Some("helper"),
+            "local",
+            Some("src/utils.ts"),
+        )
+        .unwrap();
+
+    let dependents = store
+        .get_dependents_with_source_path("src/utils.ts")
+        .unwrap();
+    assert_eq!(dependents.len(), 1);
+    let (record, source_path) = &dependents[0];
+    assert_eq!(record.source_file_id, file_a);
+    assert_eq!(source_path, "src/app.ts");
+    assert_eq!(record.resolved_path.as_deref(), Some("src/utils.ts"));
+}
+
+#[test]
+fn test_get_dependents_with_source_path_fallback() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+        .unwrap();
+
+    // No resolved_path => exercises the LIKE fallback branch.
+    store
+        .insert_dependency(file_a, "src/utils.rs", Some("utils"), "local", None)
+        .unwrap();
+
+    let dependents = store.get_dependents_with_source_path("utils.rs").unwrap();
+    assert_eq!(dependents.len(), 1);
+    let (record, source_path) = &dependents[0];
+    assert_eq!(record.source_file_id, file_a);
+    assert_eq!(source_path, "src/main.rs");
+}
+
+#[test]
+fn test_get_dependents_with_source_path_multiple_importers() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .unwrap();
+    let file_b = store
+        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .unwrap();
+
+    store
+        .insert_dependency(file_a, "crate::shared", Some("shared"), "local", None)
+        .unwrap();
+    store
+        .insert_dependency(file_b, "./shared", Some("shared"), "local", None)
+        .unwrap();
+
+    let dependents = store
+        .get_dependents_with_source_path("src/shared.rs")
+        .unwrap();
+    assert_eq!(dependents.len(), 2);
+
+    let mut paths: Vec<&str> = dependents.iter().map(|(_, p)| p.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["src/a.rs", "src/b.rs"]);
+}
+
+#[test]
+fn test_get_dependents_with_source_path_consistent_with_get_dependents() {
+    // The new JOIN-based variant should produce the same set of records
+    // (modulo the additional path) as the original `get_dependents`.
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_a = store
+        .insert_file("src/app.ts", Some("typescript"), "import stuff", 12, 1000)
+        .unwrap();
+    let file_b = store
+        .insert_file("src/main.ts", Some("typescript"), "import stuff", 12, 1000)
+        .unwrap();
+
+    store
+        .insert_dependency(
+            file_a,
+            "./utils",
+            Some("utils"),
+            "local",
+            Some("src/utils.ts"),
+        )
+        .unwrap();
+    store
+        .insert_dependency(file_b, "./utils", Some("utils"), "local", None)
+        .unwrap();
+
+    let plain = store.get_dependents("src/utils.ts").unwrap();
+    let joined = store
+        .get_dependents_with_source_path("src/utils.ts")
+        .unwrap();
+
+    assert_eq!(plain.len(), joined.len());
+    let plain_ids: std::collections::HashSet<i64> = plain.iter().map(|r| r.id).collect();
+    let joined_ids: std::collections::HashSet<i64> =
+        joined.iter().map(|(r, _)| r.id).collect();
+    assert_eq!(plain_ids, joined_ids);
+}
+
+#[test]
 fn test_get_dependents_mixed_resolved_and_unresolved() {
     let store = IndexStore::open_in_memory().unwrap();
 
