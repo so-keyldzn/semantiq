@@ -2005,6 +2005,7 @@ version = "0.6.2"
 dependencies = [
  "anyhow",
  "serde",
+ "streaming-iterator",
  "tempfile",
  "thiserror 2.0.17",
  "tracing",

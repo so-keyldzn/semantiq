@@ -1,7 +1,11 @@
 use crate::language::Language;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use tree_sitter::{Node, Tree};
+
+static QUERY_EXTRACTOR: OnceLock<Option<crate::query_extractor::QuerySymbolExtractor>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +60,22 @@ pub struct SymbolExtractor;
 
 impl SymbolExtractor {
     pub fn extract(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
+        // Bascule vers query-based extraction pour Rust (query compilée une seule fois)
+        if language == Language::Rust {
+            let extractor = QUERY_EXTRACTOR
+                .get_or_init(|| crate::query_extractor::QuerySymbolExtractor::new().ok());
+            if let Some(extractor) = extractor {
+                return extractor.extract(tree, source, language);
+            }
+            tracing::warn!("QuerySymbolExtractor not available, falling back to legacy extraction");
+        }
+
+        Self::extract_legacy(tree, source, language)
+    }
+
+    /// Extraction legacy (traversée AST récursive) — utilisée pour les langages
+    /// non encore migrés vers les queries, et comme fallback pour Rust.
+    pub fn extract_legacy(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let root = tree.root_node();
 
