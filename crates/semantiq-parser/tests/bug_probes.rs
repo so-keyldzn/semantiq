@@ -23,7 +23,11 @@ class A:
         for sym in &m_symbols {
             println!("    kind={:?}, parent={:?}", sym.kind, sym.parent);
         }
-        assert_eq!(m_symbols.len(), 1, "expected exactly 1 symbol for decorated method");
+        assert_eq!(
+            m_symbols.len(),
+            1,
+            "expected exactly 1 symbol for decorated method"
+        );
         assert_eq!(m_symbols[0].kind, SymbolKind::Method);
         assert_eq!(m_symbols[0].parent.as_deref(), Some("A"));
     }
@@ -37,8 +41,14 @@ defmodule M do
 end
 "#;
         let symbols = extract(Language::Elixir, source);
-        let foo = symbols.iter().find(|s| s.name == "foo").expect("foo missing");
-        println!("B2 - Elixir parent for 'foo': parent={:?}, kind={:?}", foo.parent, foo.kind);
+        let foo = symbols
+            .iter()
+            .find(|s| s.name == "foo")
+            .expect("foo missing");
+        println!(
+            "B2 - Elixir parent for 'foo': parent={:?}, kind={:?}",
+            foo.parent, foo.kind
+        );
         assert_eq!(foo.kind, SymbolKind::Function);
         assert_eq!(foo.parent.as_deref(), Some("M"));
     }
@@ -54,12 +64,16 @@ end
 "#;
         let symbols = extract(Language::Elixir, source);
         assert!(
-            symbols.iter().any(|s| s.name == "mac" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "mac" && s.kind == SymbolKind::Function),
             "defmacro 'mac' must be captured, got: {:?}",
             symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
         assert!(
-            symbols.iter().any(|s| s.name == "privmac" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "privmac" && s.kind == SymbolKind::Function),
             "defmacrop 'privmac' must be captured"
         );
     }
@@ -75,7 +89,10 @@ defmodule A do
 end
 "#;
         let symbols = extract(Language::Elixir, source);
-        let foo = symbols.iter().find(|s| s.name == "foo").expect("foo missing");
+        let foo = symbols
+            .iter()
+            .find(|s| s.name == "foo")
+            .expect("foo missing");
         println!("B4 - Nested Elixir parent for 'foo': {:?}", foo.parent);
         assert_eq!(foo.parent.as_deref(), Some("A.B"));
     }
@@ -105,7 +122,10 @@ class Foo {
 "#;
         let symbols = extract(Language::Kotlin, source);
         println!("B7 - Kotlin parent resolution:");
-        for sym in symbols.iter().filter(|s| matches!(s.name.as_str(), "bar" | "nested")) {
+        for sym in symbols
+            .iter()
+            .filter(|s| matches!(s.name.as_str(), "bar" | "nested"))
+        {
             println!("  name={}, parent={:?}", sym.name, sym.parent);
         }
     }
@@ -123,10 +143,16 @@ public:
 "#;
         let symbols = extract(Language::Cpp, source);
         println!("B8 - C++ inline methods:");
-        for s in symbols.iter().filter(|s| matches!(s.kind, SymbolKind::Method)) {
+        for s in symbols
+            .iter()
+            .filter(|s| matches!(s.kind, SymbolKind::Method))
+        {
             println!("  name={}, parent={:?}", s.name, s.parent);
         }
-        let add = symbols.iter().find(|s| s.name == "add").expect("inline `add` missing");
+        let add = symbols
+            .iter()
+            .find(|s| s.name == "add")
+            .expect("inline `add` missing");
         assert_eq!(add.kind, SymbolKind::Method);
         assert_eq!(add.parent.as_deref(), Some("C"));
     }
@@ -142,7 +168,11 @@ public:
             println!("  name={}, kind={:?}", sym.name, sym.kind);
         }
         // Seul `html` doit être extrait (enfant direct de document).
-        assert_eq!(symbols.len(), 1, "HTML must extract only top-level elements");
+        assert_eq!(
+            symbols.len(),
+            1,
+            "HTML must extract only top-level elements"
+        );
         assert_eq!(symbols[0].name, "html");
     }
 
@@ -168,15 +198,27 @@ public:
     #[test]
     fn imports_name_field() {
         let rust_imp = extract(Language::Rust, "use std::collections::HashMap;");
-        let rust_name = &rust_imp.iter().find(|s| s.kind == SymbolKind::Import).unwrap().name;
+        let rust_name = &rust_imp
+            .iter()
+            .find(|s| s.kind == SymbolKind::Import)
+            .unwrap()
+            .name;
         assert_eq!(rust_name, "HashMap", "Rust import name must be short");
 
         let php_imp = extract(Language::Php, "<?php use Foo\\Bar;");
-        let php_name = &php_imp.iter().find(|s| s.kind == SymbolKind::Import).unwrap().name;
+        let php_name = &php_imp
+            .iter()
+            .find(|s| s.kind == SymbolKind::Import)
+            .unwrap()
+            .name;
         assert_eq!(php_name, "Bar", "PHP import name must be short");
 
         let py_imp = extract(Language::Python, "import os");
-        let py_name = &py_imp.iter().find(|s| s.kind == SymbolKind::Import).unwrap().name;
+        let py_name = &py_imp
+            .iter()
+            .find(|s| s.kind == SymbolKind::Import)
+            .unwrap()
+            .name;
         assert_eq!(py_name, "os", "Python simple import name must be short");
 
         // No leading "use " / trailing ";" / spaces in the name field.
@@ -190,10 +232,25 @@ public:
                 false if src.starts_with("<?php") => Language::Php,
                 _ => Language::Python,
             };
-            for s in extract(lang, src).iter().filter(|s| s.kind == SymbolKind::Import) {
-                assert!(!s.name.contains(';'), "import name has trailing ';': {:?}", s.name);
-                assert!(!s.name.contains(' '), "import name has spaces: {:?}", s.name);
-                assert!(!s.name.starts_with("use"), "import name leaks keyword: {:?}", s.name);
+            for s in extract(lang, src)
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Import)
+            {
+                assert!(
+                    !s.name.contains(';'),
+                    "import name has trailing ';': {:?}",
+                    s.name
+                );
+                assert!(
+                    !s.name.contains(' '),
+                    "import name has spaces: {:?}",
+                    s.name
+                );
+                assert!(
+                    !s.name.starts_with("use"),
+                    "import name leaks keyword: {:?}",
+                    s.name
+                );
             }
         }
     }

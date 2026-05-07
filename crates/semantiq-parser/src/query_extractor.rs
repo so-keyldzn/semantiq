@@ -35,18 +35,17 @@ impl QuerySymbolExtractor {
                         queries.insert($lang, q);
                     }
                     Err(e) => {
-                        errors.push(format!(
-                            "  - {} ({}): {:?}",
-                            $lang.name(),
-                            $path,
-                            e
-                        ));
+                        errors.push(format!("  - {} ({}): {:?}", $lang.name(), $path, e));
                     }
                 }
             }};
         }
 
-        load!(Language::Rust, "../queries/rust/tags.scm", tree_sitter_rust::LANGUAGE);
+        load!(
+            Language::Rust,
+            "../queries/rust/tags.scm",
+            tree_sitter_rust::LANGUAGE
+        );
         load!(
             Language::TypeScript,
             "../queries/typescript/tags.scm",
@@ -62,14 +61,26 @@ impl QuerySymbolExtractor {
             "../queries/python/tags.scm",
             tree_sitter_python::LANGUAGE
         );
-        load!(Language::Go, "../queries/go/tags.scm", tree_sitter_go::LANGUAGE);
+        load!(
+            Language::Go,
+            "../queries/go/tags.scm",
+            tree_sitter_go::LANGUAGE
+        );
         load!(
             Language::Java,
             "../queries/java/tags.scm",
             tree_sitter_java::LANGUAGE
         );
-        load!(Language::C, "../queries/c/tags.scm", tree_sitter_c::LANGUAGE);
-        load!(Language::Cpp, "../queries/cpp/tags.scm", tree_sitter_cpp::LANGUAGE);
+        load!(
+            Language::C,
+            "../queries/c/tags.scm",
+            tree_sitter_c::LANGUAGE
+        );
+        load!(
+            Language::Cpp,
+            "../queries/cpp/tags.scm",
+            tree_sitter_cpp::LANGUAGE
+        );
         load!(
             Language::Php,
             "../queries/php/tags.scm",
@@ -212,8 +223,7 @@ impl QuerySymbolExtractor {
             }
         }
 
-        let mut raw_symbols: Vec<RawSymbol> =
-            by_range.into_values().map(|(_, sym)| sym).collect();
+        let mut raw_symbols: Vec<RawSymbol> = by_range.into_values().map(|(_, sym)| sym).collect();
         raw_symbols.sort_by_key(|s| s.node.start_byte());
 
         // Construction des Symbol avec post-traitement
@@ -365,7 +375,9 @@ impl QuerySymbolExtractor {
                 _ => None,
             },
             Language::C | Language::Cpp => match node.kind() {
-                "class_specifier" | "struct_specifier" | "union_specifier"
+                "class_specifier"
+                | "struct_specifier"
+                | "union_specifier"
                 | "namespace_definition" => read_field("name"),
                 _ => None,
             },
@@ -847,19 +859,49 @@ import { foo } from "./bar";
 "#;
         let symbols = extract_via_query(Language::TypeScript, source);
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "Id" && s.kind == SymbolKind::Type));
-        assert!(symbols.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Id" && s.kind == SymbolKind::Type)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function)
+        );
         // Arrow function as const → upgraded to Function via post_process_kind
         assert!(
-            symbols.iter().any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function),
             "arrow-as-const should be Function, got: {:?}",
             symbols.iter().find(|s| s.name == "fadeIn").map(|s| s.kind)
         );
-        assert!(symbols.iter().any(|s| s.name == "cfg" && s.kind == SymbolKind::Variable));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "cfg" && s.kind == SymbolKind::Variable)
+        );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
 
@@ -887,14 +929,32 @@ import { foo } from "./bar";
 "#;
         let symbols = extract_via_query(Language::JavaScript, source);
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
         assert!(
-            symbols.iter().any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function),
             "arrow-as-const should be Function"
         );
-        assert!(symbols.iter().any(|s| s.name == "cfg" && s.kind == SymbolKind::Variable));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "cfg" && s.kind == SymbolKind::Variable)
+        );
     }
 
     #[test]
@@ -915,8 +975,16 @@ def process(items):
 "#;
         let symbols = extract_via_query(Language::Python, source);
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "process" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "process" && s.kind == SymbolKind::Function)
+        );
         // __init__ et greet sont des méthodes (dans class body)
         let init = symbols.iter().find(|s| s.name == "__init__").unwrap();
         assert_eq!(init.kind, SymbolKind::Method);
@@ -925,7 +993,13 @@ def process(items):
         assert_eq!(greet.kind, SymbolKind::Method);
         assert_eq!(greet.parent.as_deref(), Some("User"));
         // Imports
-        assert!(symbols.iter().filter(|s| s.kind == SymbolKind::Import).count() >= 2);
+        assert!(
+            symbols
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Import)
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -970,12 +1044,36 @@ var counter = 0
 "#;
         let symbols = extract_via_query(Language::Go, source);
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "Greet" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Pi" && s.kind == SymbolKind::Constant));
-        assert!(symbols.iter().any(|s| s.name == "counter" && s.kind == SymbolKind::Variable));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greet" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "main" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Pi" && s.kind == SymbolKind::Constant)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "counter" && s.kind == SymbolKind::Variable)
+        );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
 
@@ -1004,9 +1102,21 @@ enum Status { ACTIVE, INACTIVE }
 "#;
         let symbols = extract_via_query(Language::Java, source);
 
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
         let add = symbols.iter().find(|s| s.name == "add").unwrap();
         assert_eq!(add.kind, SymbolKind::Method);
         assert_eq!(add.parent.as_deref(), Some("Calculator"));
@@ -1035,13 +1145,30 @@ int* make_buf() {
 "#;
         let symbols = extract_via_query(Language::C, source);
 
-        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
         assert!(
-            symbols.iter().any(|s| s.name == "make_buf" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "make_buf" && s.kind == SymbolKind::Function),
             "pointer_declarator wrapped function should still be Function, got: {:?}",
-            symbols.iter().filter(|s| s.kind == SymbolKind::Function).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Function)
+                .collect::<Vec<_>>()
         );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
@@ -1064,8 +1191,16 @@ struct Point { int x; int y; };
 "#;
         let symbols = extract_via_query(Language::Cpp, source);
 
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
+        );
         // Method definition outside class via qualified_identifier — name is captured as
         // the full "ns::Calculator::add" because tree-sitter-cpp models the qualifier
         // recursively and we keep the full text.
@@ -1074,7 +1209,10 @@ struct Point { int x; int y; };
                 .iter()
                 .any(|s| s.name.contains("add") && s.kind == SymbolKind::Method),
             "qualified Foo::bar method should be captured as Method, got: {:?}",
-            symbols.iter().map(|s| (&s.name, s.kind)).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .map(|s| (&s.name, s.kind))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1103,12 +1241,36 @@ function helper() { return 1; }
 "#;
         let symbols = extract_via_query(Language::Php, source);
 
-        assert!(symbols.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "Loggable" && s.kind == SymbolKind::Trait));
-        assert!(symbols.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Method));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Loggable" && s.kind == SymbolKind::Trait)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "helper" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Method)
+        );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Module));
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
@@ -1134,15 +1296,32 @@ end
 "#;
         let symbols = extract_via_query(Language::Ruby, source);
 
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Utils" && s.kind == SymbolKind::Module));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Utils" && s.kind == SymbolKind::Module)
+        );
         // Legacy maps method → Function (not Method) — preserved
         assert!(
-            symbols.iter().any(|s| s.name == "initialize" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "initialize" && s.kind == SymbolKind::Function),
             "Ruby `def` should map to Function, got: {:?}",
-            symbols.iter().find(|s| s.name == "initialize").map(|s| s.kind)
+            symbols
+                .iter()
+                .find(|s| s.name == "initialize")
+                .map(|s| s.kind)
         );
-        assert!(symbols.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "helper" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1167,13 +1346,41 @@ namespace MyApp {
 "#;
         let symbols = extract_via_query(Language::CSharp, source);
 
-        assert!(symbols.iter().any(|s| s.name == "MyApp" && s.kind == SymbolKind::Module));
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "IGreeter" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "Add" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "Local" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "MyApp" && s.kind == SymbolKind::Module)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "IGreeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Add" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Local" && s.kind == SymbolKind::Function)
+        );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
 
@@ -1205,22 +1412,41 @@ fun main() {
         let symbols = extract_via_query(Language::Kotlin, source);
 
         // Class / Interface / Enum / Object — précision préservée
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Singleton" && s.kind == SymbolKind::Class));
         assert!(
-            symbols.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface),
+            symbols
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Singleton" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface),
             "Greeter must be Interface, got: {:?}",
             symbols.iter().find(|s| s.name == "Greeter").map(|s| s.kind)
         );
         assert!(
-            symbols.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum),
+            symbols
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum),
             "enum class Status must be Enum, got: {:?}",
             symbols.iter().find(|s| s.name == "Status").map(|s| s.kind)
         );
 
         // Function vs Method — fonctions dans class_body sont Method
-        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
-        let user_greet = symbols.iter().find(|s| s.name == "greet" && s.parent.as_deref() == Some("User")).unwrap();
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "main" && s.kind == SymbolKind::Function)
+        );
+        let user_greet = symbols
+            .iter()
+            .find(|s| s.name == "greet" && s.parent.as_deref() == Some("User"))
+            .unwrap();
         assert_eq!(user_greet.kind, SymbolKind::Method);
         let helper = symbols.iter().find(|s| s.name == "helper").unwrap();
         assert_eq!(helper.kind, SymbolKind::Method);
@@ -1259,11 +1485,31 @@ val PI = 3.14
 "#;
         let symbols = extract_via_query(Language::Scala, source);
 
-        assert!(symbols.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Helpers" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Trait));
-        assert!(symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "PI" && s.kind == SymbolKind::Variable));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Helpers" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Trait)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "PI" && s.kind == SymbolKind::Variable)
+        );
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Import));
     }
 
@@ -1284,10 +1530,26 @@ function helper {
 "#;
         let symbols = extract_via_query(Language::Bash, source);
 
-        assert!(symbols.iter().any(|s| s.name == "NAME" && s.kind == SymbolKind::Variable));
-        assert!(symbols.iter().any(|s| s.name == "PORT" && s.kind == SymbolKind::Variable));
-        assert!(symbols.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "NAME" && s.kind == SymbolKind::Variable)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "PORT" && s.kind == SymbolKind::Variable)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == "helper" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1309,17 +1571,27 @@ end
         assert!(
             symbols.iter().any(|s| s.kind == SymbolKind::Module),
             "defmodule should produce a Module symbol, got: {:?}",
-            symbols.iter().map(|s| (&s.name, s.kind)).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .map(|s| (&s.name, s.kind))
+                .collect::<Vec<_>>()
         );
         // def hello → Function
         assert!(
-            symbols.iter().any(|s| s.name == "hello" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "hello" && s.kind == SymbolKind::Function),
             "def should produce Function 'hello', got: {:?}",
-            symbols.iter().map(|s| (&s.name, s.kind)).collect::<Vec<_>>()
+            symbols
+                .iter()
+                .map(|s| (&s.name, s.kind))
+                .collect::<Vec<_>>()
         );
         // defp internal_helper → Function
         assert!(
-            symbols.iter().any(|s| s.name == "internal_helper" && s.kind == SymbolKind::Function),
+            symbols
+                .iter()
+                .any(|s| s.name == "internal_helper" && s.kind == SymbolKind::Function),
             "defp should produce Function 'internal_helper'"
         );
     }
@@ -1342,8 +1614,12 @@ end
         let symbols = extract_via_query(Language::Html, source);
 
         // Seulement <html> est enfant direct de document → 1 symbole.
-        assert_eq!(symbols.len(), 1, "expected only top-level <html>, got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert_eq!(
+            symbols.len(),
+            1,
+            "expected only top-level <html>, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
         let html = &symbols[0];
         assert_eq!(html.name, "html");
         assert_eq!(html.kind, SymbolKind::Variable);
@@ -1356,11 +1632,15 @@ end
 <style>body { color: red; }</style>"#;
         let symbols = extract_via_query(Language::Html, source);
         assert!(
-            symbols.iter().any(|s| s.name == "script" && s.kind == SymbolKind::Module),
+            symbols
+                .iter()
+                .any(|s| s.name == "script" && s.kind == SymbolKind::Module),
             "top-level script must be Module"
         );
         assert!(
-            symbols.iter().any(|s| s.name == "style" && s.kind == SymbolKind::Module),
+            symbols
+                .iter()
+                .any(|s| s.name == "style" && s.kind == SymbolKind::Module),
             "top-level style must be Module"
         );
     }
@@ -1377,15 +1657,25 @@ end
         let symbols = extract_via_query(Language::Json, source);
 
         // 4 paires : name, version, nested (top), key (nested)
-        assert_eq!(symbols.len(), 4, "expected 4 keys, got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert_eq!(
+            symbols.len(),
+            4,
+            "expected 4 keys, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
 
         // Top-level keys : pas de parent
         let name = symbols.iter().find(|s| s.name == "name").unwrap();
         assert_eq!(name.kind, SymbolKind::Variable);
         assert_eq!(name.parent, None);
-        assert_eq!(symbols.iter().find(|s| s.name == "version").unwrap().parent, None);
-        assert_eq!(symbols.iter().find(|s| s.name == "nested").unwrap().parent, None);
+        assert_eq!(
+            symbols.iter().find(|s| s.name == "version").unwrap().parent,
+            None
+        );
+        assert_eq!(
+            symbols.iter().find(|s| s.name == "nested").unwrap().parent,
+            None
+        );
 
         // Clé imbriquée : parent dot-separated
         let key = symbols.iter().find(|s| s.name == "key").unwrap();
@@ -1423,8 +1713,15 @@ edition = "2024"
         let symbols = extract_via_query(Language::Toml, source);
 
         // 2 pairs top-level + 1 table + 1 pair imbriqué = 4 symbols
-        assert_eq!(symbols.len(), 4, "got: {:?}",
-            symbols.iter().map(|s| (&s.name, s.kind, &s.parent)).collect::<Vec<_>>());
+        assert_eq!(
+            symbols.len(),
+            4,
+            "got: {:?}",
+            symbols
+                .iter()
+                .map(|s| (&s.name, s.kind, &s.parent))
+                .collect::<Vec<_>>()
+        );
 
         let name = symbols.iter().find(|s| s.name == "name").unwrap();
         assert_eq!(name.kind, SymbolKind::Variable);
@@ -1467,10 +1764,8 @@ edition = "2024"
         let legacy = SymbolExtractor::extract_legacy(&tree, source, lang).unwrap();
         let q_set = name_kind_set(&query);
         let l_set = name_kind_set(&legacy);
-        let query_only: Vec<(String, SymbolKind)> =
-            q_set.difference(&l_set).cloned().collect();
-        let legacy_only: Vec<(String, SymbolKind)> =
-            l_set.difference(&q_set).cloned().collect();
+        let query_only: Vec<(String, SymbolKind)> = q_set.difference(&l_set).cloned().collect();
+        let legacy_only: Vec<(String, SymbolKind)> = l_set.difference(&q_set).cloned().collect();
         ParityReport {
             query_only,
             legacy_only,
@@ -1505,12 +1800,32 @@ edition = "2024"
         r.print("typescript");
         // Query gagne en précision : addUser devient Method (legacy ne capture pas
         // les méthodes individuelles dans cette grammaire).
-        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
-        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "addUser" && s.kind == SymbolKind::Method));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "addUser" && s.kind == SymbolKind::Method)
+        );
         // Arrow-as-const → Function (post-process)
-        assert!(r.query.iter().any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function));
-        assert!(r.query.iter().any(|s| s.name == "config" && s.kind == SymbolKind::Variable));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "config" && s.kind == SymbolKind::Variable)
+        );
     }
 
     #[test]
@@ -1518,10 +1833,26 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/javascript/sample.js");
         let r = parity_check(Language::JavaScript, src);
         r.print("javascript");
-        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Method));
-        assert!(r.query.iter().any(|s| s.name == "multiply" && s.kind == SymbolKind::Function));
-        assert!(r.query.iter().any(|s| s.name == "settings" && s.kind == SymbolKind::Variable));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "multiply" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "settings" && s.kind == SymbolKind::Variable)
+        );
     }
 
     #[test]
@@ -1536,7 +1867,11 @@ edition = "2024"
         assert_eq!(g.kind, SymbolKind::Method);
         assert_eq!(g.parent.as_deref(), Some("User"));
         // Imports nom court
-        assert!(r.query.iter().any(|s| s.name == "os" && s.kind == SymbolKind::Import));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "os" && s.kind == SymbolKind::Import)
+        );
     }
 
     #[test]
@@ -1544,10 +1879,26 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/go/sample.go");
         let r = parity_check(Language::Go, src);
         r.print("go");
-        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
-        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
-        assert!(r.query.iter().any(|s| s.name == "Greet" && s.kind == SymbolKind::Method));
-        assert!(r.query.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Greet" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "main" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1555,9 +1906,21 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/java/sample.java");
         let r = parity_check(Language::Java, src);
         r.print("java");
-        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface));
-        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
         let add = r.query.iter().find(|s| s.name == "add").unwrap();
         assert_eq!(add.kind, SymbolKind::Method);
         assert_eq!(add.parent.as_deref(), Some("Calculator"));
@@ -1568,10 +1931,26 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/c/sample.c");
         let r = parity_check(Language::C, src);
         r.print("c");
-        assert!(r.query.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
-        assert!(r.query.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(r.query.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
-        assert!(r.query.iter().any(|s| s.name == "make_buf" && s.kind == SymbolKind::Function));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "make_buf" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1580,11 +1959,23 @@ edition = "2024"
         let r = parity_check(Language::Cpp, src);
         r.print("cpp");
         // C++ : méthodes inline désormais capturées (legacy les rate)
-        let add = r.query.iter().find(|s| s.name == "add").expect("inline `add` missing");
+        let add = r
+            .query
+            .iter()
+            .find(|s| s.name == "add")
+            .expect("inline `add` missing");
         assert_eq!(add.kind, SymbolKind::Method);
         assert_eq!(add.parent.as_deref(), Some("ns::Calculator"));
-        assert!(r.query.iter().any(|s| s.name == "~Calculator" && s.kind == SymbolKind::Method));
-        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "~Calculator" && s.kind == SymbolKind::Method)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
     }
 
     #[test]
@@ -1592,12 +1983,32 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/php/sample.php");
         let r = parity_check(Language::Php, src);
         r.print("php");
-        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
-        assert!(r.query.iter().any(|s| s.name == "Loggable" && s.kind == SymbolKind::Trait));
-        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Loggable" && s.kind == SymbolKind::Trait)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
         // Import nom court (Bar pas "use Foo\Bar;")
-        let imp = r.query.iter().find(|s| s.kind == SymbolKind::Import).unwrap();
+        let imp = r
+            .query
+            .iter()
+            .find(|s| s.kind == SymbolKind::Import)
+            .unwrap();
         assert_eq!(imp.name, "Bar");
     }
 
@@ -1606,10 +2017,22 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/ruby/sample.rb");
         let r = parity_check(Language::Ruby, src);
         r.print("ruby");
-        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "Utils" && s.kind == SymbolKind::Module));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Utils" && s.kind == SymbolKind::Module)
+        );
         // Ruby legacy mappe def → Function (préservé)
-        assert!(r.query.iter().any(|s| s.name == "initialize" && s.kind == SymbolKind::Function));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "initialize" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1617,10 +2040,26 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/csharp/sample.cs");
         let r = parity_check(Language::CSharp, src);
         r.print("csharp");
-        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
-        assert!(r.query.iter().any(|s| s.name == "IGreeter" && s.kind == SymbolKind::Interface));
-        assert!(r.query.iter().any(|s| s.name == "AddUser" && s.kind == SymbolKind::Method));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "IGreeter" && s.kind == SymbolKind::Interface)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "AddUser" && s.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1630,11 +2069,15 @@ edition = "2024"
         r.print("kotlin");
         // Précisions Kotlin que la query apporte :
         assert!(
-            r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface),
+            r.query
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface),
             "Kotlin Greeter must be Interface (legacy: Class)",
         );
         assert!(
-            r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum),
+            r.query
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum),
             "Kotlin enum class Status must be Enum (legacy: Class)",
         );
         // Méthodes dans class_body → Method (legacy : Function)
@@ -1653,10 +2096,26 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/scala/sample.scala");
         let r = parity_check(Language::Scala, src);
         r.print("scala");
-        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "Helpers" && s.kind == SymbolKind::Class));
-        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Trait));
-        assert!(r.query.iter().any(|s| s.name == "PI" && s.kind == SymbolKind::Variable));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Helpers" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Trait)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "PI" && s.kind == SymbolKind::Variable)
+        );
     }
 
     #[test]
@@ -1680,14 +2139,27 @@ edition = "2024"
         let r = parity_check(Language::Json, src);
         r.print("json");
         // Top-level keys : pas de parent
-        assert!(r.query.iter().any(|s| s.name == "name" && s.parent.is_none()));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "name" && s.parent.is_none())
+        );
         // Clés imbriquées : parent dot-separated
         assert!(
-            r.query.iter().any(|s| s.name == "build" && s.parent.as_deref() == Some("scripts")),
+            r.query
+                .iter()
+                .any(|s| s.name == "build" && s.parent.as_deref() == Some("scripts")),
             "json key 'build' must have parent='scripts', got: {:?}",
-            r.query.iter().find(|s| s.name == "build").map(|s| &s.parent)
+            r.query
+                .iter()
+                .find(|s| s.name == "build")
+                .map(|s| &s.parent)
         );
-        assert!(r.query.iter().any(|s| s.name == "react" && s.parent.as_deref() == Some("deps")));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "react" && s.parent.as_deref() == Some("deps"))
+        );
     }
 
     #[test]
@@ -1695,9 +2167,15 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/yaml/sample.yaml");
         let r = parity_check(Language::Yaml, src);
         r.print("yaml");
-        assert!(r.query.iter().any(|s| s.name == "name" && s.parent.is_none()));
         assert!(
-            r.query.iter().any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
+            r.query
+                .iter()
+                .any(|s| s.name == "name" && s.parent.is_none())
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
             "yaml 'host' must have parent='server'"
         );
     }
@@ -1707,13 +2185,23 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/toml/sample.toml");
         let r = parity_check(Language::Toml, src);
         r.print("toml");
-        assert!(r.query.iter().any(|s| s.name == "server" && s.kind == SymbolKind::Struct));
         assert!(
-            r.query.iter().any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
+            r.query
+                .iter()
+                .any(|s| s.name == "server" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
             "toml 'host' must have parent='server'"
         );
         // [server.deep] → table dotted_key
-        assert!(r.query.iter().any(|s| s.name == "server.deep" && s.kind == SymbolKind::Struct));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "server.deep" && s.kind == SymbolKind::Struct)
+        );
     }
 
     #[test]
@@ -1721,9 +2209,21 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/bash/sample.sh");
         let r = parity_check(Language::Bash, src);
         r.print("bash");
-        assert!(r.query.iter().any(|s| s.name == "NAME" && s.kind == SymbolKind::Variable));
-        assert!(r.query.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(r.query.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "NAME" && s.kind == SymbolKind::Variable)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "greet" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "helper" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1733,14 +2233,18 @@ edition = "2024"
         r.print("elixir");
         // defmodule → Module (légère amélioration sur le legacy qui mappait à Function)
         assert!(
-            r.query.iter().any(|s| s.name == "MyApp.User" && s.kind == SymbolKind::Module),
+            r.query
+                .iter()
+                .any(|s| s.name == "MyApp.User" && s.kind == SymbolKind::Module),
             "defmodule MyApp.User must be Module"
         );
         // defmacro capturé
         assert!(r.query.iter().any(|s| s.name == "guarded"));
         // Parent dot-separated pour modules imbriqués
         assert!(
-            r.query.iter().any(|s| s.name == "Inner" && s.parent.as_deref() == Some("MyApp.Outer")),
+            r.query
+                .iter()
+                .any(|s| s.name == "Inner" && s.parent.as_deref() == Some("MyApp.Outer")),
             "Inner must have parent='MyApp.Outer' (dot separator)"
         );
         let deep = r.query.iter().find(|s| s.name == "deep").unwrap();
@@ -1754,15 +2258,31 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/rust/sample.rs");
         let r = parity_check(Language::Rust, src);
         r.print("rust");
-        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
-        assert!(r.query.iter().any(|s| s.name == "Greetable" && s.kind == SymbolKind::Trait));
-        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Greetable" && s.kind == SymbolKind::Trait)
+        );
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum)
+        );
         // impl_item NE doit PAS apparaître comme Class
         assert!(!r.query.iter().any(|s| s.kind == SymbolKind::Class));
         // greet est Method dans impl Greetable for User
         let greet = r.query.iter().find(|s| s.name == "greet").unwrap();
         assert_eq!(greet.kind, SymbolKind::Method);
         // Import nom court
-        assert!(r.query.iter().any(|s| s.name == "HashMap" && s.kind == SymbolKind::Import));
+        assert!(
+            r.query
+                .iter()
+                .any(|s| s.name == "HashMap" && s.kind == SymbolKind::Import)
+        );
     }
 }

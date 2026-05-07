@@ -254,7 +254,6 @@ impl LanguageSupport {
             Language::Elixir,
         ]
     }
-
 }
 
 // Note: We intentionally do NOT implement Default for LanguageSupport

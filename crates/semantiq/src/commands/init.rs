@@ -1,6 +1,7 @@
-//! Initialize Semantiq for a project (creates .claude/ config and indexes)
+//! Initialize Semantiq for a project (creates .mcp.json + CLAUDE.md and indexes)
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -12,26 +13,8 @@ pub(crate) async fn init(path: &Path) -> Result<()> {
 
     println!("Initializing Semantiq for {:?}", project_root);
 
-    // 1. Create .claude directory
-    let claude_dir = project_root.join(".claude");
-    if !claude_dir.exists() {
-        fs::create_dir_all(&claude_dir)?;
-        println!("Created .claude/");
-    }
-
-    // 2. Create .claude/settings.json with MCP config
-    let settings_path = claude_dir.join("settings.json");
-    let settings_content = r#"{
-  "mcpServers": {
-    "semantiq": {
-      "command": "semantiq",
-      "args": ["serve"]
-    }
-  }
-}
-"#;
-    fs::write(&settings_path, settings_content)?;
-    println!("Created .claude/settings.json");
+    // 1. Write/merge .mcp.json at project root (Claude Code 2026 convention)
+    write_mcp_json(&project_root.join(".mcp.json"))?;
 
     // 3. Create CLAUDE.md with instructions
     let claude_md_path = project_root.join("CLAUDE.md");
@@ -127,6 +110,53 @@ The index updates automatically when files change. No manual reindexing needed.
     println!("\nNext steps:");
     println!("  1. Restart Claude Code to load the MCP server");
     println!("  2. The semantiq tools will be available automatically");
+
+    Ok(())
+}
+
+/// Writes or merges the `semantiq` MCP server entry into `.mcp.json`.
+///
+/// If the file exists, parse it and merge the entry under `mcpServers.semantiq`,
+/// preserving any other servers already configured. If parsing fails, abort
+/// rather than clobber user data.
+fn write_mcp_json(path: &Path) -> Result<()> {
+    let semantiq_entry = json!({
+        "command": "semantiq",
+        "args": ["serve"],
+    });
+
+    let mut root: Value = if path.exists() {
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        serde_json::from_str(&raw)
+            .with_context(|| format!("Failed to parse existing {} as JSON", path.display()))?
+    } else {
+        json!({})
+    };
+
+    let obj = root
+        .as_object_mut()
+        .context(".mcp.json must be a JSON object at the top level")?;
+
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context(".mcp.json's `mcpServers` field must be an object")?;
+
+    let updated = servers
+        .insert("semantiq".to_string(), semantiq_entry)
+        .is_some();
+
+    let pretty = serde_json::to_string_pretty(&root)?;
+    fs::write(path, format!("{}\n", pretty))
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    println!(
+        "{} .mcp.json ({} `semantiq` entry)",
+        if updated { "Updated" } else { "Created" },
+        if updated { "replaced" } else { "added" }
+    );
 
     Ok(())
 }

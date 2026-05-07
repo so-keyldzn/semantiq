@@ -80,7 +80,11 @@ impl SymbolExtractor {
     /// délibérément) le comportement historique. Visibilité `pub(crate)` car
     /// aucun consommateur externe ne doit s'y reposer ; à supprimer dans un PR
     /// ultérieur après baking en production.
-    pub(crate) fn extract_legacy(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
+    pub(crate) fn extract_legacy(
+        tree: &Tree,
+        source: &str,
+        language: Language,
+    ) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let root = tree.root_node();
 
