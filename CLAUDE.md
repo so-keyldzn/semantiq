@@ -19,6 +19,8 @@ cargo clippy                         # Lint
 ## CLI Usage
 
 ```bash
+cargo run -- init                            # First-time setup: writes .mcp.json, CLAUDE.md, .gitignore, indexes
+cargo run -- init-cursor                     # Same for Cursor (.cursor/) and VS Code (.vscode/)
 cargo run -- index /path/to/project          # Index a project
 cargo run -- index --force                   # Force full reindex
 cargo run -- serve --project /path/to/project  # MCP server (stdio)
@@ -50,7 +52,13 @@ crates/
 
 2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
 
-3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP API (`--http-port`). These are mutually exclusive modes.
+3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP API (`--http-port`). These are mutually exclusive modes. The MCP server exposes 4 tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain` (all defined in `semantiq-mcp/src/server.rs`).
+
+### Languages
+
+19 total via tree-sitter (`semantiq-parser/src/language.rs`):
+- **Full** (symbols + chunks + imports): Rust, TypeScript, JavaScript, Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
+- **Partial** (chunks + embeddings only, no symbol extraction): HTML, JSON, YAML, TOML.
 
 ### Key Internal Conventions
 
@@ -104,7 +112,7 @@ Alternative to MCP stdio. Endpoints: `GET /health`, `GET /stats`, `POST /search`
 
 - `Language` / `LanguageSupport` — Multi-language tree-sitter parsing (`semantiq-parser/src/language.rs`)
 - `IndexStore` — SQLite wrapper with FTS5 + sqlite-vec (`semantiq-index/src/store.rs`)
-- `RetrievalEngine` — Query execution and 3-strategy ranking (`semantiq-retrieval/src/engine.rs`)
+- `RetrievalEngine` — Query execution and 3-strategy ranking (`semantiq-retrieval/src/engine/mod.rs`; submodules `search.rs`, `analysis.rs`, `threshold.rs`)
 - `SemantiqServer` — MCP server with tool handlers (`semantiq-mcp/src/server.rs`)
 - `AutoIndexer` — File watcher + incremental reindexing (`semantiq-index/src/auto_indexer.rs`)
 - `QueryExpander` — snake_case/camelCase/PascalCase/kebab-case conversion (`semantiq-retrieval/src/query.rs`)

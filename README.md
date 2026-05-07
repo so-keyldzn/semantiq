@@ -6,7 +6,8 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 
 ## Features
 
-- **4 Search Strategies**: Semantic (embeddings) + Lexical (ripgrep) + Symbol (FTS5) + Dependency graph
+- **3 Search Strategies** (fused in `semantiq_search`): Semantic (embeddings) + Symbol (FTS5) + Lexical (ripgrep)
+- **Dependency Graph Analysis**: separate `semantiq_deps` tool (imports + dependents)
 - **19 Languages**: Full tree-sitter parsing support
 - **Auto-Indexing**: Real-time file watching, no manual reindex needed
 - **Smart Query Expansion**: Automatic case conversion (`camelCase` ↔ `snake_case`)
@@ -30,7 +31,7 @@ semantiq init
 ```
 
 This automatically:
-- Creates `.claude/settings.json` with MCP configuration
+- Creates (or merges) `.mcp.json` at the project root with the `semantiq` MCP server entry
 - Creates `CLAUDE.md` with tool usage instructions
 - Updates `.gitignore` to exclude `.semantiq.db`
 - Indexes your entire project with embeddings
@@ -208,14 +209,14 @@ Returns:
 |----------|-----------|
 | Rust | `.rs` |
 | TypeScript | `.ts`, `.tsx` |
-| JavaScript | `.js`, `.jsx`, `.mjs` |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` |
 | Python | `.py`, `.pyi` |
 | Go | `.go` |
 | Java | `.java` |
 | C | `.c`, `.h` |
-| C++ | `.cpp`, `.cc`, `.hpp` |
-| PHP | `.php`, `.phtml` |
-| Ruby | `.rb`, `.rake` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.hh` |
+| PHP | `.php`, `.phtml`, `.php3`, `.php4`, `.php5`, `.php7`, `.phps` |
+| Ruby | `.rb`, `.rake`, `.gemspec` |
 | C# | `.cs` |
 | Kotlin | `.kt`, `.kts` |
 | Scala | `.scala`, `.sc` |
@@ -256,7 +257,7 @@ Works with all MCP-compatible tools:
 
 | Tool | Config Location |
 |------|-----------------|
-| Claude Code (CLI) | `.claude/settings.json` |
+| Claude Code (CLI) | `.mcp.json` (project root) — written by `semantiq init` |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Cursor | `.cursor/mcp.json` |
 | Windsurf | `.windsurf/mcp.json` |
@@ -269,7 +270,7 @@ Works with all MCP-compatible tools:
 
 **Claude Code (project-specific):**
 ```json
-// .claude/settings.json
+// .mcp.json
 {
   "mcpServers": {
     "semantiq": {
