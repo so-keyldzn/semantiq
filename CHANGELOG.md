@@ -4,6 +4,8 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-07
+
 ### Changed — BREAKING (extraction de symboles)
 - **`PARSER_VERSION` 5 → 6** — déclenche un reindex complet automatique au prochain démarrage.
 - Migration de tous les langages (18) vers l'extraction par tree-sitter queries
