@@ -94,13 +94,12 @@ impl ChunkExtractor {
         language: Language,
     ) -> Vec<SemanticBoundary> {
         let mut boundaries = Vec::new();
-        self.collect_boundaries(node, source, language, &mut boundaries);
+        Self::collect_boundaries(node, source, language, &mut boundaries);
         boundaries.sort_by_key(|b| b.start_line);
         boundaries
     }
 
     fn collect_boundaries(
-        &self,
         node: &tree_sitter::Node,
         source: &str,
         language: Language,
@@ -118,7 +117,7 @@ impl ChunkExtractor {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.collect_boundaries(&child, source, language, boundaries);
+            Self::collect_boundaries(&child, source, language, boundaries);
         }
     }
 

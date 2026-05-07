@@ -1,4 +1,3 @@
-use crate::query_extractor::QuerySymbolExtractor;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -110,7 +109,6 @@ impl Language {
 
 pub struct LanguageSupport {
     parsers: std::collections::HashMap<Language, tree_sitter::Parser>,
-    query_extractor: Option<QuerySymbolExtractor>,
 }
 
 impl LanguageSupport {
@@ -206,18 +204,7 @@ impl LanguageSupport {
             tree_sitter_elixir::LANGUAGE.into(),
         )?;
 
-        // Initialize query-based symbol extractor (best effort)
-        let query_extractor = QuerySymbolExtractor::new().ok();
-        if query_extractor.is_none() {
-            tracing::warn!(
-                "Failed to initialize QuerySymbolExtractor, falling back to legacy extraction"
-            );
-        }
-
-        Ok(Self {
-            parsers,
-            query_extractor,
-        })
+        Ok(Self { parsers })
     }
 
     fn add_parser(
@@ -268,10 +255,6 @@ impl LanguageSupport {
         ]
     }
 
-    /// Returns a reference to the query-based symbol extractor, if available.
-    pub fn query_extractor(&self) -> Option<&QuerySymbolExtractor> {
-        self.query_extractor.as_ref()
-    }
 }
 
 // Note: We intentionally do NOT implement Default for LanguageSupport

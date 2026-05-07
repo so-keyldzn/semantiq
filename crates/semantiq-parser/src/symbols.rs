@@ -60,22 +60,27 @@ pub struct SymbolExtractor;
 
 impl SymbolExtractor {
     pub fn extract(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
-        // Bascule vers query-based extraction pour Rust (query compilée une seule fois)
-        if language == Language::Rust {
-            let extractor = QUERY_EXTRACTOR
-                .get_or_init(|| crate::query_extractor::QuerySymbolExtractor::new().ok());
-            if let Some(extractor) = extractor {
-                return extractor.extract(tree, source, language);
-            }
-            tracing::warn!("QuerySymbolExtractor not available, falling back to legacy extraction");
+        // Bascule vers query-based extraction pour tout langage avec une query enregistrée.
+        // Si la query a échoué à compiler (ou n'existe pas), on retombe sur le legacy.
+        let extractor = QUERY_EXTRACTOR
+            .get_or_init(|| crate::query_extractor::QuerySymbolExtractor::new().ok());
+        if let Some(extractor) = extractor
+            && extractor.has_query(language)
+        {
+            return extractor.extract(tree, source, language);
         }
 
         Self::extract_legacy(tree, source, language)
     }
 
-    /// Extraction legacy (traversée AST récursive) — utilisée pour les langages
-    /// non encore migrés vers les queries, et comme fallback pour Rust.
-    pub fn extract_legacy(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
+    /// Extraction legacy par traversée AST récursive.
+    ///
+    /// Conservée comme oracle pour les tests `test_query_vs_legacy_<lang>` —
+    /// permet de valider que les queries .scm reproduisent (ou améliorent
+    /// délibérément) le comportement historique. Visibilité `pub(crate)` car
+    /// aucun consommateur externe ne doit s'y reposer ; à supprimer dans un PR
+    /// ultérieur après baking en production.
+    pub(crate) fn extract_legacy(tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let root = tree.root_node();
 

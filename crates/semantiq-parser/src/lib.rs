@@ -8,7 +8,7 @@ pub mod symbols;
 
 /// Version du parser. Incrémenter force une réindexation complète.
 /// Incrémenter quand : ajout/modif de types de noeuds, changement logique d'extraction
-pub const PARSER_VERSION: u32 = 5; // Query-based extraction for Rust
+pub const PARSER_VERSION: u32 = 6; // Query-based extraction for all 19 languages
 
 pub use chunks::{ChunkExtractor, CodeChunk};
 pub use imports::{Import, ImportExtractor, ImportKind};

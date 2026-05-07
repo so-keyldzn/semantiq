@@ -4,6 +4,45 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Changed — BREAKING (extraction de symboles)
+- **`PARSER_VERSION` 5 → 6** — déclenche un reindex complet automatique au prochain démarrage.
+- Migration de tous les langages (18) vers l'extraction par tree-sitter queries
+  (`crates/semantiq-parser/queries/<lang>/tags.scm`). Le parcours AST récursif legacy
+  reste accessible en interne (`pub(crate) extract_legacy`) comme oracle pour les tests.
+
+#### Changements de format observables
+- **Imports** : `name` extrait = nom court (dernier segment du path) au lieu du
+  texte entier. Exemples :
+  - Rust : `use std::collections::HashMap;` → `name = "HashMap"` (avant : la déclaration entière)
+  - Python : `import os` → `name = "os"`
+  - PHP : `use Foo\Bar;` → `name = "Bar"`
+- **Kotlin** : `interface Greeter` est maintenant capturé comme `Interface`
+  (avant : `Class`). `enum class Status` est maintenant `Enum` (avant : `Class`).
+  Les méthodes dans `class_body` sont `Method` (avant : `Function`).
+  Les imports Kotlin (`import x.y.z`) sont désormais capturés.
+- **C++** : les méthodes inline (`class C { int add(int) {} }`) sont maintenant
+  extraites comme `Method` avec le parent classe. Avant : non capturées.
+  Destructeurs (`~C`) et opérateurs (`operator+`) sont aussi capturés.
+- **Elixir** : `defmodule X` est `Module` (avant : `Function`). `def`, `defp`,
+  `defmacro`, `defmacrop` sont tous capturés. Le `parent` des `def` reflète
+  le `defmodule` englobant ; les modules imbriqués utilisent `.` comme séparateur
+  (`MyApp.Outer.Inner`) au lieu de `::`.
+- **Python** : les méthodes décorées (`@staticmethod def m`) ne sont plus
+  doublées en `Method` + `Function` ; un seul `Method` est extrait.
+- **HTML** : seuls les éléments **top-level** (enfants directs de `document`)
+  sont extraits. Évite l'explosion d'index sur du HTML réel (auparavant chaque
+  `<div>`/`<p>` imbriqué devenait un symbole).
+- **JSON / YAML / TOML** : les clés imbriquées ont désormais un `parent` au
+  format dot-separated (`a.b.c`). Avant : `parent = None` pour toutes.
+- **Rust** : `impl_item` n'est plus extrait comme `Class` parasite.
+
+#### Hardening
+- `QuerySymbolExtractor::new()` **panique** désormais si une query .scm échoue
+  à compiler, avec la liste exhaustive des erreurs. Avant : `tracing::warn!`
+  silencieux + dégradation cachée vers le legacy.
+- Suppression de l'instance dupliquée de `QuerySymbolExtractor` dans
+  `LanguageSupport` ; une seule source de vérité via le `OnceLock` global.
+
 ## [0.6.2] - 2026-05-04
 
 ### Security
