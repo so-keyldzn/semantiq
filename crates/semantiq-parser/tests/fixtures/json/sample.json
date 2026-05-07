@@ -1,0 +1,11 @@
+{
+  "name": "polyglot-test",
+  "version": "1.0",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "deps": {
+    "react": "18.0"
+  }
+}

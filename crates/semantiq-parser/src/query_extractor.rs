@@ -1341,14 +1341,12 @@ end
 </html>"#;
         let symbols = extract_via_query(Language::Html, source);
 
-        let html = symbols.iter().find(|s| s.name == "html").expect("<html> top-level missing");
+        // Seulement <html> est enfant direct de document → 1 symbole.
+        assert_eq!(symbols.len(), 1, "expected only top-level <html>, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>());
+        let html = &symbols[0];
+        assert_eq!(html.name, "html");
         assert_eq!(html.kind, SymbolKind::Variable);
-        // Pas de <body>, <head>, <script>, <style>, <div> capturés (ils ne sont pas top-level).
-        assert!(
-            !symbols.iter().any(|s| matches!(s.name.as_str(), "body" | "head" | "div" | "script" | "style")),
-            "non-top-level elements must not be captured, got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -1378,13 +1376,20 @@ end
 }"#;
         let symbols = extract_via_query(Language::Json, source);
 
-        // Pairs → Variable (avec leur clé entre guillemets comme nom)
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Variable));
-        assert!(
-            symbols.iter().any(|s| s.name.contains("name")),
-            "Should extract a symbol with 'name' in its name, got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
-        );
+        // 4 paires : name, version, nested (top), key (nested)
+        assert_eq!(symbols.len(), 4, "expected 4 keys, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>());
+
+        // Top-level keys : pas de parent
+        let name = symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(name.kind, SymbolKind::Variable);
+        assert_eq!(name.parent, None);
+        assert_eq!(symbols.iter().find(|s| s.name == "version").unwrap().parent, None);
+        assert_eq!(symbols.iter().find(|s| s.name == "nested").unwrap().parent, None);
+
+        // Clé imbriquée : parent dot-separated
+        let key = symbols.iter().find(|s| s.name == "key").unwrap();
+        assert_eq!(key.parent.as_deref(), Some("nested"));
     }
 
     #[test]
@@ -1397,12 +1402,13 @@ nested:
 "#;
         let symbols = extract_via_query(Language::Yaml, source);
 
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Variable));
-        assert!(
-            symbols.iter().any(|s| s.name.contains("name")),
-            "Should extract a key 'name', got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
-        );
+        // 4 paires
+        assert_eq!(symbols.len(), 4);
+        let name = symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(name.kind, SymbolKind::Variable);
+        assert_eq!(name.parent, None);
+        let key = symbols.iter().find(|s| s.name == "key").unwrap();
+        assert_eq!(key.parent.as_deref(), Some("nested"));
     }
 
     #[test]
@@ -1416,11 +1422,347 @@ edition = "2024"
 "#;
         let symbols = extract_via_query(Language::Toml, source);
 
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Variable));
+        // 2 pairs top-level + 1 table + 1 pair imbriqué = 4 symbols
+        assert_eq!(symbols.len(), 4, "got: {:?}",
+            symbols.iter().map(|s| (&s.name, s.kind, &s.parent)).collect::<Vec<_>>());
+
+        let name = symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(name.kind, SymbolKind::Variable);
+        assert_eq!(name.parent, None);
+
+        // [package] est Struct, top-level
+        let package = symbols.iter().find(|s| s.name == "package").unwrap();
+        assert_eq!(package.kind, SymbolKind::Struct);
+
+        // edition est dans [package]
+        let edition = symbols.iter().find(|s| s.name == "edition").unwrap();
+        assert_eq!(edition.kind, SymbolKind::Variable);
+        assert_eq!(edition.parent.as_deref(), Some("package"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Parity tests : pour chaque langage migré, on charge une fixture
+    // représentative et on compare l'extraction query-based vs legacy.
+    // Les écarts attendus (corrections délibérées : Kotlin Interface vs Class,
+    // C++ inline méthodes capturées, Elixir defmodule = Module, séparateur
+    // dot-separated, imports nom court, HTML top-level only, etc.) sont
+    // documentés via une closure `expected_diff` par langage.
+    // -------------------------------------------------------------------------
+
+    /// Diff sur l'ensemble des `(name, kind)` extraits — bypass des `parent` et
+    /// ranges car ils peuvent différer légitimement entre les deux extracteurs.
+    fn name_kind_set(
+        symbols: &[crate::symbols::Symbol],
+    ) -> std::collections::HashSet<(String, SymbolKind)> {
+        symbols.iter().map(|s| (s.name.clone(), s.kind)).collect()
+    }
+
+    fn parity_check(lang: Language, source: &str) -> ParityReport {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        let query = QuerySymbolExtractor::new()
+            .unwrap()
+            .extract(&tree, source, lang)
+            .unwrap();
+        let legacy = SymbolExtractor::extract_legacy(&tree, source, lang).unwrap();
+        let q_set = name_kind_set(&query);
+        let l_set = name_kind_set(&legacy);
+        let query_only: Vec<(String, SymbolKind)> =
+            q_set.difference(&l_set).cloned().collect();
+        let legacy_only: Vec<(String, SymbolKind)> =
+            l_set.difference(&q_set).cloned().collect();
+        ParityReport {
+            query_only,
+            legacy_only,
+            query,
+            legacy,
+        }
+    }
+
+    struct ParityReport {
+        query_only: Vec<(String, SymbolKind)>,
+        legacy_only: Vec<(String, SymbolKind)>,
+        query: Vec<crate::symbols::Symbol>,
+        legacy: Vec<crate::symbols::Symbol>,
+    }
+
+    impl ParityReport {
+        fn print(&self, label: &str) {
+            eprintln!(
+                "\n[{label}] query={} legacy={}\n  query_only: {:?}\n  legacy_only: {:?}",
+                self.query.len(),
+                self.legacy.len(),
+                self.query_only,
+                self.legacy_only,
+            );
+        }
+    }
+
+    #[test]
+    fn test_query_vs_legacy_typescript() {
+        let src = include_str!("../tests/fixtures/typescript/sample.ts");
+        let r = parity_check(Language::TypeScript, src);
+        r.print("typescript");
+        // Query gagne en précision : addUser devient Method (legacy ne capture pas
+        // les méthodes individuelles dans cette grammaire).
+        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
+        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "addUser" && s.kind == SymbolKind::Method));
+        // Arrow-as-const → Function (post-process)
+        assert!(r.query.iter().any(|s| s.name == "fadeIn" && s.kind == SymbolKind::Function));
+        assert!(r.query.iter().any(|s| s.name == "config" && s.kind == SymbolKind::Variable));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_javascript() {
+        let src = include_str!("../tests/fixtures/javascript/sample.js");
+        let r = parity_check(Language::JavaScript, src);
+        r.print("javascript");
+        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Method));
+        assert!(r.query.iter().any(|s| s.name == "multiply" && s.kind == SymbolKind::Function));
+        assert!(r.query.iter().any(|s| s.name == "settings" && s.kind == SymbolKind::Variable));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_python() {
+        let src = include_str!("../tests/fixtures/python/sample.py");
+        let r = parity_check(Language::Python, src);
+        r.print("python");
+        // Méthode décorée NON doublonnée
+        let from_dict = r.query.iter().filter(|s| s.name == "from_dict").count();
+        assert_eq!(from_dict, 1, "decorated method must not be duplicated");
+        let g = r.query.iter().find(|s| s.name == "from_dict").unwrap();
+        assert_eq!(g.kind, SymbolKind::Method);
+        assert_eq!(g.parent.as_deref(), Some("User"));
+        // Imports nom court
+        assert!(r.query.iter().any(|s| s.name == "os" && s.kind == SymbolKind::Import));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_go() {
+        let src = include_str!("../tests/fixtures/go/sample.go");
+        let r = parity_check(Language::Go, src);
+        r.print("go");
+        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
+        assert!(r.query.iter().any(|s| s.name == "Greet" && s.kind == SymbolKind::Method));
+        assert!(r.query.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_java() {
+        let src = include_str!("../tests/fixtures/java/sample.java");
+        let r = parity_check(Language::Java, src);
+        r.print("java");
+        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "Computable" && s.kind == SymbolKind::Interface));
+        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        let add = r.query.iter().find(|s| s.name == "add").unwrap();
+        assert_eq!(add.kind, SymbolKind::Method);
+        assert_eq!(add.parent.as_deref(), Some("Calculator"));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_c() {
+        let src = include_str!("../tests/fixtures/c/sample.c");
+        let r = parity_check(Language::C, src);
+        r.print("c");
+        assert!(r.query.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(r.query.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(r.query.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(r.query.iter().any(|s| s.name == "make_buf" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_cpp() {
+        let src = include_str!("../tests/fixtures/cpp/sample.cpp");
+        let r = parity_check(Language::Cpp, src);
+        r.print("cpp");
+        // C++ : méthodes inline désormais capturées (legacy les rate)
+        let add = r.query.iter().find(|s| s.name == "add").expect("inline `add` missing");
+        assert_eq!(add.kind, SymbolKind::Method);
+        assert_eq!(add.parent.as_deref(), Some("ns::Calculator"));
+        assert!(r.query.iter().any(|s| s.name == "~Calculator" && s.kind == SymbolKind::Method));
+        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_php() {
+        let src = include_str!("../tests/fixtures/php/sample.php");
+        let r = parity_check(Language::Php, src);
+        r.print("php");
+        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
+        assert!(r.query.iter().any(|s| s.name == "Loggable" && s.kind == SymbolKind::Trait));
+        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        // Import nom court (Bar pas "use Foo\Bar;")
+        let imp = r.query.iter().find(|s| s.kind == SymbolKind::Import).unwrap();
+        assert_eq!(imp.name, "Bar");
+    }
+
+    #[test]
+    fn test_query_vs_legacy_ruby() {
+        let src = include_str!("../tests/fixtures/ruby/sample.rb");
+        let r = parity_check(Language::Ruby, src);
+        r.print("ruby");
+        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "Utils" && s.kind == SymbolKind::Module));
+        // Ruby legacy mappe def → Function (préservé)
+        assert!(r.query.iter().any(|s| s.name == "initialize" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_csharp() {
+        let src = include_str!("../tests/fixtures/csharp/sample.cs");
+        let r = parity_check(Language::CSharp, src);
+        r.print("csharp");
+        assert!(r.query.iter().any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+        assert!(r.query.iter().any(|s| s.name == "IGreeter" && s.kind == SymbolKind::Interface));
+        assert!(r.query.iter().any(|s| s.name == "AddUser" && s.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_kotlin() {
+        let src = include_str!("../tests/fixtures/kotlin/sample.kt");
+        let r = parity_check(Language::Kotlin, src);
+        r.print("kotlin");
+        // Précisions Kotlin que la query apporte :
         assert!(
-            symbols.iter().any(|s| s.name == "name"),
-            "Should extract a TOML key 'name', got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+            r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface),
+            "Kotlin Greeter must be Interface (legacy: Class)",
         );
+        assert!(
+            r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum),
+            "Kotlin enum class Status must be Enum (legacy: Class)",
+        );
+        // Méthodes dans class_body → Method (legacy : Function)
+        let user_greet = r
+            .query
+            .iter()
+            .find(|s| s.name == "greet" && s.parent.as_deref() == Some("User"))
+            .unwrap();
+        assert_eq!(user_greet.kind, SymbolKind::Method);
+        // Import capturé
+        assert!(r.query.iter().any(|s| s.kind == SymbolKind::Import));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_scala() {
+        let src = include_str!("../tests/fixtures/scala/sample.scala");
+        let r = parity_check(Language::Scala, src);
+        r.print("scala");
+        assert!(r.query.iter().any(|s| s.name == "Calculator" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "Helpers" && s.kind == SymbolKind::Class));
+        assert!(r.query.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Trait));
+        assert!(r.query.iter().any(|s| s.name == "PI" && s.kind == SymbolKind::Variable));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_html() {
+        let src = include_str!("../tests/fixtures/html/sample.html");
+        let r = parity_check(Language::Html, src);
+        r.print("html");
+        // HTML : query top-level only → quelques symboles seulement (pas tous les divs).
+        assert!(
+            r.query.len() <= 3,
+            "HTML must capture only top-level (≤ 3 symbols), got {}: {:?}",
+            r.query.len(),
+            r.query.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(r.query.iter().any(|s| s.name == "html"));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_json() {
+        let src = include_str!("../tests/fixtures/json/sample.json");
+        let r = parity_check(Language::Json, src);
+        r.print("json");
+        // Top-level keys : pas de parent
+        assert!(r.query.iter().any(|s| s.name == "name" && s.parent.is_none()));
+        // Clés imbriquées : parent dot-separated
+        assert!(
+            r.query.iter().any(|s| s.name == "build" && s.parent.as_deref() == Some("scripts")),
+            "json key 'build' must have parent='scripts', got: {:?}",
+            r.query.iter().find(|s| s.name == "build").map(|s| &s.parent)
+        );
+        assert!(r.query.iter().any(|s| s.name == "react" && s.parent.as_deref() == Some("deps")));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_yaml() {
+        let src = include_str!("../tests/fixtures/yaml/sample.yaml");
+        let r = parity_check(Language::Yaml, src);
+        r.print("yaml");
+        assert!(r.query.iter().any(|s| s.name == "name" && s.parent.is_none()));
+        assert!(
+            r.query.iter().any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
+            "yaml 'host' must have parent='server'"
+        );
+    }
+
+    #[test]
+    fn test_query_vs_legacy_toml() {
+        let src = include_str!("../tests/fixtures/toml/sample.toml");
+        let r = parity_check(Language::Toml, src);
+        r.print("toml");
+        assert!(r.query.iter().any(|s| s.name == "server" && s.kind == SymbolKind::Struct));
+        assert!(
+            r.query.iter().any(|s| s.name == "host" && s.parent.as_deref() == Some("server")),
+            "toml 'host' must have parent='server'"
+        );
+        // [server.deep] → table dotted_key
+        assert!(r.query.iter().any(|s| s.name == "server.deep" && s.kind == SymbolKind::Struct));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_bash() {
+        let src = include_str!("../tests/fixtures/bash/sample.sh");
+        let r = parity_check(Language::Bash, src);
+        r.print("bash");
+        assert!(r.query.iter().any(|s| s.name == "NAME" && s.kind == SymbolKind::Variable));
+        assert!(r.query.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(r.query.iter().any(|s| s.name == "helper" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_elixir() {
+        let src = include_str!("../tests/fixtures/elixir/sample.ex");
+        let r = parity_check(Language::Elixir, src);
+        r.print("elixir");
+        // defmodule → Module (légère amélioration sur le legacy qui mappait à Function)
+        assert!(
+            r.query.iter().any(|s| s.name == "MyApp.User" && s.kind == SymbolKind::Module),
+            "defmodule MyApp.User must be Module"
+        );
+        // defmacro capturé
+        assert!(r.query.iter().any(|s| s.name == "guarded"));
+        // Parent dot-separated pour modules imbriqués
+        assert!(
+            r.query.iter().any(|s| s.name == "Inner" && s.parent.as_deref() == Some("MyApp.Outer")),
+            "Inner must have parent='MyApp.Outer' (dot separator)"
+        );
+        let deep = r.query.iter().find(|s| s.name == "deep").unwrap();
+        assert_eq!(deep.parent.as_deref(), Some("MyApp.Outer.Inner"));
+    }
+
+    #[test]
+    fn test_query_vs_legacy_rust_fixture() {
+        // Pendant Rust de la suite parity (le test_query_vs_legacy_rust historique
+        // utilise un snippet inline ; on ajoute ici le test parametré sur fixture).
+        let src = include_str!("../tests/fixtures/rust/sample.rs");
+        let r = parity_check(Language::Rust, src);
+        r.print("rust");
+        assert!(r.query.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+        assert!(r.query.iter().any(|s| s.name == "Greetable" && s.kind == SymbolKind::Trait));
+        assert!(r.query.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        // impl_item NE doit PAS apparaître comme Class
+        assert!(!r.query.iter().any(|s| s.kind == SymbolKind::Class));
+        // greet est Method dans impl Greetable for User
+        let greet = r.query.iter().find(|s| s.name == "greet").unwrap();
+        assert_eq!(greet.kind, SymbolKind::Method);
+        // Import nom court
+        assert!(r.query.iter().any(|s| s.name == "HashMap" && s.kind == SymbolKind::Import));
     }
 }

@@ -1,0 +1,12 @@
+name = "polyglot"
+version = "1.0"
+
+[server]
+host = "localhost"
+port = 8080
+
+[server.deep]
+inner = 1
+
+[[users]]
+name = "Alice"
