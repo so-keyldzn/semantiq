@@ -125,7 +125,8 @@ fn write_mcp_json(path: &Path) -> Result<()> {
         "args": ["serve"],
     });
 
-    let mut root: Value = if path.exists() {
+    let file_existed = path.exists();
+    let mut root: Value = if file_existed {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         serde_json::from_str(&raw)
@@ -144,7 +145,7 @@ fn write_mcp_json(path: &Path) -> Result<()> {
         .as_object_mut()
         .context(".mcp.json's `mcpServers` field must be an object")?;
 
-    let updated = servers
+    let entry_replaced = servers
         .insert("semantiq".to_string(), semantiq_entry)
         .is_some();
 
@@ -152,11 +153,12 @@ fn write_mcp_json(path: &Path) -> Result<()> {
     fs::write(path, format!("{}\n", pretty))
         .with_context(|| format!("Failed to write {}", path.display()))?;
 
-    println!(
-        "{} .mcp.json ({} `semantiq` entry)",
-        if updated { "Updated" } else { "Created" },
-        if updated { "replaced" } else { "added" }
-    );
+    let msg = match (file_existed, entry_replaced) {
+        (false, _) => "Created .mcp.json",
+        (true, false) => "Updated .mcp.json (added `semantiq` entry)",
+        (true, true) => "Updated .mcp.json (replaced existing `semantiq` entry)",
+    };
+    println!("{}", msg);
 
     Ok(())
 }
