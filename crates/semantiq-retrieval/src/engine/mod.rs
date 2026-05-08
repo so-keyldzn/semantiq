@@ -70,6 +70,11 @@ impl RetrievalEngine {
         // Surface a warning if the vector index has lost its referential
         // integrity with the chunks table. Orphan vectors silently dominate
         // the KNN top-k for distant queries; this log is the canary.
+        //
+        // Note: this acquires the same connection mutex as the AutoIndexer.
+        // The engine is constructed before any background indexing task is
+        // spawned, so contention here is not expected. If that invariant is
+        // ever broken, this call would block on the indexer transaction.
         match store.count_orphan_chunk_vectors() {
             Ok(0) => {}
             Ok(n) => warn!(
@@ -77,7 +82,7 @@ impl RetrievalEngine {
                 "chunks_vec contains orphan rows (chunk_id not in chunks); \
                  semantic search may return stale results. Run `semantiq index --force` to repair."
             ),
-            Err(e) => debug!("could not count orphan chunk vectors: {e}"),
+            Err(e) => warn!("could not count orphan chunk vectors: {e}"),
         }
 
         // Create distance collector if enabled, initialized with existing count

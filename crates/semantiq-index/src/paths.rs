@@ -11,15 +11,32 @@ use std::path::{Path, PathBuf};
 
 /// Convert `path` to a string relative to `project_root`.
 ///
-/// Both arguments are canonicalized first (when possible) so that
-/// `strip_prefix` works regardless of which side has symlinks resolved.
+/// Tries a literal `strip_prefix` first (no syscalls). If that fails — usually
+/// because one side has a `/private/tmp` style symlink resolved and the other
+/// doesn't, or because the walker returned a canonicalized path while the
+/// caller passed a logical one — falls back to canonicalizing both. This keeps
+/// the hot indexing path free of `realpath` round-trips on networked
+/// filesystems.
+///
+/// On a symlink cycle `canonicalize` returns `Err` (it's bounded internally),
+/// and we fall through to the WARN branch with the original path.
 ///
 /// Returns the relative form. If stripping fails — typically because `path` is
 /// not actually inside `project_root` — a `WARN` is logged and the path is
 /// returned as-is. Indexing an "outside" file is almost always a bug; the warn
 /// makes it visible instead of silently inserting absolute paths.
 pub fn to_relative_string(path: &Path, project_root: &Path) -> String {
-    let canon_root = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+    // Fast path: literal strip_prefix succeeds when both sides share the same
+    // logical prefix. This is the common case during a normal walk.
+    if let Ok(rel) = path.strip_prefix(project_root) {
+        return rel.to_string_lossy().to_string();
+    }
+
+    // Fallback: canonicalize both and retry. Necessary on macOS where /tmp
+    // resolves to /private/tmp and on systems with symlinked checkout dirs.
+    let canon_root: PathBuf = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let canon_path: PathBuf = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     match canon_path.strip_prefix(&canon_root) {

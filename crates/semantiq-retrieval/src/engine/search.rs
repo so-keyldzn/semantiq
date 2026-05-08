@@ -167,14 +167,22 @@ impl RetrievalEngine {
             std::collections::HashMap<String, String>,
         > = std::collections::HashMap::new();
         for fid in unique_file_ids {
-            if let Ok(syms) = self.store.get_symbols_by_file(fid) {
-                let mut map = std::collections::HashMap::new();
-                for s in syms {
-                    // Last write wins on duplicate names; good enough for
-                    // labelling and avoids holding a Vec of kinds per name.
-                    map.insert(s.name, s.kind);
+            match self.store.get_symbols_by_file(fid) {
+                Ok(syms) => {
+                    let mut map = std::collections::HashMap::new();
+                    for s in syms {
+                        // Last write wins on duplicate names; good enough for
+                        // labelling and avoids holding a Vec of kinds per name.
+                        map.insert(s.name, s.kind);
+                    }
+                    kinds_by_file.insert(fid, map);
                 }
-                kinds_by_file.insert(fid, map);
+                Err(e) => {
+                    // Non-fatal: results just lose their `symbol_kind` label
+                    // (the old behavior). But surface it — a recurring DB
+                    // error here usually means the connection is wedged.
+                    warn!(file_id = fid, error = %e, "failed to fetch symbols for kind lookup");
+                }
             }
         }
 
@@ -396,13 +404,18 @@ impl RetrievalEngine {
 
             if let Ok(content) = fs::read_to_string(path) {
                 let matches = Self::find_text_matches(&content, query);
+                if matches.is_empty() {
+                    continue;
+                }
+                // Hoist out of the per-match loop: the path doesn't change
+                // between matches, but `to_relative_string` is non-trivial
+                // (canonicalize fallback). Saves one call per extra hit.
+                let rel_path = semantiq_index::paths::to_relative_string(path, root);
 
                 for (line_num, line_content, score) in matches {
-                    let rel_path = semantiq_index::paths::to_relative_string(path, root);
-
                     results.push(SearchResult::new(
                         SearchResultKind::TextMatch,
-                        rel_path,
+                        rel_path.clone(),
                         line_num,
                         line_num,
                         line_content,

@@ -42,6 +42,26 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
         return Ok(());
     }
 
+    // Run every migration step + the schema_version write inside a single
+    // transaction so a crash mid-migration leaves the database either fully
+    // pre-migration or fully post-migration. Without this, the previous v4→v5
+    // step could partially purge orphans, fail to bump schema_version, and on
+    // next start re-run cleanly (the DELETEs are idempotent) — which works
+    // but mixes a half-applied state with the engine's startup canary.
+    conn.execute("BEGIN IMMEDIATE", [])?;
+    let result = migrate_schema_inner(conn, stored);
+    match &result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])?;
+        }
+        Err(_) => {
+            let _ = conn.execute("ROLLBACK", []);
+        }
+    }
+    result
+}
+
+fn migrate_schema_inner(conn: &Connection, stored: i32) -> SqliteResult<()> {
     // v3 -> v4: add resolved_path column to dependencies
     if stored < 4 {
         tracing::info!(
@@ -95,16 +115,17 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
             );
         }
 
-        // Drop ghost rows whose `path` is absolute. We don't hardcode "/" only —
-        // Windows callers would hit `C:\…` — but on every supported platform an
-        // absolute path here is a leftover bug that we fix by deletion. FK
-        // CASCADE removes their symbols/chunks/deps; the chunks_vec rows then
-        // become orphans handled by step (a) on the next migration, but we run
-        // the purge again to keep this migration idempotent in one shot.
+        // Drop ghost rows whose `path` is absolute. Covers POSIX (`/foo`),
+        // Windows drive paths (`C:\foo`, `C:/foo`) and UNC paths (`\\server`).
+        // On every supported platform an absolute path stored here is the
+        // signature of an old bug and we fix it by deletion. FK CASCADE removes
+        // dependent symbols/chunks/deps; the resulting chunks_vec orphans are
+        // swept by the second purge so this migration is idempotent in one shot.
         let abs_files = conn.execute(
             "DELETE FROM files
-             WHERE substr(path, 1, 1) = '/'
-                OR (length(path) >= 3 AND substr(path, 2, 1) = ':')",
+             WHERE substr(path, 1, 1) IN ('/', '\\')
+                OR (length(path) >= 3
+                    AND (substr(path, 2, 2) = ':\\' OR substr(path, 2, 2) = ':/'))",
             [],
         )?;
         if abs_files > 0 {

@@ -116,3 +116,33 @@ fn clear_all_data_purges_vectors() {
 
     assert_no_orphans(&store, "after clear_all_data");
 }
+
+/// Stress: simulate the real-world pattern where the same file is reindexed
+/// many times (e.g. while a user types). The original bug surfaced after
+/// dozens of reindex cycles, so a single reindex assertion would not have
+/// caught it. Locking this down with 50 cycles makes the regression test
+/// realistic without adding meaningful runtime.
+#[test]
+fn many_reindexes_keep_invariant() {
+    let store = IndexStore::open_in_memory().unwrap();
+    let file_id = store
+        .insert_file("hot.rs", Some("rust"), "v0", 2, 1000)
+        .unwrap();
+
+    for i in 0..50 {
+        // Vary chunk count and content each cycle so chunk_ids actually
+        // cycle (otherwise INSERT OR REPLACE would mask the leak).
+        let n = (i % 4) + 1;
+        let chunks: Vec<_> = (0..n)
+            .map(|k| make_chunk(&format!("fn f{i}_{k}() {{}}"), k + 1, k + 1))
+            .collect();
+        store.insert_chunks(file_id, &chunks).unwrap();
+        for c in store.get_chunks_by_file(file_id).unwrap() {
+            store
+                .update_chunk_embedding(c.id, &make_embedding(i as f32))
+                .unwrap();
+        }
+    }
+
+    assert_no_orphans(&store, "after 50 reindex cycles");
+}
