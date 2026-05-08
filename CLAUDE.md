@@ -56,9 +56,9 @@ crates/
 
 ### Languages
 
-19 total via tree-sitter (`semantiq-parser/src/language.rs`):
-- **Full** (symbols + chunks + imports): Rust, TypeScript, JavaScript, Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
-- **Partial** (chunks + embeddings only, no symbol extraction): HTML, JSON, YAML, TOML.
+19 total via tree-sitter (`semantiq-parser/src/language.rs`). Tous ont une `tags.scm` chargée par `QuerySymbolExtractor` (`semantiq-parser/src/query_extractor.rs`) :
+- **Code** (symbols + chunks + imports): Rust, TypeScript, JavaScript, Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
+- **Data** (clés/sections indexées comme Variable/Struct, en plus des chunks + embeddings): HTML, JSON, YAML, TOML.
 
 ### Key Internal Conventions
 

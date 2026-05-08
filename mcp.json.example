@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "semantiq": {
-      "command": "semantiq",
-      "args": ["serve", "--project", "/path/to/your/project"]
-    }
-  }
-}
