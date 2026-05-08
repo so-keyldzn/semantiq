@@ -5,7 +5,6 @@
 
 mod calibrations;
 mod chunks;
-mod debug;
 mod dependencies;
 mod files;
 mod observations;
@@ -23,10 +22,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // Re-export types
 pub use calibrations::{CalibrationData, CalibrationRecord};
-pub use debug::{
-    DebugChunk, DebugDep, DebugEmbedding, DebugFile, DebugNeighbor, DebugPage, DebugProjectedPoint,
-    DebugProjection, DebugSymbol, EmbeddingStats,
-};
 
 /// Global initializer for sqlite-vec extension.
 ///
