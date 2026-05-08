@@ -1919,7 +1919,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1936,6 +1936,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tower",
  "tower-http",
  "tracing",
@@ -1944,7 +1945,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-embeddings"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1962,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-index"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -1973,6 +1974,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlite-vec",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -1981,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-mcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2001,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-parser"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -2033,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "semantiq-retrieval"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "glob",
@@ -2047,6 +2049,7 @@ dependencies = [
  "semantiq-parser",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -2388,6 +2391,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

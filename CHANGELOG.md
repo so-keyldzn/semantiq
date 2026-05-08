@@ -4,6 +4,66 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-08
+
+Bugfix release that repairs the semantic search pipeline. Six out of seven
+natural-language ("intent") queries returned zero results on real codebases
+because of accumulated orphan rows in the sqlite-vec virtual table. After
+upgrading, the v4→v5 migration runs automatically on first start and cleans
+the existing residue.
+
+### Fixed
+- **`chunks_vec` orphan rows**. sqlite-vec virtual tables don't honor
+  `FK ON DELETE CASCADE`, so every prior `INSERT INTO chunks` (after the
+  delete-then-reinsert pattern in `insert_chunks`) left the previous
+  chunk's vector behind. Over many reindex cycles those orphans
+  dominated the KNN top-k and silently broke semantic search. All
+  delete paths (`insert_chunks`, `delete_file`, `clear_all_data`,
+  `check_and_prepare_for_reindex`) now purge `chunks_vec` in the same
+  transaction. A new integration test (`vec_invariant`) pins the
+  contract.
+- **Ghost files with absolute paths**. The legacy
+  `path.strip_prefix(root).unwrap_or(path)` pattern silently fell through
+  to absolute paths when `strip_prefix` failed, leaving duplicate rows
+  in `files`. Replaced everywhere with `paths::to_relative_string`,
+  which warns instead of failing silently.
+- **`pub use` re-exports not extracted**. `parse_rust_use_path` stripped
+  `"use "` first, so any line starting with `pub` (or `pub(crate)`,
+  `pub(super)`, `pub(in path)`) returned `None`. This broke
+  `semantiq_deps` on every Rust `lib.rs`, since those files are mostly
+  re-exports.
+- **`symbol_kind` missing in semantic search results**. `search_semantic`
+  hard-coded `symbol_kind: None`, so output showed `Symbol: foo (unknown)`
+  even though the kind was already in the database. Now batch-fetched
+  per file and propagated.
+
+### Added
+- **Schema v4 → v5 migration**: purges existing `chunks_vec` orphans and
+  ghost rows with absolute paths (POSIX, Windows drive paths, UNC).
+  Wrapped in a single transaction for crash safety. Visible at startup
+  as e.g. `Migrating schema v4 -> v5 (a): purged N orphan rows`.
+- `IndexStore::count_orphan_chunk_vectors()` for diagnostics. The
+  `RetrievalEngine` calls it at startup and emits a `WARN` if the
+  invariant is broken.
+- New `paths::to_relative_string` helper in `semantiq-index`. Tries a
+  literal `strip_prefix` first and only canonicalizes on the fallback
+  path, keeping the hot indexing loop free of `realpath` syscalls.
+
+### Performance
+- ~6× lower latency on natural-language queries via the MCP server now
+  that the KNN top-k surfaces real chunks instead of zombie zero-vectors
+  (28–93 ms vs 78–123 ms previously, on the reference repo).
+
+### Migration notes
+- The v4→v5 migration runs automatically the first time a v0.8.0 binary
+  opens an existing database. It is idempotent and crash-safe (single
+  `BEGIN IMMEDIATE` transaction). Expect a one-shot log line reporting
+  how many rows were swept; on heavily-reindexed databases this can be
+  in the thousands.
+- No changes to MCP tool signatures or output schema. Existing clients
+  keep working; output for `semantiq_search` now includes meaningful
+  `symbol_kind` values where it previously said `unknown`.
+
 ## [0.7.0] - 2026-05-07
 
 ### Changed — BREAKING (extraction de symboles)
