@@ -21,3 +21,10 @@ grep-regex.workspace = true
 grep-searcher.workspace = true
 grep-matcher.workspace = true
 regex.workspace = true
+
+[features]
+default = []
+onnx = ["semantiq-embeddings/onnx"]
+
+[dev-dependencies]
+tempfile.workspace = true

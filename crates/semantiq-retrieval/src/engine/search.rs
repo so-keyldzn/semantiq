@@ -158,6 +158,26 @@ impl RetrievalEngine {
         let distance_map: std::collections::HashMap<i64, f32> =
             filtered_results.into_iter().collect();
 
+        // Pre-fetch symbols for all the unique files we touch so we can attach
+        // a `kind` to each result without a per-chunk query.
+        let unique_file_ids: std::collections::HashSet<i64> =
+            chunks.iter().map(|c| c.file_id).collect();
+        let mut kinds_by_file: std::collections::HashMap<
+            i64,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
+        for fid in unique_file_ids {
+            if let Ok(syms) = self.store.get_symbols_by_file(fid) {
+                let mut map = std::collections::HashMap::new();
+                for s in syms {
+                    // Last write wins on duplicate names; good enough for
+                    // labelling and avoids holding a Vec of kinds per name.
+                    map.insert(s.name, s.kind);
+                }
+                kinds_by_file.insert(fid, map);
+            }
+        }
+
         // Convert to SearchResults
         let results: Vec<SearchResult> = chunks
             .into_iter()
@@ -177,6 +197,12 @@ impl RetrievalEngine {
                     return None;
                 }
 
+                let symbol_name = chunk.symbols.first().cloned();
+                let symbol_kind = symbol_name
+                    .as_ref()
+                    .and_then(|n| kinds_by_file.get(&chunk.file_id).and_then(|m| m.get(n)))
+                    .cloned();
+
                 Some(
                     SearchResult::new(
                         SearchResultKind::SemanticMatch,
@@ -187,8 +213,8 @@ impl RetrievalEngine {
                         score,
                     )
                     .with_metadata(SearchResultMetadata {
-                        symbol_name: chunk.symbols.first().cloned(),
-                        symbol_kind: None,
+                        symbol_name,
+                        symbol_kind,
                         match_type: Some("semantic".to_string()),
                         context: None,
                     }),
@@ -372,11 +398,7 @@ impl RetrievalEngine {
                 let matches = Self::find_text_matches(&content, query);
 
                 for (line_num, line_content, score) in matches {
-                    let rel_path = path
-                        .strip_prefix(root)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string();
+                    let rel_path = semantiq_index::paths::to_relative_string(path, root);
 
                     results.push(SearchResult::new(
                         SearchResultKind::TextMatch,

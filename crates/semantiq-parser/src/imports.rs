@@ -108,14 +108,31 @@ impl ImportExtractor {
     }
 
     fn parse_rust_use_path(text: &str) -> Option<String> {
-        // Remove "use " prefix and ";" suffix
-        let text = text.trim();
-        let text = text.strip_prefix("use ")?.strip_suffix(';')?.trim();
+        // Drops the trailing semicolon, then strips any visibility modifier
+        // ("pub", "pub(crate)", "pub(super)", "pub(in path)", ...) before
+        // stripping "use ". Without this, `pub use foo::Bar;` and similar
+        // re-exports were silently dropped — which broke `deps` on every
+        // `lib.rs` of a Rust crate, since those files are mostly `pub use`.
+        let text = text.trim().strip_suffix(';')?.trim();
 
-        // Handle "pub use" case
-        let text = text.strip_prefix("pub ").unwrap_or(text);
-        let text = text.strip_prefix("use ").unwrap_or(text);
+        // Strip "pub" or "pub(...)" prefix if present.
+        let text = if let Some(rest) = text.strip_prefix("pub") {
+            let rest = rest.trim_start();
+            // Optional restricted form: pub(crate), pub(super), pub(in some::path)
+            if let Some(after_open) = rest.strip_prefix('(') {
+                if let Some(close_idx) = after_open.find(')') {
+                    after_open[close_idx + 1..].trim_start()
+                } else {
+                    rest // malformed; let the parser handle it
+                }
+            } else {
+                rest
+            }
+        } else {
+            text
+        };
 
+        let text = text.strip_prefix("use ")?.trim();
         Some(text.to_string())
     }
 
@@ -651,11 +668,17 @@ mod tests {
 use std::collections::HashMap;
 use anyhow::Result;
 use crate::utils::helper;
+pub use crate::config::Config;
+pub(crate) use crate::store::IndexStore;
+pub(super) use crate::utils::Helper;
 "#;
         let tree = support.parse(Language::Rust, source).unwrap();
         let imports = ImportExtractor::extract(&tree, source, Language::Rust).unwrap();
 
-        assert_eq!(imports.len(), 3);
+        // All 6 use_declarations must be picked up, regardless of visibility.
+        // Before the fix, pub/pub(crate)/pub(super) variants were silently dropped
+        // by `parse_rust_use_path`, which broke `deps` on every Rust `lib.rs`.
+        assert_eq!(imports.len(), 6, "got: {:#?}", imports);
 
         assert_eq!(imports[0].path, "std::collections::HashMap");
         assert_eq!(imports[0].kind, ImportKind::Std);
@@ -665,6 +688,15 @@ use crate::utils::helper;
 
         assert_eq!(imports[2].path, "crate::utils::helper");
         assert_eq!(imports[2].kind, ImportKind::Local);
+
+        assert_eq!(imports[3].path, "crate::config::Config");
+        assert_eq!(imports[3].kind, ImportKind::Local);
+
+        assert_eq!(imports[4].path, "crate::store::IndexStore");
+        assert_eq!(imports[4].kind, ImportKind::Local);
+
+        assert_eq!(imports[5].path, "crate::utils::Helper");
+        assert_eq!(imports[5].kind, ImportKind::Local);
     }
 
     #[test]

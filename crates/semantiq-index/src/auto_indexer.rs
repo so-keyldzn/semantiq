@@ -87,12 +87,8 @@ impl AutoIndexer {
                 continue;
             }
 
-            // Get relative path
-            let rel_path = path
-                .strip_prefix(&self.project_root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
+            // Get relative path (warns if `path` falls outside project_root).
+            let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
             // Read file content to check if needs reindex
             let content = match fs::read_to_string(path) {
@@ -203,12 +199,8 @@ impl AutoIndexer {
             }
         };
 
-        // Get relative path
-        let rel_path = path
-            .strip_prefix(&self.project_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        // Get relative path (warns if `path` falls outside the project root).
+        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
         // Read file content
         let content = match fs::read_to_string(path) {
@@ -335,11 +327,7 @@ impl AutoIndexer {
 
     /// Remove a file from the index
     fn remove_file(&self, path: &Path) -> Result<()> {
-        let rel_path = path
-            .strip_prefix(&self.project_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
         self.store.delete_file(&rel_path)?;
         debug!("Removed from index: {}", rel_path);

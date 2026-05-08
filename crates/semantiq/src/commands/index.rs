@@ -3,7 +3,7 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use semantiq_embeddings::create_embedding_model;
-use semantiq_index::{IndexStore, MAX_FILE_SIZE, should_exclude_entry};
+use semantiq_index::{IndexStore, MAX_FILE_SIZE, paths::to_relative_string, should_exclude_entry};
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, SymbolExtractor,
     resolve_local_import,
@@ -75,12 +75,8 @@ pub(crate) async fn index(path: &Path, database: Option<PathBuf>, force: bool) -
             None => continue,
         };
 
-        // Get relative path
-        let rel_path = path
-            .strip_prefix(&project_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        // Get relative path (warns if `path` falls outside `project_root`).
+        let rel_path = to_relative_string(path, &project_root);
 
         // Read file content
         let content = match fs::read_to_string(path) {
