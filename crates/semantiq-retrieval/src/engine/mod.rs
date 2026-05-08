@@ -13,7 +13,7 @@ use semantiq_index::IndexStore;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, warn};
 
 // Re-export types
 pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
@@ -66,6 +66,19 @@ impl RetrievalEngine {
 
         // Load calibrated thresholds from database
         let threshold_config = Self::load_thresholds_from_store(&store);
+
+        // Surface a warning if the vector index has lost its referential
+        // integrity with the chunks table. Orphan vectors silently dominate
+        // the KNN top-k for distant queries; this log is the canary.
+        match store.count_orphan_chunk_vectors() {
+            Ok(0) => {}
+            Ok(n) => warn!(
+                orphan_chunk_vectors = n,
+                "chunks_vec contains orphan rows (chunk_id not in chunks); \
+                 semantic search may return stale results. Run `semantiq index --force` to repair."
+            ),
+            Err(e) => debug!("could not count orphan chunk vectors: {e}"),
+        }
 
         // Create distance collector if enabled, initialized with existing count
         let distance_collector = if enable_collection {

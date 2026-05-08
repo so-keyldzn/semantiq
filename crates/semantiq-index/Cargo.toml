@@ -19,3 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 notify.workspace = true
 ignore.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

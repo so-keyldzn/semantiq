@@ -51,6 +51,25 @@ impl IndexStore {
         conn.execute("BEGIN IMMEDIATE", [])?;
 
         let result = (|| -> Result<()> {
+            // Collect old chunk IDs so we can purge their vec0 rows. sqlite-vec virtual
+            // tables don't support FK / ON DELETE CASCADE, so without this the old
+            // embeddings linger as orphans in `chunks_vec` and pollute KNN results.
+            let old_ids: Vec<i64> = {
+                let mut stmt = conn.prepare("SELECT id FROM chunks WHERE file_id = ?1")?;
+                stmt.query_map([file_id], |row| row.get::<_, i64>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+
+            if !old_ids.is_empty() {
+                let placeholders = (1..=old_ids.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!("DELETE FROM chunks_vec WHERE chunk_id IN ({placeholders})");
+                let mut stmt = conn.prepare(&sql)?;
+                stmt.execute(rusqlite::params_from_iter(&old_ids))?;
+            }
+
             // Delete existing chunks for this file
             conn.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;
 

@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Embedding dimension (MiniLM-L6-v2 produces 384-dimensional vectors)
 pub const EMBEDDING_DIMENSION: usize = 384;
@@ -54,8 +54,77 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
         )?;
     }
 
+    // v4 -> v5: cleanup pass for two related issues that polluted older databases.
+    //
+    // (a) `chunks_vec` orphans. sqlite-vec virtual tables don't honor FK ON
+    //     DELETE CASCADE, so every prior `INSERT INTO chunks` (after a
+    //     `DELETE FROM chunks WHERE file_id=?`) left the previous chunk's
+    //     vector behind in `chunks_vec`. Over many reindex cycles those
+    //     orphans dominate the KNN top-k and silently break semantic search.
+    //     From v5 forward the application code purges chunks_vec on every
+    //     delete path; this migration cleans the existing residue.
+    //
+    // (b) Absolute file paths. Earlier versions of the indexing pipeline used
+    //     `path.strip_prefix(root).unwrap_or(path)` which silently fell
+    //     through to the original absolute path when `strip_prefix` failed.
+    //     This left ghost rows in `files` (and their dependent chunks) that
+    //     duplicate the relative-path version. Removing them lets FK CASCADE
+    //     clean up the dependent rows for free.
+    if stored < 5 {
+        let chunks_vec_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+
+        if chunks_vec_exists {
+            let deleted = conn.execute(
+                "DELETE FROM chunks_vec
+                 WHERE chunk_id NOT IN (SELECT id FROM chunks)",
+                [],
+            )?;
+            tracing::info!(
+                "Migrating schema v{} -> v5 (a): purged {} orphan rows from chunks_vec",
+                stored,
+                deleted
+            );
+        } else {
+            tracing::info!(
+                "Migrating schema v{} -> v5 (a): chunks_vec absent, nothing to purge",
+                stored
+            );
+        }
+
+        // Drop ghost rows whose `path` is absolute. We don't hardcode "/" only —
+        // Windows callers would hit `C:\…` — but on every supported platform an
+        // absolute path here is a leftover bug that we fix by deletion. FK
+        // CASCADE removes their symbols/chunks/deps; the chunks_vec rows then
+        // become orphans handled by step (a) on the next migration, but we run
+        // the purge again to keep this migration idempotent in one shot.
+        let abs_files = conn.execute(
+            "DELETE FROM files
+             WHERE substr(path, 1, 1) = '/'
+                OR (length(path) >= 3 AND substr(path, 2, 1) = ':')",
+            [],
+        )?;
+        if abs_files > 0 {
+            let deleted = conn.execute(
+                "DELETE FROM chunks_vec
+                 WHERE chunk_id NOT IN (SELECT id FROM chunks)",
+                [],
+            )?;
+            tracing::info!(
+                "Migrating schema v{} -> v5 (b): dropped {} ghost files with absolute paths \
+                 (and {} additional chunks_vec orphans cascade-removed)",
+                stored,
+                abs_files,
+                deleted
+            );
+        }
+    }
+
     // Future migrations go here:
-    // if stored < 5 { ... }
+    // if stored < 6 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a

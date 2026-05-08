@@ -5,6 +5,7 @@
 
 mod calibrations;
 mod chunks;
+mod debug;
 mod dependencies;
 mod files;
 mod observations;
@@ -22,6 +23,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // Re-export types
 pub use calibrations::{CalibrationData, CalibrationRecord};
+pub use debug::{
+    DebugChunk, DebugDep, DebugEmbedding, DebugFile, DebugNeighbor, DebugPage, DebugProjectedPoint,
+    DebugProjection, DebugSymbol, EmbeddingStats,
+};
 
 /// Global initializer for sqlite-vec extension.
 ///
@@ -162,6 +167,26 @@ impl IndexStore {
                         dependency_count: row.get::<_, i64>(3)? as usize,
                     })
                 },
+            )
+            .map_err(Into::into)
+        })
+    }
+
+    /// Count rows in `chunks_vec` whose `chunk_id` no longer exists in `chunks`.
+    ///
+    /// `chunks_vec` is a sqlite-vec virtual table and does not honor FK ON DELETE
+    /// CASCADE. Orphan rows here mean stale embeddings will surface in KNN
+    /// searches and silently degrade semantic ranking. This count must remain 0;
+    /// the application code that mutates `chunks` is responsible for purging the
+    /// matching `chunks_vec` rows in the same transaction.
+    pub fn count_orphan_chunk_vectors(&self) -> Result<i64> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM chunks_vec v
+                 LEFT JOIN chunks c ON c.id = v.chunk_id
+                 WHERE c.id IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
             )
             .map_err(Into::into)
         })

@@ -76,8 +76,32 @@ impl IndexStore {
     }
 
     /// Delete a file and its associated data (cascades to symbols, chunks, deps).
+    /// Also purges the corresponding `chunks_vec` rows: sqlite-vec virtual tables
+    /// don't honor FK / ON DELETE CASCADE, so without this purge old embeddings
+    /// linger as orphans and pollute KNN results.
     pub fn delete_file(&self, path: &str) -> Result<()> {
         self.with_conn(|conn| {
+            // Capture chunk_ids tied to this file before the cascade removes them.
+            let chunk_ids: Vec<i64> = {
+                let mut stmt = conn.prepare(
+                    "SELECT c.id FROM chunks c
+                     JOIN files f ON f.id = c.file_id
+                     WHERE f.path = ?1",
+                )?;
+                stmt.query_map([path], |row| row.get::<_, i64>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+
+            if !chunk_ids.is_empty() {
+                let placeholders = (1..=chunk_ids.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!("DELETE FROM chunks_vec WHERE chunk_id IN ({placeholders})");
+                let mut stmt = conn.prepare(&sql)?;
+                stmt.execute(rusqlite::params_from_iter(&chunk_ids))?;
+            }
+
             conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
             Ok(())
         })
@@ -167,6 +191,7 @@ impl IndexStore {
     pub(crate) fn clear_all_data_impl(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "BEGIN IMMEDIATE;
+             DELETE FROM chunks_vec;
              DELETE FROM dependencies;
              DELETE FROM chunks;
              DELETE FROM symbols;
@@ -196,7 +221,8 @@ impl IndexStore {
 
         let result = (|| -> Result<()> {
             conn.execute_batch(
-                "DELETE FROM dependencies;
+                "DELETE FROM chunks_vec;
+                 DELETE FROM dependencies;
                  DELETE FROM chunks;
                  DELETE FROM symbols;
                  DELETE FROM files;",
