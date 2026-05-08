@@ -129,7 +129,10 @@ fn intent_queries_return_results_and_baselines_stay_empty() {
     ];
     for q in positive {
         let n = search_count(&engine, q);
-        assert!(n >= 1, "expected ≥1 result for positive query {q:?}, got {n}");
+        assert!(
+            n >= 1,
+            "expected ≥1 result for positive query {q:?}, got {n}"
+        );
     }
 
     // ───── Negative baselines: nothing in the codebase covers these ─────

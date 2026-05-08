@@ -59,10 +59,7 @@ fn reindex_same_file_does_not_leak_vectors() {
 
     // Reindex: brand-new chunks for the same file. Old `chunks` rows are wiped
     // by `insert_chunks`; the corresponding `chunks_vec` rows must go too.
-    let v2 = vec![
-        make_chunk("fn x() {}", 1, 1),
-        make_chunk("fn y() {}", 2, 2),
-    ];
+    let v2 = vec![make_chunk("fn x() {}", 1, 1), make_chunk("fn y() {}", 2, 2)];
     store.insert_chunks(file_id, &v2).unwrap();
     let stored2 = store.get_chunks_by_file(file_id).unwrap();
     assert_eq!(stored2.len(), 2);
@@ -81,10 +78,7 @@ fn delete_file_purges_vectors() {
     let file_id = store
         .insert_file("bar.rs", Some("rust"), "fn b() {}", 9, 1000)
         .unwrap();
-    let chunks = vec![
-        make_chunk("fn a() {}", 1, 1),
-        make_chunk("fn b() {}", 2, 2),
-    ];
+    let chunks = vec![make_chunk("fn a() {}", 1, 1), make_chunk("fn b() {}", 2, 2)];
     store.insert_chunks(file_id, &chunks).unwrap();
     let stored = store.get_chunks_by_file(file_id).unwrap();
     for c in &stored {

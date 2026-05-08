@@ -87,6 +87,9 @@ mod tests {
 
         // The function should preserve the absolute form (after canonicalize)
         // so downstream code at least has something it can read.
-        assert!(PathBuf::from(&s).is_absolute(), "expected absolute, got: {s}");
+        assert!(
+            PathBuf::from(&s).is_absolute(),
+            "expected absolute, got: {s}"
+        );
     }
 }
