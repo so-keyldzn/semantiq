@@ -30,6 +30,10 @@
     name: (scope_resolution
         name: (constant) @name)) @definition.module
 
+; alias new_name old_name → Function (parité avec method)
+(alias
+    name: (_) @name) @definition.function
+
 ; Top-level constant assignment
 (assignment
     left: (constant) @name) @definition.constant

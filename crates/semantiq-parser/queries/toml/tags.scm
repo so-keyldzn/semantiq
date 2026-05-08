@@ -11,6 +11,9 @@
 (pair
     (bare_key) @name) @definition.variable
 
+(pair
+    (dotted_key) @name) @definition.variable
+
 (table
     (bare_key) @name) @definition.struct
 

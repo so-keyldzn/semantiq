@@ -21,6 +21,19 @@
         (function_item
             name: (identifier) @name) @definition.method))
 
+; method definitions dans trait blocks (default impls)
+(trait_item
+    (declaration_list
+        (function_item
+            name: (identifier) @name) @definition.method))
+
+; method signatures dans trait blocks (sans body : `fn bar(&self);`)
+; Node distinct dans la grammaire Rust : function_signature_item.
+(trait_item
+    (declaration_list
+        (function_signature_item
+            name: (identifier) @name) @definition.method))
+
 ; function definitions (top-level et dans les modules)
 (source_file
     (function_item

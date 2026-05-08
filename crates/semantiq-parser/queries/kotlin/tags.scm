@@ -6,6 +6,7 @@
 ;   le keyword child ("interface") ou le body type (enum_class_body).
 ; - L'import est un nœud `import` (pas import_header) qui ne peut apparaître
 ;   qu'après un package_header au tout début du fichier.
+; - companion_object, type_alias, enum_entry sont des nœuds distincts.
 
 ; Interface : class_declaration avec keyword "interface"
 (class_declaration
@@ -17,6 +18,10 @@
     (identifier) @name
     (enum_class_body)) @definition.enum
 
+; Enum entries (les valeurs d'un enum class) → Constant
+(enum_entry
+    (identifier) @name) @definition.constant
+
 ; Method : function_declaration imbriquée dans class_body
 ; Doit précéder le pattern function_declaration générique pour gagner via dédup.
 (class_declaration
@@ -25,6 +30,12 @@
             (identifier) @name) @definition.method))
 
 (object_declaration
+    (class_body
+        (function_declaration
+            (identifier) @name) @definition.method))
+
+; Méthodes dans un companion_object
+(companion_object
     (class_body
         (function_declaration
             (identifier) @name) @definition.method))
@@ -39,6 +50,15 @@
 ; Object
 (object_declaration
     (identifier) @name) @definition.class
+
+; Companion object (`companion object` ou `companion object Helper`)
+(companion_object
+    name: (identifier) @name) @definition.class
+
+; Type alias : `typealias Foo = Bar` — le nom est le 1er identifier child
+; (le field `type:` pointe sur l'identifier de droite).
+(type_alias
+    (identifier) @name) @definition.type
 
 ; Top-level function
 (function_declaration

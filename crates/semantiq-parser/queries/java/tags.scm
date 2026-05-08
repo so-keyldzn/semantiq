@@ -18,6 +18,10 @@
 (enum_declaration
     name: (identifier) @name) @definition.enum
 
+; Records (Java 14+)
+(record_declaration
+    name: (identifier) @name) @definition.class
+
 ; Field declarations — first declarator's variable name
 (field_declaration
     declarator: (variable_declarator

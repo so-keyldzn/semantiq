@@ -25,6 +25,12 @@
 (class_definition
     name: (identifier) @name) @definition.class
 
+; Module-level constants : assignment au top-level (module body)
+(module
+    (expression_statement
+        (assignment
+            left: (identifier) @name)) @definition.constant)
+
 ; Imports
 (import_statement) @definition.import
 (import_from_statement) @definition.import

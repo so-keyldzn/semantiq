@@ -1,5 +1,9 @@
 ; Scala symbol extraction queries
 
+; Package clause → Module
+(package_clause
+    name: (_) @name) @definition.module
+
 ; Function definitions
 (function_definition
     name: (identifier) @name) @definition.function
@@ -17,16 +21,30 @@
 (enum_definition
     name: (identifier) @name) @definition.enum
 
+; Enum cases (Scala 3) — `case Red, Green, Blue` ou `case Some(x: Int)`.
+(simple_enum_case
+    name: (identifier) @name) @definition.constant
+
+(full_enum_case
+    name: (identifier) @name) @definition.class
+
 ; Type definitions
 (type_definition
     name: (type_identifier) @name) @definition.type
 
-; val / var definitions → Variable
+; val / var definitions (avec body) → Variable
 (val_definition
     pattern: (identifier) @name) @definition.variable
 
 (var_definition
     pattern: (identifier) @name) @definition.variable
+
+; val / var declarations (sans body, membres abstraits dans un trait) → Variable
+(val_declaration
+    name: (identifier) @name) @definition.variable
+
+(var_declaration
+    name: (identifier) @name) @definition.variable
 
 ; Imports
 (import_declaration) @definition.import

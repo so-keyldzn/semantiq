@@ -30,5 +30,9 @@
     (const_element
         (name) @name)) @definition.constant
 
+; Enum cases (PHP 8.1+)
+(enum_case
+    name: (name) @name) @definition.constant
+
 ; Use declarations → Import
 (namespace_use_declaration) @definition.import

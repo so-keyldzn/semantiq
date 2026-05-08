@@ -23,12 +23,32 @@
 (method_definition
     name: (property_identifier) @name) @definition.method
 
-; Function declarations
+; Method / property signatures inside an interface body — needed to index
+; declarations in `.d.ts` and method shapes in `interface I { foo(): void }`.
+(method_signature
+    name: (property_identifier) @name) @definition.method
+
+(abstract_method_signature
+    name: (property_identifier) @name) @definition.method
+
+; Function declarations & ambient function signatures (`declare function …`)
 (function_declaration
     name: (identifier) @name) @definition.function
 
 (generator_function_declaration
     name: (identifier) @name) @definition.function
+
+(function_signature
+    name: (identifier) @name) @definition.function
+
+; TypeScript namespaces — `namespace Foo { … }` mappe sur `internal_module`,
+; `module Foo { … }` (legacy) mappe sur `module`. Le name peut être un
+; identifier, un nested_identifier (ex: `namespace A.B`), ou une string.
+(internal_module
+    name: (_) @name) @definition.module
+
+(module
+    name: (_) @name) @definition.module
 
 ; Variable bindings — kind may be upgraded to Function in post-processing
 ; if value is arrow_function or function_expression

@@ -12,12 +12,15 @@
 (constructor_declaration
     name: (identifier) @name) @definition.method
 
-; Class / struct / interface / enum
+; Class / struct / record / interface / enum
 (class_declaration
     name: (identifier) @name) @definition.class
 
 (struct_declaration
     name: (identifier) @name) @definition.struct
+
+(record_declaration
+    name: (identifier) @name) @definition.class
 
 (interface_declaration
     name: (identifier) @name) @definition.interface
@@ -25,12 +28,17 @@
 (enum_declaration
     name: (identifier) @name) @definition.enum
 
-; Namespaces (file_scoped or block_scoped)
+; Delegate
+(delegate_declaration
+    name: (identifier) @name) @definition.type
+
+; Namespaces (file_scoped or block_scoped). The `name` field can be an
+; identifier OR a qualified_name (e.g. `namespace A.B.C`), so we match `_`.
 (namespace_declaration
-    name: (identifier) @name) @definition.module
+    name: (_) @name) @definition.module
 
 (file_scoped_namespace_declaration
-    name: (identifier) @name) @definition.module
+    name: (_) @name) @definition.module
 
 ; Fields & properties → Variable
 (field_declaration

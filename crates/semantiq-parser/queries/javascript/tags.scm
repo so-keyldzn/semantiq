@@ -26,5 +26,17 @@
     (variable_declarator
         name: (identifier) @name)) @definition.variable
 
+; Object-literal shorthand methods et properties function-valued :
+;   const obj = { foo: () => {}, bar: function() {} }
+; On capture la `pair` car c'est elle qui exposera la position complète.
+(pair
+    key: (property_identifier) @name
+    value: [(arrow_function) (function_expression)]) @definition.function
+
+; Anonymous class assignée à une const : `const Foo = class { … }`
+(variable_declarator
+    name: (identifier) @name
+    value: (class)) @definition.class
+
 ; Import statements
 (import_statement) @definition.import
