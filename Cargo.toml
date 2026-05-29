@@ -26,7 +26,7 @@ readme = "README.md"
 tokio = { version = "1.43", features = ["full"] }
 
 # MCP Server
-rmcp = { version = "0.1", features = ["server", "transport-io"] }
+rmcp = { version = "1.4", features = ["server", "transport-io"] }
 
 # HTTP API
 axum = "0.8"
