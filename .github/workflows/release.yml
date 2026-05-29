@@ -56,19 +56,31 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../semantiq-${{ github.ref_name }}-${{ matrix.target }}.tar.gz semantiq
+          ARCHIVE="semantiq-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czvf "../../../$ARCHIVE" semantiq
+          cd ../../..
+          # Sidecar in standard `sha256sum` format: "<hex>  <filename>".
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../semantiq-${{ github.ref_name }}-${{ matrix.target }}.tar.gz semantiq.exe
+          $name = "semantiq-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czvf "../../../$name" semantiq.exe
+          cd ../../..
+          # Same `sha256sum` format as Unix: lowercase hex, two spaces, filename, ASCII/no BOM.
+          $hash = Get-FileHash -Algorithm SHA256 -Path $name
+          "$("{0}  {1}" -f $hash.Hash.ToLower(), $name)" | Out-File -Encoding ascii -NoNewline "$name.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: semantiq-${{ matrix.target }}
-          path: semantiq-*.tar.gz
+          path: |
+            semantiq-*.tar.gz
+            semantiq-*.tar.gz.sha256
 
   release:
     name: Create Release
@@ -85,7 +97,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         with:
-          files: artifacts/**/*.tar.gz
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.tar.gz.sha256
           generate_release_notes: true
 
   publish-npm:

@@ -4,6 +4,68 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-29
+
+Reliability, supply-chain, and search-quality release. Re-indexing no longer
+leaks orphan `chunks_vec` rows (file ids are now stable), embeddings are
+genuinely batched, and a new `semantiq update` self-update command ships
+SHA256-verified binaries. Two behavior changes to note: HTTP CORS is now
+restrictive by default, and `PARSER_VERSION` 7 → 8 triggers a one-time full
+reindex on first start after upgrading.
+
+### Added
+- **`semantiq update` self-update command**. Downloads the matching release
+  archive, verifies its published SHA256 (fail-closed — aborts if the
+  checksum is missing or mismatched), and atomically replaces the running
+  binary. Supports `--check` (report availability only) and `--force`.
+- **Batched embeddings**. `embed_batch` now runs a single padded forward
+  pass instead of one inference per chunk. The CLI `index` command and the
+  parser pipeline feed embeddings in batches. `EmbeddingModel` exposes
+  `is_stub()` and a unified `EMBEDDING_DIMENSION`.
+- **Regression and integration tests**: schema v4 → v5 migration tests, an
+  `AutoIndexer` integration suite, the `vec_invariant` test pinning the
+  no-orphan contract, and reindex/embedding-dimension checks.
+
+### Changed
+- **CORS is restrictive by default (behavior change)**. The HTTP API
+  (`--http-port`) no longer allows cross-origin requests out of the box;
+  cross-origin access must be opted into explicitly via `--cors-origin`.
+  Same-origin clients are unaffected.
+- **npm installer verifies the published SHA256 before extraction
+  (fail-closed)**. Releases must now ship a `.sha256` file alongside each
+  archive or installation aborts. The out-of-lockfile `ort` prebuilt
+  runtime is now documented.
+- **`PARSER_VERSION` 7 → 8** — triggers a one-time full reindex on the first
+  start after upgrading.
+- **MCP/HTTP serving hardening**. The auto-indexer's `process_events` now
+  runs on `spawn_blocking`, the HTTP server shuts down gracefully, and the
+  dead `tools` module was removed.
+
+### Fixed
+- **`chunks_vec` orphan rows on reindex (HIGH-1)**. File rows are now kept
+  stable across reindexes via `INSERT ... ON CONFLICT(path) DO UPDATE`
+  instead of delete-then-reinsert, so reusing the same file id no longer
+  strands the previous chunk vectors. `update_chunk_embedding` is now
+  transactional with a dimension check, the `foreign_keys` PRAGMA is enabled
+  on in-memory connections, and FTS5 results use `ORDER BY rank`.
+- **Resilient incremental indexing**. Exclusion is now checked against the
+  relative path, the file hash is committed last (so an interrupted index no
+  longer marks a file as up-to-date), and lexical paths normalize `..`
+  components.
+- **Resilient per-file CLI `index`**. A single file error no longer aborts
+  the whole run; failures are collected and reported in an error summary.
+  Embeddings are generated in batches.
+- **Search ranking quality**. Semantic search is skipped on the stub model,
+  expanded-variant FTS matches are deduplicated with a penalty, cross-strategy
+  scores are min-max normalized, and the min-score floor is aligned. Removed
+  N+1 path/language lookups, the file-list cache is now `Arc`'d, text matchers
+  are compiled once, and per-file read size is capped.
+- **Parser extraction**. Every declarator in a multi-declarator statement is
+  now indexed (dedup key includes the name range), Scala multi-binding
+  `val`/`var` are handled, doc-comments break across blank lines, text is read
+  via `utf8_text()` instead of manual byte slicing, and symbol/import kinds
+  gain `Display`/`FromStr`.
+
 ## [0.8.0] - 2026-05-08
 
 Bugfix release that repairs the semantic search pipeline. Six out of seven

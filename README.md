@@ -98,6 +98,15 @@ semantiq serve --database /custom/path.db
 semantiq serve --no-update-check         # Disable version notifications
 ```
 
+### `semantiq update [OPTIONS]`
+
+Self-update to the latest release. The downloaded archive is verified by SHA256 checksum before it replaces the current binary.
+
+```bash
+semantiq update          # Download and install the latest version
+semantiq update --check  # Check for a newer version without installing
+```
+
 ### `semantiq index [PATH] [OPTIONS]`
 
 Manually index a project.
