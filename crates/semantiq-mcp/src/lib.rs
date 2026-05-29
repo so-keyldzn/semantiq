@@ -1,3 +1,4 @@
+pub mod self_update;
 pub mod server;
 pub mod version_check;
 

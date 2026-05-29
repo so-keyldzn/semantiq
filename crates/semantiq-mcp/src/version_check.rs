@@ -7,6 +7,9 @@ use tracing::debug;
 
 const GITHUB_API_URL: &str = "https://api.github.com/repos/so-keyldzn/semantiq/releases/latest";
 const CACHE_FILE: &str = "version_cache.json";
+
+/// GitHub repository ("owner/name") used for releases and update downloads.
+pub const REPO: &str = "so-keyldzn/semantiq";
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_CACHE_HOURS: u64 = 24;
 
@@ -207,6 +210,20 @@ pub fn check_for_update(current_version: &str, config: &VersionCheckConfig) -> O
         latest_version: latest.clone(),
         update_available: is_newer(&latest, current_version),
     })
+}
+
+/// Fetch the latest released version (without the leading `v`), bypassing the
+/// on-disk cache and the disable flag. Returns `None` on network/parse failure.
+///
+/// Used by the explicit `update` command, which must always see the real latest
+/// release rather than a possibly-stale cached value.
+pub fn fetch_latest_uncached(timeout: Duration) -> Option<String> {
+    fetch_latest_version(timeout)
+}
+
+/// Returns `true` if `latest` is a strictly newer semver than `current`.
+pub fn is_version_newer(latest: &str, current: &str) -> bool {
+    is_newer(latest, current)
 }
 
 #[cfg(test)]

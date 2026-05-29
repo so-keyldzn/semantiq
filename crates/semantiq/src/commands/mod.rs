@@ -8,6 +8,7 @@ mod init_cursor;
 mod search;
 mod serve;
 mod stats;
+mod update;
 
 pub(crate) use calibrate::calibrate;
 pub(crate) use index::index;
@@ -16,3 +17,4 @@ pub(crate) use init_cursor::init_cursor;
 pub(crate) use search::search;
 pub(crate) use serve::serve;
 pub(crate) use stats::stats;
+pub(crate) use update::update;
