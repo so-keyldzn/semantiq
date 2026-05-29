@@ -73,8 +73,21 @@ fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(timeout))
+            // Reject plaintext HTTP and any redirect that downgrades to it:
+            // integrity rests entirely on the TLS channel.
+            .https_only(true)
             .build(),
     )
+}
+
+/// Build an unpredictable, process-unique scratch name to avoid symlink/TOCTOU
+/// races on shared temp directories.
+fn unique_scratch_name(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{}-{}", std::process::id(), nanos)
 }
 
 fn download_bytes(url: &str, timeout: Duration, max_bytes: u64) -> Result<Vec<u8>> {
@@ -141,7 +154,7 @@ fn replace_current_exe(new_bin: &Path) -> Result<()> {
 
     // Stage the new binary next to the target so the final rename stays on the
     // same filesystem (cross-device rename would fail).
-    let staged = dir.join(format!(".semantiq-update-{}", std::process::id()));
+    let staged = dir.join(unique_scratch_name(".semantiq-update"));
     std::fs::copy(new_bin, &staged).context("failed to stage new binary")?;
 
     #[cfg(unix)]
@@ -234,8 +247,16 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
     println!("Checksum verified.");
 
     // Extract into a unique temp dir, then atomically swap the binary in.
-    let tmp_dir = std::env::temp_dir().join(format!("semantiq-update-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir).context("failed to create temp directory")?;
+    let tmp_dir = std::env::temp_dir().join(unique_scratch_name("semantiq-update"));
+    // create_dir (not create_dir_all) fails if the path already exists, defeating
+    // a pre-created symlink on a shared temp dir.
+    std::fs::create_dir(&tmp_dir).context("failed to create temp directory")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&tmp_dir, std::fs::Permissions::from_mode(0o700))
+            .context("failed to restrict temp directory permissions")?;
+    }
     let cleanup = TmpDir(tmp_dir.clone());
 
     let archive_path = tmp_dir.join(&archive_name);
