@@ -34,15 +34,24 @@ pub(crate) async fn serve_http(
 ) -> Result<()> {
     let server = Arc::new(server);
 
-    // Build CORS layer
+    // Build CORS layer.
+    //
+    // Default (no --cors-origin): restrictive. We do NOT allow any cross-origin
+    // requests — `CorsLayer::new()` with no `allow_origin` configured emits no
+    // `Access-Control-Allow-Origin` header, so browsers block cross-site reads.
+    // Same-origin requests are unaffected. This is the safe default for a local
+    // tool. Pass --cors-origin <ORIGIN> to explicitly opt into a known origin.
     let cors = if let Some(origin) = cors_origin {
         CorsLayer::new()
             .allow_origin(origin.parse::<axum::http::HeaderValue>()?)
             .allow_methods(Any)
             .allow_headers(Any)
     } else {
-        warn!("No CORS origin specified, allowing all origins. Set --cors-origin in production.");
-        CorsLayer::very_permissive()
+        warn!(
+            "No CORS origin specified; cross-origin requests are blocked. \
+             Pass --cors-origin <ORIGIN> to allow a specific origin."
+        );
+        CorsLayer::new()
     };
 
     let app: Router = create_router(server)
@@ -55,7 +64,12 @@ pub(crate) async fn serve_http(
     info!("Starting HTTP API server on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            info!("Shutdown signal received, stopping HTTP API server");
+        })
+        .await?;
 
     Ok(())
 }
