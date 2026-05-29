@@ -168,18 +168,29 @@ impl QuerySymbolExtractor {
         let mut cursor = QueryCursor::new();
         let source_bytes = source.as_bytes();
 
-        // Déduplication par (start_byte, end_byte) avec priorité au plus petit
-        // pattern_index. Tree-sitter émet les matches dans un ordre dicté par la
-        // complétion du pattern dans l'arbre, qui n'est PAS l'ordre déclaré dans
-        // le .scm. Pour qu'un pattern plus spécifique (déclaré en premier) gagne
-        // sur un pattern générique (déclaré plus bas) sur le même nœud, on garde
-        // celui avec le plus petit pattern_index.
-        let mut by_range: std::collections::HashMap<(usize, usize), (u32, RawSymbol)> =
-            std::collections::HashMap::new();
+        // Déduplication par (def_start, def_end, name_start, name_end) avec
+        // priorité au plus petit pattern_index. Tree-sitter émet les matches dans
+        // un ordre dicté par la complétion du pattern dans l'arbre, qui n'est PAS
+        // l'ordre déclaré dans le .scm. Pour qu'un pattern plus spécifique (déclaré
+        // en premier) gagne sur un pattern générique (déclaré plus bas) sur le même
+        // nœud, on garde celui avec le plus petit pattern_index.
+        //
+        // La plage du nœud de NOM fait partie de la clé : un seul nœud @definition
+        // (ex: `lexical_declaration` JS/TS pour `const A = 1, B = 2;`, ou
+        // `val_definition` Scala pour `val a, b = 1`) porte plusieurs déclarateurs,
+        // donc plusieurs @name distincts via des matches répétés du même pattern.
+        // Sans inclure la plage du nom dans la clé, seul le premier symbole serait
+        // indexé. Les vraies collisions exactes (même def + même nom, ex: Python
+        // method-vs-function) restent départagées par pattern_index.
+        let mut by_range: std::collections::HashMap<
+            (usize, usize, usize, usize),
+            (u32, RawSymbol),
+        > = std::collections::HashMap::new();
 
         let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
         while let Some(m) = matches.next() {
             let mut name: Option<String> = None;
+            let mut name_range: Option<(usize, usize)> = None;
             let mut kind: Option<SymbolKind> = None;
             let mut definition_node: Option<Node> = None;
 
@@ -189,6 +200,7 @@ impl QuerySymbolExtractor {
                 match capture_name {
                     "name" => {
                         name = Some(capture.node.utf8_text(source_bytes)?.to_string());
+                        name_range = Some((capture.node.start_byte(), capture.node.end_byte()));
                     }
                     name if name.starts_with("definition.") => {
                         kind = Self::capture_to_kind(name, capture.node.kind());
@@ -210,7 +222,11 @@ impl QuerySymbolExtractor {
             }
 
             if let (Some(name), Some(kind), Some(node)) = (name, kind, definition_node) {
-                let key = (node.start_byte(), node.end_byte());
+                // Si pas de @name explicite (import nom court), on retombe sur la
+                // plage du nœud @definition comme discriminant secondaire.
+                let (name_start, name_end) =
+                    name_range.unwrap_or((node.start_byte(), node.end_byte()));
+                let key = (node.start_byte(), node.end_byte(), name_start, name_end);
                 let pattern_idx = m.pattern_index as u32;
                 match by_range.get(&key) {
                     Some((existing_idx, _)) if *existing_idx <= pattern_idx => {
@@ -552,16 +568,36 @@ impl QuerySymbolExtractor {
     }
 
     /// Extrait les doc comments précédant le nœud.
+    ///
+    /// On remonte les frères-commentaires contigus. Une ligne vide entre deux
+    /// commentaires (écart de `row` > 1) rompt l'agrégation : ça évite d'absorber
+    /// un en-tête de licence séparé du doc du symbole par une ligne blanche, p.ex.
+    /// `// Copyright …\n\n/// Doc du symbole\nfn foo() {}` ne doit pas coller la
+    /// licence au doc.
     fn extract_doc_comment(node: &Node, source: &str) -> Option<String> {
         let source_bytes = source.as_bytes();
         let mut prev = node.prev_sibling();
         let mut comments = Vec::new();
+        // Ligne de début du dernier commentaire accepté. Sert à mesurer l'écart
+        // avec le commentaire précédent (au-dessus). `None` tant qu'on n'a rien
+        // accepté : le premier commentaire (le plus proche du nœud) est toujours
+        // pris, même si une ligne vide le sépare du nœud — c'est bien le doc du
+        // symbole. Le contrôle d'écart ne s'applique qu'entre commentaires.
+        let mut last_start_row: Option<usize> = None;
 
         while let Some(sibling) = prev {
             if sibling.kind().contains("comment") {
+                if let Some(last) = last_start_row {
+                    // Écart de plus d'une ligne entre ce commentaire (au-dessus)
+                    // et le bloc déjà agrégé : ligne vide intercalée → on coupe.
+                    if sibling.end_position().row + 1 < last {
+                        break;
+                    }
+                }
                 if let Ok(comment) = sibling.utf8_text(source_bytes) {
                     comments.push(comment.to_string());
                 }
+                last_start_row = Some(sibling.start_position().row);
                 prev = sibling.prev_sibling();
             } else {
                 break;
@@ -772,6 +808,43 @@ const MAX_SIZE: usize = 100;
                 legacy.kind, legacy.name
             );
         }
+    }
+
+    #[test]
+    fn test_query_doc_comment_breaks_on_blank_line() {
+        // Un en-tête de licence séparé du doc du symbole par une ligne vide ne
+        // doit PAS être agrégé au doc_comment du symbole.
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "// Copyright 2026 ACME Corp.\n// Licensed under MIT.\n\n/// Greets the world.\nfn greet() {}\n";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = QuerySymbolExtractor::new().unwrap();
+        let symbols = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        let greet = symbols.iter().find(|s| s.name == "greet").unwrap();
+        let doc = greet.doc_comment.as_deref().unwrap_or("");
+        assert!(
+            doc.contains("Greets the world"),
+            "doc must keep the symbol's own comment, got: {doc:?}"
+        );
+        assert!(
+            !doc.contains("Copyright") && !doc.contains("Licensed"),
+            "license header across a blank line must NOT be absorbed, got: {doc:?}"
+        );
+    }
+
+    #[test]
+    fn test_query_doc_comment_contiguous_block_kept() {
+        // Deux lignes de doc contiguës restent agrégées ensemble.
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "/// line one\n/// line two\nfn greet() {}\n";
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let extractor = QuerySymbolExtractor::new().unwrap();
+        let symbols = extractor.extract(&tree, source, Language::Rust).unwrap();
+
+        let greet = symbols.iter().find(|s| s.name == "greet").unwrap();
+        let doc = greet.doc_comment.as_deref().unwrap_or("");
+        assert!(doc.contains("line one"), "first doc line missing: {doc:?}");
+        assert!(doc.contains("line two"), "second doc line missing: {doc:?}");
     }
 
     #[test]

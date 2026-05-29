@@ -32,6 +32,27 @@ impl ImportKind {
     }
 }
 
+impl std::fmt::Display for ImportKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ImportKind {
+    type Err = ();
+
+    /// Inverse de [`ImportKind::as_str`]. Insensible à la casse. Renvoie
+    /// `Err(())` pour une valeur inconnue.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "std" => Ok(ImportKind::Std),
+            "external" => Ok(ImportKind::External),
+            "local" => Ok(ImportKind::Local),
+            _ => Err(()),
+        }
+    }
+}
+
 pub struct ImportExtractor;
 
 impl ImportExtractor {
@@ -91,7 +112,7 @@ impl ImportExtractor {
         let end_line = node.end_position().row + 1;
 
         // Get the full use path
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
 
         // Extract the path from "use path::to::module;"
         let path = Self::parse_rust_use_path(text)?;
@@ -168,7 +189,7 @@ impl ImportExtractor {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "string" {
-                let path_text = &source[child.start_byte()..child.end_byte()];
+                let path_text = child.utf8_text(source.as_bytes()).ok()?;
                 let path = path_text
                     .trim_matches(|c| c == '"' || c == '\'')
                     .to_string();
@@ -204,7 +225,7 @@ impl ImportExtractor {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.kind() == "dotted_name" {
-                        let path = source[child.start_byte()..child.end_byte()].to_string();
+                        let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
                         let kind = Self::classify_python_import(&path);
                         let name = path.split('.').next_back().map(String::from);
 
@@ -227,7 +248,7 @@ impl ImportExtractor {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.kind() == "dotted_name" || child.kind() == "relative_import" {
-                        let path = source[child.start_byte()..child.end_byte()].to_string();
+                        let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
                         let kind = if path.starts_with('.') {
                             ImportKind::Local
                         } else {
@@ -272,7 +293,7 @@ impl ImportExtractor {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "interpreted_string_literal" {
-                let path_text = &source[child.start_byte()..child.end_byte()];
+                let path_text = child.utf8_text(source.as_bytes()).ok()?;
                 let path = path_text.trim_matches('"').to_string();
 
                 let kind = if path.starts_with('.') || path.starts_with('/') {
@@ -311,7 +332,7 @@ impl ImportExtractor {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "scoped_identifier" {
-                let path = source[child.start_byte()..child.end_byte()].to_string();
+                let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
                 let kind = if path.starts_with("java.") || path.starts_with("javax.") {
                     ImportKind::Std
@@ -347,7 +368,7 @@ impl ImportExtractor {
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "string_literal" => {
-                    let path_text = &source[child.start_byte()..child.end_byte()];
+                    let path_text = child.utf8_text(source.as_bytes()).ok()?;
                     let path = path_text.trim_matches('"').to_string();
                     let name = path.split('/').next_back().map(String::from);
 
@@ -360,7 +381,7 @@ impl ImportExtractor {
                     });
                 }
                 "system_lib_string" => {
-                    let path_text = &source[child.start_byte()..child.end_byte()];
+                    let path_text = child.utf8_text(source.as_bytes()).ok()?;
                     let path = path_text.trim_matches(|c| c == '<' || c == '>').to_string();
                     let name = path.split('/').next_back().map(String::from);
 
@@ -389,7 +410,7 @@ impl ImportExtractor {
         let end_line = node.end_position().row + 1;
 
         // Get the full text of the use statement
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
 
         // Parse "use Namespace\Class;" or "use Namespace\Class as Alias;"
         let path = Self::parse_php_use_path(text)?;
@@ -429,7 +450,7 @@ impl ImportExtractor {
             return None;
         }
 
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
         if !text.starts_with("require") {
             return None;
         }
@@ -444,7 +465,7 @@ impl ImportExtractor {
                 let mut inner_cursor = child.walk();
                 for arg in child.children(&mut inner_cursor) {
                     if arg.kind() == "string" {
-                        let path_text = &source[arg.start_byte()..arg.end_byte()];
+                        let path_text = arg.utf8_text(source.as_bytes()).ok()?;
                         let path = path_text
                             .trim_matches(|c| c == '"' || c == '\'')
                             .to_string();
@@ -484,7 +505,7 @@ impl ImportExtractor {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "qualified_name" || child.kind() == "identifier" {
-                let path = source[child.start_byte()..child.end_byte()].to_string();
+                let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
                 let kind = if path.starts_with("System") {
                     ImportKind::Std
@@ -519,7 +540,7 @@ impl ImportExtractor {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "identifier" {
-                let path = source[child.start_byte()..child.end_byte()].to_string();
+                let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
                 let kind = if path.starts_with("kotlin.") || path.starts_with("java.") {
                     ImportKind::Std
@@ -550,7 +571,7 @@ impl ImportExtractor {
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
 
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
         let path = text
             .strip_prefix("import ")
             .unwrap_or(text)
@@ -580,7 +601,7 @@ impl ImportExtractor {
             return None;
         }
 
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
         if !text.starts_with("source ") && !text.starts_with(". ") {
             return None;
         }
@@ -614,7 +635,7 @@ impl ImportExtractor {
             return None;
         }
 
-        let text = &source[node.start_byte()..node.end_byte()];
+        let text = node.utf8_text(source.as_bytes()).ok()?;
         let is_import = text.starts_with("import ")
             || text.starts_with("alias ")
             || text.starts_with("use ")
@@ -912,6 +933,17 @@ import com.google.gson.Gson;
         assert_eq!(ImportKind::Std.as_str(), "std");
         assert_eq!(ImportKind::External.as_str(), "external");
         assert_eq!(ImportKind::Local.as_str(), "local");
+    }
+
+    #[test]
+    fn test_import_kind_display_and_from_str_roundtrip() {
+        use std::str::FromStr;
+        for k in [ImportKind::Std, ImportKind::External, ImportKind::Local] {
+            assert_eq!(k.to_string(), k.as_str());
+            assert_eq!(ImportKind::from_str(k.as_str()), Ok(k));
+        }
+        assert_eq!(ImportKind::from_str("STD"), Ok(ImportKind::Std));
+        assert!(ImportKind::from_str("unknown").is_err());
     }
 
     #[test]
