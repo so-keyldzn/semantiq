@@ -223,6 +223,12 @@ pub trait EmbeddingModel: Send + Sync {
     fn embed(&self, text: &str) -> Result<Vec<f32>>;
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     fn dimension(&self) -> usize;
+
+    /// Whether this model is a no-op stub that returns zero vectors.
+    /// Real models (e.g. ONNX) keep the default `false`; the stub overrides it.
+    fn is_stub(&self) -> bool {
+        false
+    }
 }
 
 /// Stub embedding model for when ONNX is not available
@@ -232,7 +238,9 @@ pub struct StubEmbeddingModel {
 
 impl StubEmbeddingModel {
     pub fn new() -> Self {
-        Self { dimension: 384 }
+        Self {
+            dimension: crate::EMBEDDING_DIMENSION,
+        }
     }
 }
 
@@ -254,6 +262,10 @@ impl EmbeddingModel for StubEmbeddingModel {
 
     fn dimension(&self) -> usize {
         self.dimension
+    }
+
+    fn is_stub(&self) -> bool {
+        true
     }
 }
 
@@ -394,18 +406,85 @@ pub mod onnx {
         }
 
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-            // Process texts sequentially but with reduced lock contention
-            // True batching would require padding and handling variable sequence lengths
-            // which adds complexity for marginal gains in single-threaded scenarios
-            let mut results = Vec::with_capacity(texts.len());
-            for text in texts {
-                results.push(self.embed(text)?);
+            if texts.is_empty() {
+                return Ok(Vec::new());
             }
+
+            // True tensor batching: tokenize every text, pad them all to a common
+            // sequence length, run a single forward pass over the [N, max_len] batch,
+            // then mean-pool each row independently. Padding tokens are masked out by
+            // the per-row attention mask so they contribute 0 to each pooled vector.
+
+            // 1. Tokenize every text (already truncated to config.max_length).
+            let tokenized: Vec<(Vec<i64>, Vec<i64>)> = texts
+                .iter()
+                .map(|t| self.tokenize(t))
+                .collect::<Result<Vec<_>>>()?;
+
+            // 2. Common padded length = longest sequence in the batch (never exceeds
+            //    config.max_length since tokenize() already truncates). Guard against an
+            //    all-empty batch so the tensor shape stays valid.
+            let max_len = tokenized
+                .iter()
+                .map(|(ids, _)| ids.len())
+                .max()
+                .unwrap_or(0)
+                .max(1);
+            let batch_size = tokenized.len();
+
+            // 3. Build flat row-major [N, max_len] buffers, right-padding with 0.
+            //    For padded positions: input_ids = 0 (pad token), attention_mask = 0,
+            //    token_type_ids = 0 (single-sequence task => all zeros).
+            let mut input_ids_flat = vec![0i64; batch_size * max_len];
+            let mut attention_mask_flat = vec![0i64; batch_size * max_len];
+            let token_type_ids_flat = vec![0i64; batch_size * max_len];
+
+            for (row, (ids, mask)) in tokenized.iter().enumerate() {
+                let offset = row * max_len;
+                for (col, &id) in ids.iter().enumerate() {
+                    input_ids_flat[offset + col] = id;
+                }
+                for (col, &m) in mask.iter().enumerate() {
+                    attention_mask_flat[offset + col] = m;
+                }
+            }
+
+            let input_ids_array = Array2::from_shape_vec((batch_size, max_len), input_ids_flat)?;
+            let attention_mask_array =
+                Array2::from_shape_vec((batch_size, max_len), attention_mask_flat)?;
+            let token_type_ids_array =
+                Array2::from_shape_vec((batch_size, max_len), token_type_ids_flat)?;
+
+            // 4. Single forward pass over the whole batch.
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|e| anyhow::anyhow!("ONNX session lock poisoned: {}", e))?;
+            let outputs = session.run(inputs![
+                "input_ids" => TensorRef::from_array_view(input_ids_array.view())?,
+                "attention_mask" => TensorRef::from_array_view(attention_mask_array.view())?,
+                "token_type_ids" => TensorRef::from_array_view(token_type_ids_array.view())?,
+            ])?;
+
+            // Output shape: [batch_size, max_len, hidden_size].
+            let embeddings = outputs[0].try_extract_array::<f32>()?;
+
+            // 5. Mean-pool each row using its own attention mask, preserving order.
+            let mut results = Vec::with_capacity(batch_size);
+            for (row, (_, mask)) in tokenized.iter().enumerate() {
+                let token_embeddings = embeddings.index_axis(Axis(0), row);
+                let shape = token_embeddings.shape();
+                let token_embeddings = token_embeddings
+                    .to_owned()
+                    .into_shape_with_order((shape[0], shape[1]))?;
+                results.push(self.mean_pooling(&token_embeddings, mask));
+            }
+
             Ok(results)
         }
 
         fn dimension(&self) -> usize {
-            384 // MiniLM dimension
+            crate::EMBEDDING_DIMENSION // MiniLM dimension
         }
     }
 }
@@ -444,6 +523,23 @@ mod tests {
     fn test_stub_model() {
         let model = StubEmbeddingModel::new();
         let embedding = model.embed("test").unwrap();
-        assert_eq!(embedding.len(), 384);
+        assert_eq!(embedding.len(), crate::EMBEDDING_DIMENSION);
+    }
+
+    #[test]
+    fn test_stub_is_stub() {
+        let model = StubEmbeddingModel::new();
+        assert!(model.is_stub());
+    }
+
+    #[test]
+    fn test_stub_embed_batch_dimensions() {
+        let model = StubEmbeddingModel::new();
+        let texts = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let embeddings = model.embed_batch(&texts).unwrap();
+        assert_eq!(embeddings.len(), texts.len());
+        for e in &embeddings {
+            assert_eq!(e.len(), crate::EMBEDDING_DIMENSION);
+        }
     }
 }
