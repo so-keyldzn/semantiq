@@ -28,6 +28,8 @@ cargo run -- serve --project . --http-port 3000  # HTTP API mode
 cargo run -- search "query"                  # CLI search (testing)
 cargo run -- stats                           # Index statistics
 cargo run -- calibrate                       # Build adaptive search thresholds (needs 500+ observations)
+cargo run -- update                          # Self-update the binary to the latest GitHub release
+cargo run -- update --check                  # Only report whether an update is available
 ```
 
 ## Architecture

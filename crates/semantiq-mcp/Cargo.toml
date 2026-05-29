@@ -18,9 +18,10 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
-# Version check
+# Version check & self-update
 ureq = "3"
 dirs = "5.0"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

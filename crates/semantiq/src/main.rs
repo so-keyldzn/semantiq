@@ -127,6 +127,17 @@ enum Commands {
         #[arg(long, default_value = "100")]
         min_samples: usize,
     },
+
+    /// Update the semantiq binary to the latest release
+    Update {
+        /// Only check whether an update is available; don't install it
+        #[arg(long)]
+        check: bool,
+
+        /// Reinstall the latest release even if already up to date
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -186,5 +197,6 @@ async fn main() -> Result<()> {
             dry_run,
             min_samples,
         } => commands::calibrate(database, language, dry_run, min_samples).await,
+        Commands::Update { check, force } => commands::update(check, force).await,
     }
 }
