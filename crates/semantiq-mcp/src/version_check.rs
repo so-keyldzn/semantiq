@@ -125,6 +125,8 @@ fn fetch_latest_version(timeout: Duration) -> Option<String> {
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(timeout))
+            // Reject plaintext HTTP (incl. redirect downgrades).
+            .https_only(true)
             .build(),
     );
 
