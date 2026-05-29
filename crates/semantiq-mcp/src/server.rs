@@ -135,9 +135,24 @@ impl SemantiqServer {
                 loop {
                     interval.tick().await;
 
-                    let indexer = indexer.lock().await;
-                    if let Err(e) = indexer.process_events() {
-                        tracing::error!("Auto-indexer error: {}", e);
+                    // process_events() parses files, runs ONNX, and writes to SQLite
+                    // (all blocking). Run it on the blocking pool so it does not stall
+                    // the async runtime. Clone the Arc and move it into the closure.
+                    let indexer_clone = Arc::clone(&indexer);
+                    let result = tokio::task::spawn_blocking(move || {
+                        let indexer = indexer_clone.blocking_lock();
+                        indexer.process_events()
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!("Auto-indexer error: {}", e);
+                        }
+                        Err(e) => {
+                            tracing::error!("Auto-indexer task panicked: {}", e);
+                        }
                     }
                 }
             });
