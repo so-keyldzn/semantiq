@@ -1,5 +1,5 @@
 use crate::IndexStore;
-use crate::exclusions::{should_exclude, should_exclude_entry};
+use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::Result;
 use ignore::WalkBuilder;
@@ -184,9 +184,20 @@ impl AutoIndexer {
 
     /// Index a single file
     fn index_file(&self, path: &Path) -> Result<()> {
-        // Skip excluded paths (hidden dirs, node_modules, large files, etc.)
-        if should_exclude(path) {
-            debug!("Skipping excluded path: {:?}", path);
+        // Get relative path (warns if `path` falls outside the project root).
+        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+
+        // Skip excluded paths (hidden dirs, node_modules, large files, etc.).
+        //
+        // The directory-name exclusion (hidden dirs, node_modules, ...) is
+        // evaluated against the path RELATIVE to the project root, not the
+        // absolute path. Otherwise a project that simply lives under a hidden or
+        // excluded ancestor (e.g. `~/.config/app`, a CI checkout under `.cache`,
+        // or a `tempfile`-created `.tmpXXXX` dir in tests) would have every one
+        // of its files silently skipped. The file-size check still uses the real
+        // absolute `path` since it needs the on-disk metadata.
+        if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
+            debug!("Skipping excluded path: {}", rel_path);
             return Ok(());
         }
 
@@ -198,9 +209,6 @@ impl AutoIndexer {
                 return Ok(());
             }
         };
-
-        // Get relative path (warns if `path` falls outside the project root).
-        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
         // Read file content
         let content = match fs::read_to_string(path) {
@@ -221,14 +229,35 @@ impl AutoIndexer {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // Insert file record
-        let file_id = self.store.insert_file(
-            &rel_path,
-            Some(language.name()),
-            &content,
-            size,
-            last_modified,
-        )?;
+        // Establish a stable `file_id` for the FK on symbols/chunks/dependencies
+        // WITHOUT yet committing the up-to-date content hash.
+        //
+        // Crash-atomicity: the `files.hash` row is what `needs_reindex` consults.
+        // If we stamped the current hash *before* writing children and the
+        // process died mid-way, the file would look "up to date" while pointing
+        // at partial/missing chunks — and would never be reindexed. So we:
+        //   1. reuse the existing `file_id` when the file is already indexed
+        //      (its stored hash stays at the OLD value), or
+        //   2. for a brand-new file, seed the row with a deliberately
+        //      non-matching sentinel hash so `needs_reindex` keeps returning
+        //      true until the final stamp below.
+        // Only after all children are persisted do we (re)write the row with the
+        // real content hash, acting as the commit point.
+        let file_id = match self.store.get_file_by_path(&rel_path)? {
+            Some(existing) => existing.id,
+            None => {
+                // Sentinel content whose hash will not match `content` (unless
+                // the file genuinely *is* this marker, which carries no chunks).
+                const INDEXING_SENTINEL: &str = "\0__semantiq_indexing_in_progress__\0";
+                self.store.insert_file(
+                    &rel_path,
+                    Some(language.name()),
+                    INDEXING_SENTINEL,
+                    size,
+                    last_modified,
+                )?
+            }
+        };
 
         // Parse and extract symbols
         let mut language_support = self
@@ -321,6 +350,27 @@ impl AutoIndexer {
                 warn!("Failed to parse {}: {}", rel_path, e);
             }
         }
+
+        // Release the parser lock before the final hash stamp so we never hold
+        // two locks at once.
+        drop(language_support);
+
+        // Commit point: stamp the real content hash LAST, only after all
+        // children (symbols/chunks/dependencies/embeddings) are persisted. A
+        // crash before this line leaves the OLD/sentinel hash in place, so
+        // `needs_reindex` returns true next time and the file is reindexed
+        // rather than silently treated as up-to-date with partial data.
+        //
+        // This runs on the parse-failure path too: stamping the current hash
+        // there is intentional and matches the prior behaviour, preventing an
+        // unparseable file from being re-parsed on every cycle.
+        self.store.insert_file(
+            &rel_path,
+            Some(language.name()),
+            &content,
+            size,
+            last_modified,
+        )?;
 
         Ok(())
     }
