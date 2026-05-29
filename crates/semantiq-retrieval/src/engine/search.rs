@@ -9,11 +9,57 @@ use ignore::WalkBuilder;
 use semantiq_index::should_exclude_entry;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
 /// Maximum limit for search results to prevent excessive memory usage.
 const MAX_SEARCH_LIMIT: usize = 1000;
+
+/// Per-strategy weights applied to each strategy's locally-normalized score
+/// before the global merge.
+///
+/// Rationale: the three strategies produce scores on incompatible scales
+/// (semantic = `1/(1+L2_distance)`, symbol = a hand-tuned `[0,1]` heuristic,
+/// text = ripgrep line heuristic). Sorting them together raw lets, e.g., a
+/// borderline 0.5 semantic hit outrank a 0.49 exact-symbol hit purely because
+/// of scale, not relevance. We rescale each strategy's results to `[0,1]`
+/// (min-max within the strategy) and then apply a fixed weight so that, all
+/// else equal, an exact symbol match outranks a fuzzy semantic match which
+/// outranks a plain text/grep hit. Min-max is intentionally conservative: it
+/// preserves the *intra-strategy* ordering and only makes the *inter-strategy*
+/// comparison meaningful. A single dominant result in a strategy keeps its
+/// weight (we map it to 1.0 rather than 0.0).
+pub(crate) const WEIGHT_SEMANTIC: f32 = 0.95;
+pub(crate) const WEIGHT_SYMBOL: f32 = 1.0;
+pub(crate) const WEIGHT_TEXT: f32 = 0.75;
+
+/// Min-max normalize the `score` of a strategy's results in place, then scale
+/// by `weight`. Preserves the relative ordering inside the strategy while
+/// making cross-strategy comparison meaningful at merge time.
+pub(crate) fn normalize_and_weight(results: &mut [SearchResult], weight: f32) {
+    if results.is_empty() {
+        return;
+    }
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for r in results.iter() {
+        min = min.min(r.score);
+        max = max.max(r.score);
+    }
+    let span = max - min;
+    for r in results.iter_mut() {
+        // When all scores are equal (span == 0), keep them at full strength
+        // rather than collapsing to 0 — a single strong hit shouldn't be
+        // penalized for lacking a spread to normalize against.
+        let normalized = if span > f32::EPSILON {
+            (r.score - min) / span
+        } else {
+            1.0
+        };
+        r.score = normalized * weight;
+    }
+}
 
 impl RetrievalEngine {
     /// Perform a multi-strategy search combining semantic, symbol, and text search.
@@ -40,23 +86,40 @@ impl RetrievalEngine {
 
         let mut all_results = Vec::new();
 
-        // 1. Semantic search (vector similarity) - highest priority
-        if self.embedding_model.is_some() {
-            let semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
+        // 1. Semantic search (vector similarity) - highest priority.
+        //
+        // Skip entirely when the embedding model is a stub: a stub returns a
+        // zero vector for every query, so every chunk has L2 distance 0 →
+        // score 1.0. That would flood the merge with arbitrary, off-topic
+        // chunks ranked above genuine symbol/text matches. Only run semantic
+        // search when a real model is present.
+        let semantic_enabled = self
+            .embedding_model
+            .as_ref()
+            .map(|m| !m.is_stub())
+            .unwrap_or(false);
+        if semantic_enabled {
+            let mut semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
+            normalize_and_weight(&mut semantic_results, WEIGHT_SEMANTIC);
             all_results.extend(semantic_results);
         }
 
         // 2. Symbol search (FTS) - prioritize symbol matches
-        let symbol_results = self.search_symbols(&query, safe_limit, &opts)?;
+        let mut symbol_results = self.search_symbols(&query, safe_limit, &opts)?;
+        normalize_and_weight(&mut symbol_results, WEIGHT_SYMBOL);
         all_results.extend(symbol_results);
 
         // 3. Text search (grep-like) - only if we need more results
         if all_results.len() < safe_limit {
-            let text_results = self.search_text(&query, safe_limit - all_results.len(), &opts)?;
+            let mut text_results =
+                self.search_text(&query, safe_limit - all_results.len(), &opts)?;
+            normalize_and_weight(&mut text_results, WEIGHT_TEXT);
             all_results.extend(text_results);
         }
 
-        // Sort by score (highest first)
+        // Sort by score (highest first). Scores are now comparable across
+        // strategies because each strategy was min-max normalized and weighted
+        // above before being merged here.
         all_results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -123,11 +186,17 @@ impl RetrievalEngine {
             similar_chunks.len()
         );
 
+        // Resolve the language for each candidate chunk *once* and reuse the
+        // result for both calibration recording and dominant-language
+        // detection. Previously each helper scanned the chunks independently,
+        // issuing a `get_chunk_language` query per chunk twice over.
+        let language_by_chunk = self.languages_for_chunks(&similar_chunks);
+
         // Collect distance observations for ML calibration
-        self.collect_distance_observations(query_text, &similar_chunks);
+        self.collect_distance_observations(query_text, &similar_chunks, &language_by_chunk);
 
         // Detect dominant language from results for adaptive thresholds
-        let dominant_language = self.detect_dominant_language(&similar_chunks);
+        let dominant_language = self.detect_dominant_language(&similar_chunks, &language_by_chunk);
 
         // Get adaptive thresholds
         let (max_distance, min_similarity) = self.get_thresholds(dominant_language.as_deref());
@@ -238,8 +307,35 @@ impl RetrievalEngine {
         Ok(results)
     }
 
+    /// Resolve the language of each unique chunk in `results` with a single
+    /// lookup per chunk.
+    ///
+    /// Both `collect_distance_observations` and `detect_dominant_language`
+    /// need the per-chunk language; building this map once and sharing it
+    /// avoids querying every chunk twice (once per helper) per search.
+    pub(crate) fn languages_for_chunks(
+        &self,
+        results: &[(i64, f32)],
+    ) -> std::collections::HashMap<i64, Option<String>> {
+        let mut map: std::collections::HashMap<i64, Option<String>> =
+            std::collections::HashMap::with_capacity(results.len());
+        for (chunk_id, _) in results {
+            map.entry(*chunk_id)
+                .or_insert_with(|| self.store.get_chunk_language(*chunk_id).ok().flatten());
+        }
+        map
+    }
+
     /// Collect distance observations for ML calibration.
-    pub(crate) fn collect_distance_observations(&self, query: &str, results: &[(i64, f32)]) {
+    ///
+    /// `language_by_chunk` is the shared, pre-resolved language map (see
+    /// [`languages_for_chunks`]) so no DB lookups happen here.
+    pub(crate) fn collect_distance_observations(
+        &self,
+        query: &str,
+        results: &[(i64, f32)],
+        language_by_chunk: &std::collections::HashMap<i64, Option<String>>,
+    ) {
         let collector = match &self.distance_collector {
             Some(c) => c,
             None => {
@@ -248,9 +344,8 @@ impl RetrievalEngine {
             }
         };
 
-        let store = &self.store;
         let recorded = collector.record(query, results, |chunk_id| {
-            store.get_chunk_language(chunk_id).ok().flatten()
+            language_by_chunk.get(&chunk_id).cloned().flatten()
         });
 
         if recorded {
@@ -263,8 +358,13 @@ impl RetrievalEngine {
         }
     }
 
-    /// Detect the dominant programming language from search results.
-    pub(crate) fn detect_dominant_language(&self, results: &[(i64, f32)]) -> Option<String> {
+    /// Detect the dominant programming language from search results using the
+    /// shared, pre-resolved language map (see [`languages_for_chunks`]).
+    pub(crate) fn detect_dominant_language(
+        &self,
+        results: &[(i64, f32)],
+        language_by_chunk: &std::collections::HashMap<i64, Option<String>>,
+    ) -> Option<String> {
         if results.is_empty() {
             return None;
         }
@@ -273,8 +373,8 @@ impl RetrievalEngine {
             std::collections::HashMap::new();
 
         for (chunk_id, _) in results.iter().take(5) {
-            if let Ok(Some(lang)) = self.store.get_chunk_language(*chunk_id) {
-                *language_counts.entry(lang).or_insert(0) += 1;
+            if let Some(Some(lang)) = language_by_chunk.get(chunk_id) {
+                *language_counts.entry(lang.clone()).or_insert(0) += 1;
             }
         }
 
@@ -283,6 +383,11 @@ impl RetrievalEngine {
             .max_by_key(|(_, count)| *count)
             .map(|(lang, _)| lang)
     }
+
+    /// Score penalty applied to symbol matches found via an *expanded* term
+    /// (a case variant) rather than the original query term. Keeps results
+    /// matched by the user's literal input ranked above synthetic variants.
+    const SYMBOL_VARIANT_PENALTY: f32 = 0.9;
 
     /// Search symbols using FTS5 full-text search.
     pub(crate) fn search_symbols(
@@ -293,7 +398,32 @@ impl RetrievalEngine {
     ) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
 
-        for term in query.all_terms() {
+        // Dedup the candidate symbols across all (original + expanded) terms so
+        // the same symbol matched by multiple variants is only scored/emitted
+        // once, keyed by "file:start:end". Without this, an N-variant query
+        // amplified results N-fold before the outer search() dedup ran.
+        let mut seen_symbols = std::collections::HashSet::new();
+
+        // Memoize file-path lookups: many symbols share a file, and previously
+        // every symbol triggered its own `get_file_path` query (N+1). One
+        // lookup per distinct file_id now.
+        let mut file_path_cache: std::collections::HashMap<i64, Option<String>> =
+            std::collections::HashMap::new();
+
+        // The first entry of `all_terms()` is the original query text; the rest
+        // are expanded case variants. Track which terms we've already queried so
+        // we never re-run FTS5 for a duplicate variant string.
+        let mut queried_terms = std::collections::HashSet::new();
+        let terms = query.all_terms();
+        let original_term = terms.first().copied();
+
+        for term in &terms {
+            if !queried_terms.insert(term.to_lowercase()) {
+                // Identical variant (case-insensitively) already queried.
+                continue;
+            }
+
+            let is_original = Some(*term) == original_term;
             let symbols = self.store.search_symbols(term, limit)?;
 
             for symbol in symbols {
@@ -301,7 +431,25 @@ impl RetrievalEngine {
                     continue;
                 }
 
-                let file_path = self.get_file_path(symbol.file_id)?;
+                let dedup_key = format!(
+                    "{}:{}:{}",
+                    symbol.file_id, symbol.start_line, symbol.end_line
+                );
+                if !seen_symbols.insert(dedup_key) {
+                    continue;
+                }
+
+                let file_path = match file_path_cache.entry(symbol.file_id) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        let resolved = self.store.get_file_path_by_id(symbol.file_id)?;
+                        e.insert(resolved).clone()
+                    }
+                };
+                let file_path = match file_path {
+                    Some(p) => p,
+                    None => continue,
+                };
 
                 if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
                     && !options.accepts_extension(ext)
@@ -343,6 +491,12 @@ impl RetrievalEngine {
                 // Slight boost for shorter names
                 let length_factor = 1.0 + (1.0 / (symbol.name.len() as f32 + 5.0));
                 score *= length_factor;
+
+                // Penalize matches that came from an expanded variant so the
+                // user's literal term wins ties against synthetic variants.
+                if !is_original {
+                    score *= Self::SYMBOL_VARIANT_PENALTY;
+                }
 
                 score = score.min(1.0);
 
@@ -387,7 +541,20 @@ impl RetrievalEngine {
 
         let file_paths = self.get_cached_file_list(root)?;
 
-        for path in &file_paths {
+        // Compile the matchers for every (deduplicated) query term exactly
+        // once for the whole request instead of recompiling them per file.
+        let searcher = TextSearcher::new(true);
+        let mut compiled = Vec::new();
+        let mut seen_terms = std::collections::HashSet::new();
+        for term in query.all_terms() {
+            if seen_terms.insert(term.to_lowercase())
+                && let Ok(m) = searcher.compile(term)
+            {
+                compiled.push(m);
+            }
+        }
+
+        for path in file_paths.iter() {
             if results.len() >= limit {
                 break;
             }
@@ -402,8 +569,17 @@ impl RetrievalEngine {
                 continue;
             }
 
+            // Bound memory: skip files larger than MAX_FILE_SIZE rather than
+            // slurping an arbitrarily large file fully into RAM. Indexing
+            // already skips these, so they carry no symbols/chunks anyway.
+            if let Ok(meta) = fs::metadata(path)
+                && meta.len() > semantiq_index::MAX_FILE_SIZE
+            {
+                continue;
+            }
+
             if let Ok(content) = fs::read_to_string(path) {
-                let matches = Self::find_text_matches(&content, query);
+                let matches = Self::find_text_matches_compiled(&searcher, &content, &compiled);
                 if matches.is_empty() {
                     continue;
                 }
@@ -433,7 +609,10 @@ impl RetrievalEngine {
     }
 
     /// Get the cached file list, rebuilding it if the cache has expired.
-    fn get_cached_file_list(&self, root: &Path) -> Result<Vec<PathBuf>> {
+    ///
+    /// Returns an `Arc` handle so the caller shares the cached `Vec` instead of
+    /// deep-cloning it on every `search_text()` call.
+    fn get_cached_file_list(&self, root: &Path) -> Result<Arc<Vec<PathBuf>>> {
         use super::{FILE_LIST_CACHE_TTL_SECS, FileListCache};
         use std::time::Duration;
 
@@ -445,7 +624,7 @@ impl RetrievalEngine {
         if let Some(ref cached) = *cache
             && cached.created_at.elapsed() < Duration::from_secs(FILE_LIST_CACHE_TTL_SECS)
         {
-            return Ok(cached.paths.clone());
+            return Ok(Arc::clone(&cached.paths));
         }
 
         // Rebuild the file list
@@ -458,29 +637,36 @@ impl RetrievalEngine {
             })
             .build();
 
-        let paths: Vec<PathBuf> = walker
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-            .map(|e| e.into_path())
-            .collect();
+        let paths: Arc<Vec<PathBuf>> = Arc::new(
+            walker
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .map(|e| e.into_path())
+                .collect(),
+        );
 
         *cache = Some(FileListCache {
-            paths: paths.clone(),
+            paths: Arc::clone(&paths),
             created_at: std::time::Instant::now(),
         });
 
         Ok(paths)
     }
 
-    /// Find text matches in content.
-    pub(crate) fn find_text_matches(content: &str, query: &Query) -> Vec<(usize, String, f32)> {
-        let searcher = TextSearcher::new(true);
-        let terms = query.all_terms();
+    /// Find text matches in content using pre-compiled matchers.
+    ///
+    /// Dedupes by line number across all matchers and returns matches sorted
+    /// by score (highest first).
+    pub(crate) fn find_text_matches_compiled(
+        searcher: &TextSearcher,
+        content: &str,
+        compiled: &[crate::text_searcher::CompiledMatcher],
+    ) -> Vec<(usize, String, f32)> {
         let mut matches = Vec::new();
         let mut seen_lines = std::collections::HashSet::new();
 
-        for term in &terms {
-            if let Ok(results) = searcher.search(content, term) {
+        for matcher in compiled {
+            if let Ok(results) = searcher.search_compiled(content, matcher) {
                 for result in results {
                     if seen_lines.insert(result.line_number) {
                         matches.push((result.line_number, result.line_content, result.score));
