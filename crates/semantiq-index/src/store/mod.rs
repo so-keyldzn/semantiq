@@ -87,6 +87,23 @@ pub struct IndexStore {
 }
 
 impl IndexStore {
+    /// Apply the connection-level PRAGMAs used by every `IndexStore`.
+    ///
+    /// Kept in one place so the in-memory test fixture and the on-disk
+    /// production database share the exact same connection semantics — most
+    /// importantly `foreign_keys=ON`, without which FK `ON DELETE CASCADE`
+    /// silently does nothing and tests would pass while production cascades.
+    /// `journal_mode=WAL` is a harmless no-op on `:memory:` databases.
+    fn apply_pragmas(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA busy_timeout=5000;",
+        )?;
+        Ok(())
+    }
+
     /// Open or create an index database at the given path.
     pub fn open(path: &Path) -> Result<Self> {
         init_sqlite_vec();
@@ -94,13 +111,7 @@ impl IndexStore {
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open database at {:?}", path))?;
 
-        // Enable WAL mode for better concurrency
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=5000;",
-        )?;
+        Self::apply_pragmas(&conn)?;
 
         migrate_schema(&conn)?;
         init_schema(&conn)?;
@@ -116,6 +127,7 @@ impl IndexStore {
         init_sqlite_vec();
 
         let conn = Connection::open_in_memory()?;
+        Self::apply_pragmas(&conn)?;
         migrate_schema(&conn)?;
         init_schema(&conn)?;
 

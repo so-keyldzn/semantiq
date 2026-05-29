@@ -76,6 +76,7 @@ impl IndexStore {
                  FROM symbols s
                  JOIN symbols_fts ON s.id = symbols_fts.rowid
                  WHERE symbols_fts MATCH ?1
+                 ORDER BY symbols_fts.rank
                  LIMIT ?2",
             )?;
 
