@@ -20,8 +20,12 @@ pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
 
 /// Cached list of walkable file paths with a TTL to avoid re-walking the
 /// directory tree on every `search_text()` call within the same session.
+///
+/// `paths` is stored behind an `Arc` so callers can cheaply clone the handle
+/// (a refcount bump) instead of deep-cloning the whole `Vec<PathBuf>` on every
+/// `search_text()` call.
 pub(crate) struct FileListCache {
-    paths: Vec<PathBuf>,
+    paths: Arc<Vec<PathBuf>>,
     created_at: Instant,
 }
 

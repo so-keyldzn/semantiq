@@ -207,8 +207,16 @@ pub struct SearchOptions {
 }
 
 impl SearchOptions {
-    /// Default minimum score threshold
-    pub const DEFAULT_MIN_SCORE: f32 = 0.35;
+    /// Default minimum score threshold for the *post-merge* global filter.
+    ///
+    /// Aligned with the semantic relevance floor
+    /// (`RetrievalEngine::SEMANTIC_MIN_SIMILARITY`, 0.3) so there is a single
+    /// coherent dead zone rather than two slightly different cutoffs (the old
+    /// 0.35 vs 0.30 mismatch silently dropped results that had already passed
+    /// the semantic gate). Both gates now use 0.3: a result must clear the
+    /// per-strategy semantic floor *and* the global floor, and the two are the
+    /// same number to avoid a confusing, undocumented gap.
+    pub const DEFAULT_MIN_SCORE: f32 = 0.3;
 
     /// Extensions excluded by default when no file_types filter is set
     pub const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[

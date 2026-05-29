@@ -1,5 +1,5 @@
 use anyhow::Result;
-use grep_regex::RegexMatcherBuilder;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use std::io;
 
@@ -18,6 +18,13 @@ pub struct TextSearcher {
     case_insensitive: bool,
 }
 
+/// A pre-compiled literal matcher, reusable across many `search_compiled`
+/// calls so the regex is only compiled once per query term.
+pub struct CompiledMatcher {
+    matcher: RegexMatcher,
+    pattern: String,
+}
+
 impl TextSearcher {
     pub fn new(case_insensitive: bool) -> Self {
         Self { case_insensitive }
@@ -26,19 +33,38 @@ impl TextSearcher {
     /// Search for a pattern in the given content
     /// Returns matches with line numbers and scores
     pub fn search(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
+        let compiled = self.compile(pattern)?;
+        self.search_compiled(content, &compiled)
+    }
+
+    /// Pre-compile a literal pattern into a reusable matcher.
+    ///
+    /// Compiling a regex is non-trivial; when the same set of query terms is
+    /// run across many files (as `search_text` does), compiling each term's
+    /// matcher once and reusing it via [`search_compiled`] avoids recompiling
+    /// per file.
+    pub fn compile(&self, pattern: &str) -> Result<CompiledMatcher> {
         // Escape user input to prevent ReDoS attacks
         let escaped = regex::escape(pattern);
         let matcher = RegexMatcherBuilder::new()
             .case_insensitive(self.case_insensitive)
             .word(false)
             .build(&escaped)?;
+        Ok(CompiledMatcher {
+            matcher,
+            pattern: pattern.to_string(),
+        })
+    }
 
+    /// Search `content` using an already-compiled matcher.
+    pub fn search_compiled(
+        &self,
+        content: &str,
+        compiled: &CompiledMatcher,
+    ) -> Result<Vec<TextMatch>> {
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern);
-
-        // Create searcher and run search
-        Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
-
+        let mut sink = MatchSink::new(&mut matches, &compiled.pattern);
+        Searcher::new().search_slice(&compiled.matcher, content.as_bytes(), &mut sink)?;
         Ok(matches)
     }
 
