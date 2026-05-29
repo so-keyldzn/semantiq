@@ -43,6 +43,36 @@ impl SymbolKind {
     }
 }
 
+impl std::fmt::Display for SymbolKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SymbolKind {
+    type Err = ();
+
+    /// Inverse de [`SymbolKind::as_str`]. Insensible à la casse pour tolérer les
+    /// entrées utilisateur (CLI/HTTP). Renvoie `Err(())` pour une valeur inconnue.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "function" => Ok(SymbolKind::Function),
+            "method" => Ok(SymbolKind::Method),
+            "class" => Ok(SymbolKind::Class),
+            "struct" => Ok(SymbolKind::Struct),
+            "enum" => Ok(SymbolKind::Enum),
+            "interface" => Ok(SymbolKind::Interface),
+            "trait" => Ok(SymbolKind::Trait),
+            "module" => Ok(SymbolKind::Module),
+            "variable" => Ok(SymbolKind::Variable),
+            "constant" => Ok(SymbolKind::Constant),
+            "type" => Ok(SymbolKind::Type),
+            "import" => Ok(SymbolKind::Import),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Symbol {
     pub name: String,
@@ -782,6 +812,36 @@ int main() {
         assert_eq!(SymbolKind::Constant.as_str(), "constant");
         assert_eq!(SymbolKind::Type.as_str(), "type");
         assert_eq!(SymbolKind::Import.as_str(), "import");
+    }
+
+    #[test]
+    fn test_symbol_kind_display_and_from_str_roundtrip() {
+        use std::str::FromStr;
+        let all = [
+            SymbolKind::Function,
+            SymbolKind::Method,
+            SymbolKind::Class,
+            SymbolKind::Struct,
+            SymbolKind::Enum,
+            SymbolKind::Interface,
+            SymbolKind::Trait,
+            SymbolKind::Module,
+            SymbolKind::Variable,
+            SymbolKind::Constant,
+            SymbolKind::Type,
+            SymbolKind::Import,
+        ];
+        for k in all {
+            // Display == as_str
+            assert_eq!(k.to_string(), k.as_str());
+            // FromStr is the inverse of as_str
+            assert_eq!(SymbolKind::from_str(k.as_str()), Ok(k));
+        }
+        // Case-insensitive
+        assert_eq!(SymbolKind::from_str("FUNCTION"), Ok(SymbolKind::Function));
+        assert_eq!(SymbolKind::from_str("Struct"), Ok(SymbolKind::Struct));
+        // Unknown → Err
+        assert!(SymbolKind::from_str("nope").is_err());
     }
 
     #[test]

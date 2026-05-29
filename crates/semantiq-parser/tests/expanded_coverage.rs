@@ -168,6 +168,39 @@ fn audit_toml_dotted_pair() {
 }
 
 #[test]
+fn audit_js_multi_declarator_const() {
+    // `const A = 1, B = 2, C = 3;` : un seul `lexical_declaration` (@definition)
+    // porte trois `variable_declarator` → trois @name distincts. Avant le fix de
+    // la clé de dédup (qui n'utilisait que la plage du @definition), seul A était
+    // indexé. Désormais la plage du nœud de NOM fait partie de la clé.
+    let src = "const A = 1, B = 2, C = 3;\nlet x = 10, y = 20;\n";
+    let symbols = run(Language::JavaScript, src);
+    eprintln!("JS multi-decl: {symbols:?}");
+    let names: Vec<&str> = symbols.iter().map(|(n, _, _)| n.as_str()).collect();
+    for expected in ["A", "B", "C", "x", "y"] {
+        assert!(
+            names.contains(&expected),
+            "multi-declarator name '{expected}' missed: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn audit_ts_multi_declarator_const() {
+    // Idem pour TypeScript : `const A = 1, B = 2;` doit produire deux symboles.
+    let src = "const A = 1, B = 2, C = 3;\nlet p = 1, q = 2;\n";
+    let symbols = run(Language::TypeScript, src);
+    eprintln!("TS multi-decl: {symbols:?}");
+    let names: Vec<&str> = symbols.iter().map(|(n, _, _)| n.as_str()).collect();
+    for expected in ["A", "B", "C", "p", "q"] {
+        assert!(
+            names.contains(&expected),
+            "multi-declarator name '{expected}' missed: {names:?}"
+        );
+    }
+}
+
+#[test]
 fn audit_scala() {
     let src = "package com.example.app\n\ntrait Repo {\n  val name: String\n  def fetch(): String\n}\n\nenum Color { case Red, Green }\n";
     let symbols = run(Language::Scala, src);
@@ -182,4 +215,20 @@ fn audit_scala() {
         names.contains(&"Red") || names.contains(&"Green"),
         "enum case missed: {names:?}"
     );
+}
+
+#[test]
+fn audit_scala_multi_binding_val() {
+    // `val a, b = 1` : le grammar regroupe a et b dans un nœud `identifiers`.
+    // Les deux noms doivent être indexés (régression : seul `a` l'était).
+    let src = "object M {\n  val a, b = 1\n  var x, y, z = 0\n}\n";
+    let symbols = run(Language::Scala, src);
+    eprintln!("SCALA multi-binding: {symbols:?}");
+    let names: Vec<&str> = symbols.iter().map(|(n, _, _)| n.as_str()).collect();
+    for expected in ["a", "b", "x", "y", "z"] {
+        assert!(
+            names.contains(&expected),
+            "multi-binding val/var name '{expected}' missed: {names:?}"
+        );
+    }
 }
