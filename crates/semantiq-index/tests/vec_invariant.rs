@@ -111,6 +111,80 @@ fn clear_all_data_purges_vectors() {
     assert_no_orphans(&store, "after clear_all_data");
 }
 
+/// Regression for the real production leak path (HIGH-1 / HIGH-2).
+///
+/// `AutoIndexer::index_file` calls `insert_file(path, ...)` on every reindex,
+/// then `insert_chunks(file_id, ...)`, then `update_chunk_embedding(...)`.
+///
+/// The original bug: `insert_file` used `INSERT OR REPLACE`. Re-inserting the
+/// same path deleted the old `files` row (FK CASCADE wiped its `chunks`, but
+/// NOT the sqlite-vec `chunks_vec` rows) and minted a brand-new `files.id`.
+/// `insert_chunks(new_id, ...)` then purged `chunks_vec` only for the *new*
+/// file_id, leaving every prior embedding orphaned in `chunks_vec`.
+///
+/// After the HIGH-1 fix `insert_file` keeps a STABLE id on conflict, so the
+/// subsequent `insert_chunks(file_id, ...)` purges the correct vectors and no
+/// orphans accumulate. This test walks that exact call sequence twice (V1 then
+/// V2 of the same path) and asserts both the stable-id contract and a clean
+/// `chunks_vec`.
+#[test]
+fn prod_reindex_path_does_not_leak_vectors() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    // --- Pass 1: index "app.rs" with content V1 (hash V1). ---
+    let id_v1 = store
+        .insert_file(
+            "app.rs",
+            Some("rust"),
+            "fn v1_a() {} fn v1_b() {}",
+            24,
+            1000,
+        )
+        .unwrap();
+
+    let chunks_v1 = vec![
+        make_chunk("fn v1_a() {}", 1, 1),
+        make_chunk("fn v1_b() {}", 2, 2),
+        make_chunk("fn v1_c() {}", 3, 3),
+    ];
+    store.insert_chunks(id_v1, &chunks_v1).unwrap();
+    for (i, c) in store.get_chunks_by_file(id_v1).unwrap().iter().enumerate() {
+        store
+            .update_chunk_embedding(c.id, &make_embedding(i as f32))
+            .unwrap();
+    }
+    assert_no_orphans(&store, "after V1 index pass");
+
+    // --- Pass 2: same path, new content V2 (hash V2). This is the exact call
+    // order AutoIndexer uses on a reindex: insert_file -> insert_chunks ->
+    // update_chunk_embedding. ---
+    let id_v2 = store
+        .insert_file("app.rs", Some("rust"), "fn v2_x() {}", 12, 2000)
+        .unwrap();
+
+    // Stable-id contract (HIGH-1): re-inserting the same path must reuse the
+    // existing row id. If this regresses to a fresh id, the old chunks_vec
+    // rows below become orphans again.
+    assert_eq!(
+        id_v1, id_v2,
+        "insert_file must return the stable existing id for the same path"
+    );
+
+    let chunks_v2 = vec![make_chunk("fn v2_x() {}", 1, 1)];
+    store.insert_chunks(id_v2, &chunks_v2).unwrap();
+    for c in store.get_chunks_by_file(id_v2).unwrap() {
+        store
+            .update_chunk_embedding(c.id, &make_embedding(100.0))
+            .unwrap();
+    }
+
+    // The single remaining chunk must have an embedding and there must be no
+    // orphan vectors left behind from V1.
+    let final_chunks = store.get_chunks_by_file(id_v2).unwrap();
+    assert_eq!(final_chunks.len(), 1, "V2 should leave exactly one chunk");
+    assert_no_orphans(&store, "after V2 reindex via prod call path");
+}
+
 /// Stress: simulate the real-world pattern where the same file is reindexed
 /// many times (e.g. while a user types). The original bug surfaced after
 /// dozens of reindex cycles, so a single reindex assertion would not have

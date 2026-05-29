@@ -231,6 +231,130 @@ fn test_update_chunk_embedding() {
 }
 
 #[test]
+fn test_update_chunk_embedding_rejects_wrong_dimension() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_id = store
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .unwrap();
+
+    let chunks = vec![CodeChunk {
+        content: "fn main() {}".to_string(),
+        start_line: 1,
+        end_line: 1,
+        start_byte: 0,
+        end_byte: 12,
+        symbols: vec!["main".to_string()],
+    }];
+    store.insert_chunks(file_id, &chunks).unwrap();
+    let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
+
+    // Too short
+    let too_short: Vec<f32> = vec![0.1; crate::schema::EMBEDDING_DIMENSION - 1];
+    let err = store
+        .update_chunk_embedding(chunk_id, &too_short)
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("does not match expected dimension"),
+        "unexpected error: {err}"
+    );
+
+    // Too long
+    let too_long: Vec<f32> = vec![0.1; crate::schema::EMBEDDING_DIMENSION + 1];
+    assert!(store.update_chunk_embedding(chunk_id, &too_long).is_err());
+
+    // The rejected writes must not have stored anything.
+    let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
+    assert_eq!(without_embeddings.len(), 1);
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+#[test]
+fn test_update_chunk_embedding_writes_both_tables_atomically() {
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_id = store
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .unwrap();
+    let chunks = vec![CodeChunk {
+        content: "fn main() {}".to_string(),
+        start_line: 1,
+        end_line: 1,
+        start_byte: 0,
+        end_byte: 12,
+        symbols: vec!["main".to_string()],
+    }];
+    store.insert_chunks(file_id, &chunks).unwrap();
+    let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
+
+    let embedding: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.001)
+        .collect();
+    store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+
+    // chunks.embedding populated (no longer "without embedding")
+    assert!(store.get_chunks_without_embeddings(10).unwrap().is_empty());
+    // chunks_vec populated and searchable
+    let results = store.search_similar_chunks(&embedding, 1).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, chunk_id);
+}
+
+#[test]
+fn test_insert_file_keeps_stable_id_and_no_orphans() {
+    // Re-indexing the same path must keep the file id stable so that the
+    // chunks_vec purge inside insert_chunks(file_id) is sufficient — i.e. the
+    // UPSERT must NOT delete+reinsert the files row (which would cascade-delete
+    // chunks and orphan their vectors).
+    let store = IndexStore::open_in_memory().unwrap();
+
+    let file_id = store
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .unwrap();
+
+    let chunks = vec![CodeChunk {
+        content: "fn main() {}".to_string(),
+        start_line: 1,
+        end_line: 1,
+        start_byte: 0,
+        end_byte: 12,
+        symbols: vec!["main".to_string()],
+    }];
+    store.insert_chunks(file_id, &chunks).unwrap();
+    let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
+    let embedding: Vec<f32> = vec![0.5; crate::schema::EMBEDDING_DIMENSION];
+    store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+
+    // Re-index: same path, different content/size/hash.
+    let file_id2 = store
+        .insert_file("test.rs", Some("rust"), "fn main() { foo(); }", 20, 2000)
+        .unwrap();
+    assert_eq!(
+        file_id, file_id2,
+        "file id must remain stable across re-index"
+    );
+
+    // Updated metadata is reflected.
+    let file = store.get_file_by_path("test.rs").unwrap().unwrap();
+    assert_eq!(file.size, 20);
+    assert_eq!(file.last_modified, 2000);
+
+    // Re-insert chunks for the (stable) file id — the in-transaction purge keeps
+    // chunks_vec free of orphans.
+    let new_chunks = vec![CodeChunk {
+        content: "fn main() { foo(); }".to_string(),
+        start_line: 1,
+        end_line: 1,
+        start_byte: 0,
+        end_byte: 20,
+        symbols: vec!["main".to_string()],
+    }];
+    store.insert_chunks(file_id2, &new_chunks).unwrap();
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+#[test]
 fn test_vector_search() {
     let store = IndexStore::open_in_memory().unwrap();
 

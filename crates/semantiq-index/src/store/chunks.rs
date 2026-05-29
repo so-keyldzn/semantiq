@@ -1,8 +1,8 @@
 //! Chunk operations for IndexStore.
 
 use super::IndexStore;
-use crate::schema::ChunkRecord;
-use anyhow::{Result, anyhow};
+use crate::schema::{ChunkRecord, EMBEDDING_DIMENSION};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use semantiq_parser::CodeChunk;
@@ -100,11 +100,37 @@ impl IndexStore {
     }
 
     /// Update the embedding for a chunk.
+    ///
+    /// The two writes (the `chunks.embedding` BLOB and the `chunks_vec` virtual
+    /// table row) are wrapped in a single `BEGIN IMMEDIATE`/`COMMIT` transaction
+    /// so a failure on the second write can never leave the chunk with a stored
+    /// embedding but no searchable vector (or vice versa).
     pub fn update_chunk_embedding(&self, chunk_id: i64, embedding: &[f32]) -> Result<()> {
-        self.with_conn(|conn| {
-            // Convert f32 slice to bytes for the chunks table
-            let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        // Reject mis-sized vectors up front with a clear error. The `chunks_vec`
+        // vec0 table is declared `float[EMBEDDING_DIMENSION]` and would otherwise
+        // fail with an opaque dimension-mismatch error; a wrong length also means
+        // the embedding model and schema disagree, which is a bug worth surfacing.
+        if embedding.len() != EMBEDDING_DIMENSION {
+            bail!(
+                "embedding length {} does not match expected dimension {}",
+                embedding.len(),
+                EMBEDDING_DIMENSION
+            );
+        }
 
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e: PoisonError<MutexGuard<Connection>>| {
+                anyhow!("Database lock poisoned: {}", e)
+            })?;
+
+        // Convert f32 slice to bytes for the chunks table
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        conn.execute("BEGIN IMMEDIATE", [])?;
+
+        let result = (|| -> Result<()> {
             // Update the chunks table (for backward compatibility)
             conn.execute(
                 "UPDATE chunks SET embedding = ?1 WHERE id = ?2",
@@ -118,7 +144,18 @@ impl IndexStore {
             )?;
 
             Ok(())
-        })
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
     }
 
     /// Search for similar chunks using vector similarity (sqlite-vec).
@@ -266,46 +303,6 @@ impl IndexStore {
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-
-            Ok(results)
-        })
-    }
-
-    /// Get all chunks that have embeddings.
-    pub fn get_chunks_with_embeddings(&self) -> Result<Vec<(ChunkRecord, Vec<f32>)>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT c.id, c.file_id, c.content, c.start_line, c.end_line, c.start_byte, c.end_byte, c.symbols_json, c.embedding, f.path
-                 FROM chunks c
-                 JOIN files f ON c.file_id = f.id
-                 WHERE c.embedding IS NOT NULL",
-            )?;
-
-            let results = stmt
-                .query_map([], |row| {
-                    let symbols_json: String = row.get(7)?;
-                    let symbols = parse_symbols_json(&symbols_json);
-                    let embedding_bytes: Vec<u8> = row.get(8)?;
-                    let embedding = parse_embedding_bytes(&embedding_bytes);
-
-                    let chunk = ChunkRecord {
-                        id: row.get(0)?,
-                        file_id: row.get(1)?,
-                        content: row.get(2)?,
-                        start_line: row.get(3)?,
-                        end_line: row.get(4)?,
-                        start_byte: row.get(5)?,
-                        end_byte: row.get(6)?,
-                        symbols,
-                        embedding: Some(embedding.clone()),
-                    };
-
-                    Ok((chunk, embedding))
-                })?
-                .filter_map(|r| {
-                    r.map_err(|e| warn!("Failed to load chunk with embedding: {}", e)).ok()
-                })
-                .collect();
 
             Ok(results)
         })

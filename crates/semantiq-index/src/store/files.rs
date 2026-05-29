@@ -27,14 +27,34 @@ impl IndexStore {
             .as_secs() as i64;
 
         self.with_conn(|conn| {
+            // UPSERT keyed on the UNIQUE `path` column. Using ON CONFLICT ... DO
+            // UPDATE (instead of INSERT OR REPLACE) keeps the existing `id` stable
+            // across re-indexing: INSERT OR REPLACE deletes the old row and inserts
+            // a new one, which both reassigns a fresh rowid AND fires the FK
+            // ON DELETE CASCADE on `chunks`/`symbols` — that cascade also orphans
+            // `chunks_vec` rows (sqlite-vec ignores FK cascade). With a stable id,
+            // the file_id no longer changes on re-index, so the in-transaction
+            // purge in `insert_chunks(file_id)` is sufficient to avoid orphans.
             conn.execute(
-                "INSERT OR REPLACE INTO files (path, language, hash, size, last_modified, indexed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO files (path, language, hash, size, last_modified, indexed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(path) DO UPDATE SET
+                     language = excluded.language,
+                     hash = excluded.hash,
+                     size = excluded.size,
+                     last_modified = excluded.last_modified,
+                     indexed_at = excluded.indexed_at",
                 params![path, language, hash, size, last_modified, indexed_at],
             )?;
 
-            let id = conn.last_insert_rowid();
-            debug!("Inserted file {} with id {}", path, id);
+            // last_insert_rowid() is only meaningful for the INSERT branch; on the
+            // UPDATE branch it is not set to the conflicting row's id. Always read
+            // the stable id back by path.
+            let id: i64 =
+                conn.query_row("SELECT id FROM files WHERE path = ?1", [path], |row| {
+                    row.get(0)
+                })?;
+            debug!("Upserted file {} with id {}", path, id);
             Ok(id)
         })
     }
