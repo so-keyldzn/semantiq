@@ -17,6 +17,20 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Optional ONNX dependencies
+#
+# `ort` is pinned to 2.0.0-rc.11 (Cargo.lock holds the exact resolved version).
+# The `download-binaries` feature pulls a PREBUILT ONNX Runtime shared library
+# (libonnxruntime) from pyke's CDN at build time. That binary is fetched OUTSIDE
+# the Cargo lockfile and is therefore not covered by `cargo verify`/`cargo audit`.
+#
+# To vendor or verify the runtime instead of trusting the download:
+#   1. Obtain the matching ONNX Runtime release that ort 2.0.0-rc.11 targets
+#      (currently ONNX Runtime 1.20.x; confirm in the `ort` changelog for this rc).
+#   2. Verify its published SHA-256 against the upstream release notes, then point
+#      the build at it via the `ORT_LIB_LOCATION` env var (path to the dir holding
+#      libonnxruntime), and drop the `download-binaries` feature for fully offline,
+#      audited builds: `ort = { version = "2.0.0-rc.11", optional = true }`.
+# See: https://ort.pyke.io/setup/linking
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"], optional = true }
 tokenizers = { version = "0.21", optional = true }
 ndarray = { version = "0.17", optional = true }
