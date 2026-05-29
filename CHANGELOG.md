@@ -66,6 +66,11 @@ reindex on first start after upgrading.
   via `utf8_text()` instead of manual byte slicing, and symbol/import kinds
   gain `Display`/`FromStr`.
 
+### Security
+- **Bump `openssl` 0.10.79 → 0.10.80** (GHSA-phqj-4mhp-q6mq, transitive
+  dependency) — fixes a potential out-of-bounds write in AES-KW-PAD ciphers.
+  Semantiq does not exercise that code path; updated as a precaution.
+
 ## [0.8.0] - 2026-05-08
 
 Bugfix release that repairs the semantic search pipeline. Six out of seven
