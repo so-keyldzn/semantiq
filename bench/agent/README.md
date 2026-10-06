@@ -1,0 +1,79 @@
+# Agent benchmark: Claude Code with vs without Semantiq
+
+Measures whether giving a coding agent Semantiq makes it answer code-navigation
+questions better, cheaper or faster. Each task is a read-only question about a
+pinned commit of a repository, with an answer that is scored automatically.
+
+```bash
+python3 bench/agent/run.py --help
+python3 bench/agent/run.py --dry-run                      # list planned runs + cost estimate
+python3 bench/agent/run.py --build --jobs 4               # build semantiq (onnx) and run A/B
+python3 bench/agent/run.py --task sq-concept-rename       # a single task
+python3 bench/agent/run.py --configs baseline,semantiq,semantiq-guided --reps 3
+python3 bench/agent/run.py --configs cli-skill --resume \
+    --cli-bin path/to/semantiq --skill-path path/to/skills/semantiq   # add config C to a results dir
+python3 bench/agent/run.py --rebuild --out bench/agent/results/<date>  # re-score after editing tasks
+```
+
+Requirements: Python 3 (standard library only), `git`, `tar`, an authenticated
+`claude` CLI, and for the semantiq configs a release binary built with
+`cargo build --release --features semantiq-embeddings/onnx` (`--build` does it).
+
+## Configurations
+
+| Config | MCP servers | Extra context | Tools |
+|---|---|---|---|
+| `baseline` (A) | none (`--strict-mcp-config`, empty config) | – | Read, Grep, Glob, read-only Bash |
+| `semantiq` (B) | semantiq only (`semantiq serve --project <checkout>`) | – | same + `mcp__semantiq__*` |
+| `semantiq-guided` | semantiq only | CLAUDE.md text written by `semantiq init`, via `--append-system-prompt` | same as B |
+| `cli-skill` (C) | none | semantiq skill in `.claude/skills/semantiq/`, CLI on `PATH` | same as A + `Skill`, `Bash(semantiq:*)`, `Bash(jq:*)` |
+
+A and B share the model (`--model`, default `claude-sonnet-5-5`), the default
+system prompt, the prompt and the native tools; only the MCP server differs.
+`semantiq-guided` and `cli-skill` change the context on purpose and are opt-in
+(`--configs`). `cli-skill` needs `--setting-sources project` and the `Skill`
+tool for the project skill to load, which also lists Claude Code's bundled
+skills; the report's "Initial context" column shows that fixed cost.
+
+Safety: no run uses `--dangerously-skip-permissions`. Runs use
+`--permission-mode dontAsk` with an allowlist of read-only tools (`Read`,
+`Grep`, `Glob`, `Bash(grep|rg|find|ls|cat|head|tail|wc|sed -n|awk|sort|uniq|tree|file:*)`);
+everything else is denied. Runs happen in throw-away checkouts (`git archive`
+of the pinned commit, no `.git`) under `--work-dir` (default
+`$TMPDIR/semantiq-agent-bench`, refused if inside the repository). User
+settings, hooks and plugins are not loaded (`--setting-sources ""`).
+`CLAUDE.md`, `AGENTS.md` and `.claude/` are removed from the checkouts unless
+`--keep-agent-docs`: they would answer several questions verbatim.
+
+The index is built before the runs (`semantiq index --force`, time reported
+separately) into a DB outside the checkout, so A and B see identical files.
+
+## Tasks
+
+`tasks/<repo>.json` pins a repository (`"source": "self"` = this repository)
+and lists tasks in three categories:
+
+- `conceptual`: the question describes behaviour without the exact name
+  ("how does the index avoid stale entries when files are renamed?");
+- `structural`: callers, implementations, blast radius of a change;
+- `exact`: a literal name to locate, where grep should suffice (control group).
+
+The agent must end with `FINAL: [...]`, a JSON array of repo-relative file
+paths or symbol names (`answer_kind`). Each `expected` item lists regexes;
+`allowed` lists acceptable extra entries (e.g. a re-export). Recall is the
+share of expected items found; precision is the share of entries that are
+expected or allowed. A run succeeds when recall ≥ `min_recall` (default 1.0)
+and precision ≥ `min_precision` (default 0.5). See `scoring.py`.
+
+## Output
+
+`results/<date>/` (or `--out`): `runs.jsonl` (appended as runs finish, used by
+`--resume`), `results.json` (meta + one record per run: usage, cost, tool
+calls with truncated inputs, final answer, score), `meta.json` and `report.md`
+(tables by config, category, repository and task, tool usage, semantiq
+operations, failed runs). Full stream-json transcripts stay in the work dir.
+
+Costs are Claude Code's API-equivalent `total_cost_usd`; durations are
+`duration_ms`. With `--jobs > 1` runs overlap, which adds noise to durations
+(not to tokens). One repetition per task is a pilot, not a statistically
+significant result: use `--reps` for decisions.
