@@ -343,15 +343,22 @@ impl SemantiqServer {
 #[tool_handler]
 impl ServerHandler for SemantiqServer {
     fn get_info(&self) -> ServerConfig {
+        let mut instructions = String::from(
+            "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
+             semantic code understanding. Use semantiq_search for natural-language or fuzzy \
+             code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
+             file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
+             and documentation. Plain grep remains better for exact string matches.",
+        );
+        if let Some(reason) = semantiq_embeddings::semantic_search_unavailable_reason() {
+            instructions.push_str(&format!(
+                " Note: semantic (embedding) search is unavailable because {reason}; \
+                 semantiq_search only matches symbol names and text."
+            ));
+        }
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("semantiq", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
-                 semantic code understanding. Use semantiq_search for natural-language or fuzzy \
-                 code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
-                 file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
-                 and documentation. Plain grep remains better for exact string matches.",
-            )
+            .with_instructions(instructions)
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {

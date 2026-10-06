@@ -6,7 +6,7 @@ use semantiq_mcp::{SemantiqServer, disable_update_check};
 use std::path::PathBuf;
 use tracing::info;
 
-use super::common::resolve_db_path;
+use super::common::{resolve_db_path, warn_if_semantic_search_unavailable};
 
 pub(crate) async fn serve(
     project: Option<PathBuf>,
@@ -27,6 +27,7 @@ pub(crate) async fn serve(
     };
 
     let db_path = resolve_db_path(database, &project_root);
+    warn_if_semantic_search_unavailable();
 
     let project_root_str = project_root
         .to_str()

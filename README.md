@@ -23,6 +23,29 @@ npm install -g semantiq-mcp
 cargo install --git https://github.com/so-keyldzn/semantiq.git
 ```
 
+### Embedding model (first run)
+
+Semantic search uses [CodeRankEmbed](https://huggingface.co/nomic-ai/CodeRankEmbed)
+(INT8 ONNX export, 768-D), enabled by default in the npm binaries and in
+`cargo install` / `cargo build`.
+
+- **Download**: on first `index` / `serve`, about **140 MB** (model ~139 MB +
+  tokenizer ~0.7 MB) is fetched once from HuggingFace and verified against
+  pinned SHA-256 digests. The build itself also downloads the ONNX Runtime
+  library (`ort`).
+- **Cache**: `~/Library/Application Support/semantiq/models/` (macOS),
+  `~/.local/share/semantiq/models/` (Linux), `%APPDATA%\semantiq\models\`
+  (Windows). Delete it to force a re-download.
+- **Indexing time**: the first full index embeds every chunk; as a reference, this repository (~110 files, ~31k lines, ~450 chunks) takes about 2 minutes on an Apple M1 Max (8 ONNX threads, see `SEMANTIQ_ONNX_THREADS`). Later runs only reindex changed files.
+- **Opting out**: `SEMANTIQ_EMBEDDINGS=stub` skips the model (no download);
+  symbol and text search still work, semantic search is disabled. To build
+  without ONNX Runtime at all: `cargo install --git
+  https://github.com/so-keyldzn/semantiq.git --no-default-features`.
+- **macOS Intel (x86_64)**: ONNX Runtime has no prebuilt binary for this
+  target, so its release is built without embeddings. `semantiq serve` logs a
+  warning, `semantiq stats` / `GET /stats` report semantic search as
+  unavailable, and search falls back to symbols and text.
+
 ## Quick Start
 
 ```bash
@@ -413,11 +436,8 @@ Automatic reindex is triggered when:
 ## Known Limitations
 
 - **`semantiq_explain`**: Works best with functions, classes, structs, and interfaces. Exported variables (e.g., `export const config = {...}`) may not be indexed as symbols. Use `semantiq_search` as a fallback.
-- **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). Stored in:
-  - macOS: `~/Library/Application Support/semantiq/models/`
-  - Linux: `~/.local/share/semantiq/models/`
-  - Windows: `%APPDATA%\semantiq\models\`
-- **macOS Intel (x86_64)**: Not supported due to ONNX Runtime limitation.
+- **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). See [Embedding model (first run)](#embedding-model-first-run) for the cache location and opt-out.
+- **macOS Intel (x86_64)**: No semantic (embedding) search, due to an ONNX Runtime limitation; symbol and text search work.
 - **File size limit**: Files larger than 1MB are skipped.
 
 ## Excluded Directories

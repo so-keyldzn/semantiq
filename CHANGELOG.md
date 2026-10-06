@@ -25,6 +25,16 @@ All notable changes to Semantiq will be documented in this file.
   still switches logs to JSON for the others); query commands log warnings
   and errors only unless `--verbose`.
 
+- **Real embeddings by default**: the `onnx` feature is now a default feature
+  of the `semantiq` binary, so `cargo install` / `cargo build` get
+  CodeRankEmbed instead of the zero-vector stub. Opt out with
+  `--no-default-features` (used for the `x86_64-apple-darwin` release, which
+  `ort` cannot target). CI and release workflows drop the redundant
+  `--features onnx`.
+- The embedding model id written to the index is resolved at runtime
+  (`embedding_model_id()` replaces the `EMBEDDING_MODEL_ID` const), so
+  switching between the stub and the real model always rebuilds the vectors.
+
 ### Added
 - **CLI for every MCP tool**: `semantiq refs`, `deps`, `explain` and `impact`
   join `search`, all with `--json` printing the exact structured output of the
@@ -41,6 +51,14 @@ All notable changes to Semantiq will be documented in this file.
   `~/.claude/skills/semantiq/`.
 - `semantiq init --no-mcp` (skill only), `--no-skill` (MCP only) and
   `--no-index`. `init-cursor` adds a Semantiq section to `AGENTS.md`.
+- `SEMANTIQ_EMBEDDINGS=stub` forces the stub model (no download, semantic
+  search off); `SEMANTIQ_EMBEDDINGS=onnx` forces the real one. The test suite
+  uses the stub through a dev-only `test-stub` feature and never downloads the
+  model.
+- When semantic search is unavailable (stub build or override), `serve` and
+  `index` log a warning at startup, `semantiq stats` shows an `Embeddings`
+  section, `GET /stats` reports `embedding_model`, `semantic_search` and
+  `semantic_search_unavailable_reason`, and the MCP instructions say so.
 - MCP tool responses start with a `⏳ Initial indexing in progress` notice
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 
