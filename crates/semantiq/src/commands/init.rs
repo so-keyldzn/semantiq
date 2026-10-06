@@ -38,28 +38,33 @@ const BLOCK_END: &str = "<!-- semantiq:end -->";
 fn claude_md_block(options: InitOptions) -> String {
     let mut block = String::from(
         "## Semantiq\n\n\
-         This project is indexed by Semantiq (`.semantiq.db`). To find code by concept,\n\
-         trace a symbol's usages, check what a change breaks, or see a file's\n\
-         dependencies, run the `semantiq` CLI through Bash",
+         This project is indexed by Semantiq (`.semantiq.db`). Prefer the `semantiq` CLI\n\
+         (through Bash) over grep when the answer depends on the code's structure",
     );
     if !options.no_skill {
         block.push_str(
-            " — the `semantiq` skill\n(`.claude/skills/semantiq/SKILL.md`) explains when and how",
+            " — the `semantiq`\nskill (`.claude/skills/semantiq/SKILL.md`) explains when and how",
         );
     }
     block.push_str(
-        ":\n`semantiq search \"<what the code does>\"`, `semantiq refs <symbol>`,\n\
-         `semantiq impact <symbol>`, `semantiq explain <symbol>`, `semantiq deps <file>`\n\
-         (add `--json` to chain).",
+        ":\nreal usages of a symbol, without comment or string hits (`semantiq refs <symbol>`),\n\
+         what a change breaks and the tests to run (`semantiq impact <symbol>`), who calls\n\
+         a function and what it calls (`semantiq calls <symbol>`), what implements or\n\
+         extends a type (`semantiq hierarchy <type>`), unused code (`semantiq dead-code`),\n\
+         or code for a concept with no keyword to grep\n\
+         (`semantiq search \"<what the code does>\"`). Add `--json` to chain.",
     );
     if !options.no_mcp {
         block.push_str(
             " The same capabilities are available as the `semantiq_*` MCP\n\
-             tools (`semantiq_search`, `semantiq_find_refs`, `semantiq_impact`,\n\
-             `semantiq_explain`, `semantiq_deps`).",
+             tools (`semantiq_find_refs`, `semantiq_impact`, `semantiq_calls`,\n\
+             `semantiq_hierarchy`, `semantiq_dead_code`, `semantiq_search`, …).",
         );
     }
-    block.push_str(" Keep grep for exact strings.");
+    block.push_str(
+        "\nKeep grep / rg for exact strings, error messages and config keys: it is faster\n\
+         and exhaustive there.",
+    );
     block
 }
 

@@ -12,12 +12,15 @@ use super::init::upsert_managed_block;
 const AGENTS_MD_BLOCK: &str = r#"## Semantiq
 
 This project is indexed by Semantiq (`.semantiq.db`). Besides the `semantiq_*`
-MCP tools, the `semantiq` CLI answers the same questions from a terminal:
-`semantiq search "<what the code does>"` (find code by concept),
-`semantiq refs <symbol>` (definitions and usages), `semantiq impact <symbol>`
-(what a change breaks, tests to run), `semantiq explain <symbol>`,
-`semantiq deps <file>`. Add `--json` for structured output. Use grep for exact
-strings."#;
+MCP tools, the `semantiq` CLI answers from a terminal the questions where grep
+is guesswork: `semantiq refs <symbol>` (real usages, no comment or string
+hits), `semantiq impact <symbol>` (what a change breaks, tests to run),
+`semantiq calls <symbol>` (callers and callees), `semantiq hierarchy <type>`
+(what implements or extends it), `semantiq dead-code` (unused code),
+`semantiq search "<what the code does>"` (code for a concept with no keyword
+to grep), `semantiq explain <symbol>`, `semantiq deps <file>`. Add `--json`
+for structured output. Keep grep for exact strings, error messages and config
+keys."#;
 
 /// Writes content to a file, checking if it already exists.
 /// Returns true if the file was written, false if skipped.
@@ -92,28 +95,29 @@ This project uses Semantiq for semantic code understanding.
 
 ## Available Tools
 
-- `semantiq_search` - Search code semantically
+- `semantiq_search` - Search code by concept, symbol name or text
 - `semantiq_find_refs` - Find symbol references
 - `semantiq_deps` - Analyze dependencies
 - `semantiq_explain` - Explain symbols
+- `semantiq_impact` - What a change breaks, and the tests to run
+- `semantiq_calls` - Callers and callees of a function
+- `semantiq_hierarchy` - Supertypes, subtypes and implementors of a type
+- `semantiq_dead_code` - Unused functions, methods and types
 
-## Usage Guidelines
+## When to use them
 
-**Always prefer Semantiq tools over grep/find for code exploration.**
+Prefer Semantiq when the answer depends on the code's structure; keep grep for
+exact strings, error messages and config keys, where it is faster.
 
-| Instead of... | Use... |
-|---------------|--------|
-| grep, rg | `semantiq_search` |
-| find, ls | `semantiq_search` |
-| Manual symbol tracing | `semantiq_find_refs` |
-| Reading imports manually | `semantiq_deps` |
-
-## Best Practices
-
-1. Use `semantiq_search` first to find relevant code before making changes
-2. Use `semantiq_find_refs` to understand impact before refactoring
-3. Use `semantiq_deps` to understand module relationships
-4. Use `semantiq_explain` for unfamiliar symbols
+| Question | Use... |
+|----------|--------|
+| Where is a symbol really used (not in comments/strings)? | `semantiq_find_refs` |
+| What breaks if I change it? | `semantiq_impact` |
+| Who calls this function? What does it call? | `semantiq_calls` |
+| What implements this interface / extends this class? | `semantiq_hierarchy` |
+| Is this code still used? | `semantiq_dead_code` |
+| Where is a concept handled, with no keyword to grep? | `semantiq_search` |
+| What does this file import / who imports it? | `semantiq_deps` |
 "#;
     write_if_not_exists(
         &rules_dir.join("semantiq.mdc"),
