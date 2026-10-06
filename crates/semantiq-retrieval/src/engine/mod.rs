@@ -76,6 +76,25 @@ impl RetrievalEngine {
             }
         };
 
+        Self::build(store, root_path, embedding_model, enable_collection)
+    }
+
+    /// Create a RetrievalEngine without an embedding model or distance collection.
+    ///
+    /// Loading the ONNX model is the dominant startup cost and only `search()`
+    /// uses it (its semantic strategy is then skipped). Short-lived callers that
+    /// only need references, dependencies, explanations or impact (e.g. one-shot
+    /// CLI commands) use this to answer without paying for the model.
+    pub fn without_embeddings(store: Arc<IndexStore>, root_path: &str) -> Self {
+        Self::build(store, root_path, None, false)
+    }
+
+    fn build(
+        store: Arc<IndexStore>,
+        root_path: &str,
+        embedding_model: Option<Box<dyn EmbeddingModel>>,
+        enable_collection: bool,
+    ) -> Self {
         // Load calibrated thresholds from database
         let threshold_config = Self::load_thresholds_from_store(&store);
 

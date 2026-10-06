@@ -150,6 +150,15 @@ pub(super) struct StatsResponse {
     /// True while the initial index pass is running (counts are still growing).
     #[serde(default)]
     pub indexing: bool,
+    /// Embedding model recorded in the index (`"stub"` = zero vectors).
+    #[serde(default)]
+    pub embedding_model: String,
+    /// False when the stub embedding model is selected.
+    #[serde(default)]
+    pub semantic_search: bool,
+    /// Why semantic search is unavailable, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_search_unavailable_reason: Option<String>,
 }
 
 // ============================================

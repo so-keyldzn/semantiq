@@ -11,7 +11,10 @@
 //!
 //! The test indexes the workspace into an in-memory database and performs real
 //! ONNX embedding inference. It is gated behind the `onnx` feature so that
-//! the fast `cargo test` flow on a stub build still passes.
+//! the fast `cargo test` flow on a stub build still passes, and skipped when
+//! the stub model is selected (the workspace's tests enable `test-stub` so they
+//! never download the model). Run it explicitly with:
+//! `SEMANTIQ_EMBEDDINGS=onnx cargo test -p semantiq-retrieval --features onnx --test intent_queries`
 
 #![cfg(feature = "onnx")]
 
@@ -33,12 +36,16 @@ fn workspace_root() -> PathBuf {
 
 /// Build an in-memory IndexStore populated with the workspace's source files.
 /// Mirrors the production indexing pipeline but trimmed to what the test needs.
-fn build_index() -> Arc<IndexStore> {
+fn build_index() -> Option<Arc<IndexStore>> {
     let store = Arc::new(IndexStore::open_in_memory().expect("open in-memory store"));
     let root = workspace_root();
     let mut language_support = LanguageSupport::new().expect("LanguageSupport");
     let chunk_extractor = ChunkExtractor::new();
     let model = semantiq_embeddings::create_embedding_model(None).expect("embedding model");
+    if model.is_stub() {
+        eprintln!("skipping: stub embedding model selected (set SEMANTIQ_EMBEDDINGS=onnx)");
+        return None;
+    }
 
     let walker = WalkBuilder::new(&root)
         .hidden(true)
@@ -95,7 +102,7 @@ fn build_index() -> Arc<IndexStore> {
         }
     }
 
-    store
+    Some(store)
 }
 
 fn search_count(engine: &RetrievalEngine, q: &str) -> usize {
@@ -105,7 +112,9 @@ fn search_count(engine: &RetrievalEngine, q: &str) -> usize {
 
 #[test]
 fn intent_queries_return_results_and_baselines_stay_empty() {
-    let store = build_index();
+    let Some(store) = build_index() else {
+        return;
+    };
     let root = workspace_root();
     let engine = RetrievalEngine::new(store.clone(), root.to_str().unwrap());
 
