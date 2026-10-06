@@ -20,6 +20,7 @@ use super::resolution::Resolver;
 use anyhow::Result;
 use semantiq_index::UnreferencedSymbol;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
@@ -144,7 +145,7 @@ impl RetrievalEngine {
         // Most certain first; stable path/line order within a level.
         report
             .symbols
-            .sort_by(|a, b| b.confidence.cmp(&a.confidence));
+            .sort_by_key(|s| std::cmp::Reverse(s.confidence));
         if report.symbols.len() > limit {
             report.symbols.truncate(limit);
             report.truncated = true;
@@ -186,10 +187,11 @@ impl RetrievalEngine {
 
         // Type relations declared around the symbol: `impl Trait for X`
         // blocks, class headers with extends / implements.
-        if !relations.contains_key(&s.file_id) {
-            relations.insert(s.file_id, self.store.get_type_relations_by_file(s.file_id)?);
-        }
-        let enclosing: Vec<_> = relations[&s.file_id]
+        let file_relations = match relations.entry(s.file_id) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(self.store.get_type_relations_by_file(s.file_id)?),
+        };
+        let enclosing: Vec<_> = file_relations
             .iter()
             .filter(|r| r.line <= s.start_line && s.end_line <= r.end_line)
             .filter(|r| parent.is_some_and(|p| p == r.type_name))

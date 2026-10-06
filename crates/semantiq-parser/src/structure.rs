@@ -367,12 +367,10 @@ fn relations_of(node: Node, src: &[u8], language: Language, out: &mut Vec<TypeRe
                 // The syntax does not tell a base class from an interface: only
                 // the first entry of a class can be a class, and by convention
                 // interface names are `I` + uppercase letter.
-                let relation = if kind == "interface_declaration" {
-                    RelationKind::Extends
-                } else if kind != "struct_declaration"
+                let base_class = kind != "struct_declaration"
                     && i == 0
-                    && !bare_name(base, src).is_some_and(|n| looks_like_interface(&n))
-                {
+                    && !bare_name(base, src).is_some_and(|n| looks_like_interface(&n));
+                let relation = if kind == "interface_declaration" || base_class {
                     RelationKind::Extends
                 } else {
                     RelationKind::Implements
