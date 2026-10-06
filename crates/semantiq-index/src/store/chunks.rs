@@ -28,13 +28,8 @@ fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
         );
         return Vec::new();
     }
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| {
-            let bytes: [u8; 4] = chunk.try_into().expect("chunks_exact guarantees 4 bytes");
-            f32::from_le_bytes(bytes)
-        })
-        .collect()
+    let (chunks, _) = bytes.as_chunks::<4>();
+    chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect()
 }
 
 impl IndexStore {
