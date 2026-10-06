@@ -14,26 +14,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `onnx` (real embeddings) is a default feature; `cargo_flags` only
+        # opts out where ONNX Runtime has no prebuilt binaries.
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            features: onnx
+            cargo_flags: ""
             use_cross: false
+          # ort ships no ONNX Runtime for macOS Intel: stub embeddings.
           - target: x86_64-apple-darwin
             os: macos-15
-            features: ""
+            cargo_flags: "--no-default-features"
             use_cross: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            features: onnx
+            cargo_flags: ""
             use_cross: false
+          # Smoke build through cross (stub, as before); release.yml builds this
+          # target with ONNX using the native cross linker.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            features: ""
+            cargo_flags: "--no-default-features"
             use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            features: onnx
+            cargo_flags: ""
             use_cross: false
 
     steps:
@@ -50,11 +55,11 @@ jobs:
 
       - name: Build with cross
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
+        run: cross build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
 
       - name: Build with cargo
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

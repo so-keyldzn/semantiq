@@ -17,6 +17,7 @@ WORKDIR /build
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY skills ./skills
 
 # Build in release mode
 RUN cargo build --release --bin semantiq

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
-use super::common::{resolve_db_path, resolve_project_root};
+use super::common::{resolve_db_path, resolve_project_root, warn_if_semantic_search_unavailable};
 
 /// Per-file extraction counts, accumulated into the run totals.
 #[derive(Default)]
@@ -28,6 +28,7 @@ pub(crate) async fn index(path: &Path, database: Option<PathBuf>, force: bool) -
     let db_path = resolve_db_path(database, &project_root);
 
     info!("Indexing project: {:?}", project_root);
+    warn_if_semantic_search_unavailable();
     info!("Database: {:?}", db_path);
 
     let start = Instant::now();

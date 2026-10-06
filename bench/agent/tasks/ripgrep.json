@@ -1,0 +1,195 @@
+{
+  "repo": {
+    "name": "ripgrep",
+    "source": "https://github.com/BurntSushi/ripgrep",
+    "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+    "note": "ripgrep 14.1.1"
+  },
+  "tasks": [
+    {
+      "id": "rg-concept-binary",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "How does the search library notice that it is reading a non-text file and then either stop or keep going? Which source files implement that heuristic and its configuration?",
+      "expected": [
+        {
+          "id": "line_buffer.rs",
+          "any": [
+            "searcher/src/line_buffer\\.rs$"
+          ]
+        },
+        {
+          "id": "searcher/mod.rs",
+          "any": [
+            "searcher/src/searcher/mod\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "searcher/src/searcher/(core|glue)\\.rs$",
+        "searcher/src/lib\\.rs$",
+        "core/flags/hiargs\\.rs$",
+        "core/search\\.rs$",
+        "core/flags/defs\\.rs$",
+        "searcher/src/sink\\.rs$",
+        "printer/src/"
+      ],
+      "min_recall": 0.5
+    },
+    {
+      "id": "rg-concept-ignore-decision",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "When walking a directory tree, where is the final decision made that a given entry should be skipped, combining ignore files, overrides, file types and hidden-file rules? List the source files that implement that combination (not the individual rule parsers).",
+      "expected": [
+        {
+          "id": "dir.rs",
+          "any": [
+            "ignore/src/dir\\.rs$"
+          ]
+        },
+        {
+          "id": "walk.rs",
+          "any": [
+            "ignore/src/walk\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "ignore/src/(gitignore|overrides|types|pathutil|lib)\\.rs$"
+      ],
+      "min_recall": 0.5
+    },
+    {
+      "id": "rg-struct-sink-impls",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "List the concrete types that implement the searcher's `Sink` trait, excluding tests and the blanket impls for `&mut S` and `Box<S>`.",
+      "expected": [
+        {
+          "id": "StandardSink",
+          "any": [
+            "\\bStandardSink\\b"
+          ]
+        },
+        {
+          "id": "JSONSink",
+          "any": [
+            "\\bJSONSink\\b"
+          ]
+        },
+        {
+          "id": "SummarySink",
+          "any": [
+            "\\bSummarySink\\b"
+          ]
+        },
+        {
+          "id": "UTF8",
+          "any": [
+            "\\bUTF8\\b"
+          ]
+        },
+        {
+          "id": "Lossy",
+          "any": [
+            "\\bLossy\\b"
+          ]
+        },
+        {
+          "id": "Bytes",
+          "any": [
+            "\\bBytes\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bKitchenSink\\b",
+        "\\bSinkError\\b"
+      ],
+      "min_recall": 0.83
+    },
+    {
+      "id": "rg-struct-skip-callers",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Who calls the free function `should_skip_entry` in the `ignore` crate? Name the calling functions/methods.",
+      "expected": [
+        {
+          "id": "skip_entry",
+          "any": [
+            "(^|::|\\s)skip_entry\\b"
+          ]
+        },
+        {
+          "id": "generate_work",
+          "any": [
+            "\\bgenerate_work\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bshould_skip_entry\\b"
+      ]
+    },
+    {
+      "id": "rg-exact-max-columns",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "In which source file is the `-M/--max-columns` command-line flag defined?",
+      "expected": [
+        {
+          "id": "defs.rs",
+          "any": [
+            "core/flags/defs\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "core/flags/(hiargs|lowargs)\\.rs$"
+      ]
+    },
+    {
+      "id": "rg-concept-threads",
+      "category": "conceptual",
+      "answer_kind": "symbols",
+      "prompt": "When the user does not ask for a specific degree of parallelism, how does the command-line tool choose how many threads to use, and in which cases does it force a single thread? Name the function that decides.",
+      "expected": [
+        {
+          "id": "from_low_args",
+          "any": [
+            "\\bfrom_low_args\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bthreads\\b",
+        "\\bHiArgs\\b",
+        "\\bavailable_parallelism\\b",
+        "\\bLowArgs\\b",
+        "\\bparse\\w*\\b",
+        "\\brun\\b",
+        "\\bsearch_parallel\\b",
+        "\\bwalk_builder\\b"
+      ]
+    },
+    {
+      "id": "rg-concept-colors",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "Users can customise how matches, paths and line numbers are highlighted in the output. Which source file parses those user-supplied styling specifications?",
+      "expected": [
+        {
+          "id": "color.rs",
+          "any": [
+            "printer/src/color\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "core/flags/(defs|hiargs|lowargs)\\.rs$",
+        "printer/src/lib\\.rs$"
+      ]
+    }
+  ]
+}

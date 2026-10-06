@@ -28,6 +28,18 @@ pub(super) fn resolve_db_path(database: Option<PathBuf>, project_root: &Path) ->
     database.unwrap_or_else(|| project_root.join(DEFAULT_DB_NAME))
 }
 
+/// Logs a warning when this process uses the stub embedding model, so a
+/// macOS Intel / `--no-default-features` build never silently loses
+/// semantic search.
+pub(super) fn warn_if_semantic_search_unavailable() {
+    if let Some(reason) = semantiq_embeddings::semantic_search_unavailable_reason() {
+        tracing::warn!(
+            "Semantic search unavailable: {}. Search falls back to symbol and text matching.",
+            reason
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

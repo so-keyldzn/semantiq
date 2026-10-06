@@ -5,7 +5,7 @@ pub const SCHEMA_VERSION: i32 = 8;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
-pub use semantiq_embeddings::{EMBEDDING_DIMENSION, EMBEDDING_MODEL_ID};
+pub use semantiq_embeddings::{EMBEDDING_DIMENSION, embedding_model_id};
 
 /// Read the current schema version from the database.
 /// Returns 0 if the metadata table doesn't exist yet (fresh database).
@@ -263,7 +263,7 @@ fn reconcile_embedding_space(conn: &Connection) -> SqliteResult<()> {
 
     let expected_dim = EMBEDDING_DIMENSION.to_string();
     let up_to_date = vec_sql.contains(&format!("float[{EMBEDDING_DIMENSION}]"))
-        && get_metadata(conn, "embedding_model")?.as_deref() == Some(EMBEDDING_MODEL_ID)
+        && get_metadata(conn, "embedding_model")?.as_deref() == Some(embedding_model_id())
         && get_metadata(conn, "embedding_dim")?.as_deref() == Some(expected_dim.as_str());
     if up_to_date {
         return Ok(());
@@ -271,7 +271,7 @@ fn reconcile_embedding_space(conn: &Connection) -> SqliteResult<()> {
 
     tracing::info!(
         "Embedding model changed (now {}, {}-dim): rebuilding vector index",
-        EMBEDDING_MODEL_ID,
+        embedding_model_id(),
         EMBEDDING_DIMENSION
     );
     conn.execute_batch("SAVEPOINT reset_embedding_space")?;
@@ -475,7 +475,7 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             ('schema_version', ?1), ('embedding_model', ?2), ('embedding_dim', ?3)",
         params![
             SCHEMA_VERSION.to_string(),
-            EMBEDDING_MODEL_ID,
+            embedding_model_id(),
             EMBEDDING_DIMENSION.to_string()
         ],
     )?;

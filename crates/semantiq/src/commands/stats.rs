@@ -30,6 +30,17 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     println!("  Chunks: {}", stats.chunk_count);
     println!("  Dependencies: {}", stats.dependency_count);
 
+    println!();
+    println!("Embeddings:");
+    println!("  Model: {}", semantiq_embeddings::embedding_model_id());
+    match semantiq_embeddings::semantic_search_unavailable_reason() {
+        None => println!("  Semantic search: enabled"),
+        Some(reason) => {
+            println!("  Semantic search: UNAVAILABLE ({})", reason);
+            println!("    Symbol and text search still work.");
+        }
+    }
+
     // Show ML calibration info
     let observation_counts = store.get_observation_counts().unwrap_or_default();
     let total_observations: usize = observation_counts.values().sum();
