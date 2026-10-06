@@ -11,4 +11,5 @@ pub use exclusions::{
 };
 pub use schema::{ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord};
 pub use store::{CalibrationData, CalibrationRecord, IndexStats, IndexStore};
+pub use store::{GraphFile, GraphRefCount, RepoGraphData};
 pub use watcher::FileWatcher;

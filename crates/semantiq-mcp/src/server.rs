@@ -8,7 +8,8 @@ use rmcp::{
 };
 use semantiq_index::{AutoIndexer, IndexStore};
 use semantiq_retrieval::{
-    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, RetrievalEngine, SearchOptions,
+    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, DEFAULT_REPO_MAP_TOKENS, RepoMapOptions,
+    RetrievalEngine, SearchOptions,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -239,6 +240,8 @@ fn validate_input(value: &str, label: &str) -> Result<String, String> {
 }
 
 const MAX_INPUT_LEN: usize = 500;
+/// Maximum number of `focus` entries accepted by `semantiq_repo_map`.
+const MAX_FOCUS_ENTRIES: usize = 50;
 
 impl SemantiqServer {
     pub async fn search(&self, params: SearchParams) -> Result<SearchOutput, String> {
@@ -299,6 +302,85 @@ impl SemantiqServer {
                     content: r.content,
                 })
                 .collect(),
+        })
+    }
+
+    pub async fn repo_map(&self, params: RepoMapParams) -> Result<RepoMapOutput, String> {
+        debug!(
+            max_tokens = ?params.max_tokens,
+            focus = ?params.focus,
+            path_prefix = ?params.path_prefix,
+            "semantiq_repo_map called"
+        );
+
+        let focus = params.focus.unwrap_or_default();
+        if focus.len() > MAX_FOCUS_ENTRIES {
+            return Err(format!(
+                "focus accepts at most {} entries",
+                MAX_FOCUS_ENTRIES
+            ));
+        }
+        let focus = focus
+            .iter()
+            .filter(|entry| !entry.trim().is_empty())
+            .map(|entry| validate_input(entry, "Focus entry"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let path_prefix = match params.path_prefix {
+            Some(ref prefix) if !prefix.trim().is_empty() => {
+                let prefix = validate_input(prefix, "Path prefix")?;
+                if prefix.contains("..") {
+                    return Err("Path prefix must not contain '..'".to_string());
+                }
+                Some(prefix)
+            }
+            _ => None,
+        };
+        let options = RepoMapOptions {
+            max_tokens: params.max_tokens.unwrap_or(DEFAULT_REPO_MAP_TOKENS),
+            focus,
+            path_prefix,
+        };
+
+        let map = self
+            .run_blocking(move |engine| engine.repo_map(&options))
+            .await
+            .map_err(|e| {
+                error!("Repo map failed: {}", e);
+                "Repo map failed: an internal error occurred".to_string()
+            })?;
+
+        Ok(RepoMapOutput {
+            max_tokens: map.max_tokens,
+            estimated_tokens: map.estimated_tokens,
+            total_files: map.total_files,
+            total_symbols: map.total_symbols,
+            shown_symbols: map.shown_symbols,
+            focus_files: map.focus_files,
+            focus_symbols: map.focus_symbols,
+            unmatched_focus: map.unmatched_focus,
+            files: map
+                .files
+                .into_iter()
+                .map(|f| RepoMapFileOut {
+                    file_path: f.path,
+                    language: f.language,
+                    rank: f.rank,
+                    symbols: f
+                        .symbols
+                        .into_iter()
+                        .map(|s| RepoMapSymbolOut {
+                            name: s.name,
+                            kind: s.kind,
+                            line: s.line,
+                            parent: s.parent,
+                            signature: s.signature,
+                            doc: s.doc,
+                            rank: s.rank,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            text: map.text,
         })
     }
 
@@ -548,6 +630,20 @@ impl SemantiqServer {
     }
 
     #[tool(
+        name = "semantiq_repo_map",
+        description = "Get a compact map of the repository: its most important files and, for each, the signatures of its key symbols, ranked by how much the rest of the code uses them (PageRank over references and imports). Call it first when starting a task in an unfamiliar repository, before searching or reading files. Pass focus (files, directories or symbol names) to center the map on the code a task touches, and max_tokens to size it.",
+        output_schema = schema_for_output::<RepoMapOutput>(),
+        annotations(title = "Repository map", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_repo_map(
+        &self,
+        Parameters(params): Parameters<RepoMapParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.repo_map(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+
+    #[tool(
         name = "semantiq_find_refs",
         description = "Find the definitions and usages of a symbol across the codebase, from the syntax tree: comments, strings and longer names containing it are never matched (unlike grep). Each usage is tagged call, type, import or reference. Use it before renaming or changing a function, type or method.",
         output_schema = schema_for_output::<FindRefsOutput>(),
@@ -610,7 +706,9 @@ impl ServerHandler for SemantiqServer {
             .with_server_info(Implementation::new("semantiq", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
-                 semantic code understanding. Use semantiq_search for natural-language or fuzzy \
+                 semantic code understanding. On an unfamiliar repository, start with \
+                 semantiq_repo_map for a ranked overview of its key files and symbols (pass \
+                 focus to center it on the files of the task). Use semantiq_search for natural-language or fuzzy \
                  code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
                  file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
                  and documentation. Plain grep remains better for exact string matches.",

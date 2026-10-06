@@ -8,6 +8,7 @@ mod impact;
 mod search;
 mod threshold;
 
+use crate::repo_map::RankedRepo;
 use crate::threshold::{CollectorConfig, DistanceCollector, ThresholdConfig};
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_index::IndexStore;
@@ -48,6 +49,8 @@ pub struct RetrievalEngine {
     pub(crate) distance_collector: Option<DistanceCollector>,
     /// Cached file list for text search to avoid re-walking the tree.
     pub(crate) file_list_cache: Mutex<Option<FileListCache>>,
+    /// Repo map ranking without focus, keyed by the index fingerprint.
+    pub(crate) repo_map_cache: Mutex<Option<(String, Arc<RankedRepo>)>>,
 }
 
 impl RetrievalEngine {
@@ -122,6 +125,7 @@ impl RetrievalEngine {
             threshold_config: Arc::new(RwLock::new(threshold_config)),
             distance_collector,
             file_list_cache: Mutex::new(None),
+            repo_map_cache: Mutex::new(None),
         }
     }
 

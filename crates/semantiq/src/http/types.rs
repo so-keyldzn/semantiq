@@ -117,6 +117,27 @@ pub(super) struct ExplainResponse {
 }
 
 // ============================================
+// Repo map
+// ============================================
+
+#[derive(Debug, Deserialize)]
+pub(super) struct MapRequest {
+    pub max_tokens: Option<usize>,
+    pub focus: Option<Vec<String>>,
+    pub path_prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct MapResponse {
+    /// Rendered map
+    pub map: String,
+    /// Structured map (same shape as the MCP tool's structuredContent)
+    #[serde(flatten)]
+    pub details: serde_json::Value,
+    pub search_time_ms: u64,
+}
+
+// ============================================
 // Stats
 // ============================================
 
