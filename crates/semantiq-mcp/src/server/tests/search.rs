@@ -128,3 +128,23 @@ async fn test_search_with_symbol_kind_filter() {
 
     assert!(result.is_ok());
 }
+
+#[tokio::test]
+async fn test_search_flags_incomplete_results_during_initial_indexing() {
+    let (server, _temp) = create_test_server();
+
+    let result = server
+        .call_search("anything".to_string(), None, None, None, None)
+        .await
+        .unwrap();
+    assert!(!result.contains("Initial indexing in progress"));
+
+    server
+        .initial_indexing
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = server
+        .call_search("anything".to_string(), None, None, None, None)
+        .await
+        .unwrap();
+    assert!(result.starts_with("⏳ Initial indexing in progress"));
+}

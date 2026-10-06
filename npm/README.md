@@ -18,12 +18,15 @@ semantiq init
 ```
 
 This automatically:
-- Creates `.claude/settings.json` with MCP configuration
+- Creates (or merges) `.mcp.json` with the MCP server entry
 - Creates `CLAUDE.md` with tool instructions
 - Updates `.gitignore` to exclude the index database
 - Indexes your entire project
 
 Restart Claude Code and you're ready to go!
+
+Indexing up front is optional: `semantiq serve` indexes the project in the
+background on startup and keeps it up to date as files change.
 
 ## Manual Setup
 
@@ -59,7 +62,7 @@ Semantiq automatically watches your project for file changes and updates the ind
 # Initialize Semantiq for a project (recommended)
 semantiq init
 
-# Index a project manually
+# Index a project manually (optional: serve indexes automatically)
 semantiq index /path/to/project
 
 # Start MCP server

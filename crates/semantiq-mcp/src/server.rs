@@ -13,6 +13,7 @@ use semantiq_retrieval::{
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -27,6 +28,8 @@ pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
     auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
+    /// True while the initial index pass started by `start_auto_indexer` runs.
+    initial_indexing: Arc<AtomicBool>,
 }
 
 impl SemantiqServer {
@@ -59,6 +62,7 @@ impl SemantiqServer {
             engine,
             store,
             auto_indexer,
+            initial_indexing: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -120,11 +124,30 @@ impl SemantiqServer {
         &self.engine
     }
 
+    /// Whether the initial index pass is still running (results may be incomplete).
+    pub fn is_initial_indexing(&self) -> bool {
+        self.initial_indexing.load(Ordering::Relaxed)
+    }
+
+    /// Prepend a warning to a tool response while the initial index is incomplete.
+    fn with_indexing_notice(&self, output: String) -> String {
+        if self.is_initial_indexing() {
+            format!(
+                "⏳ Initial indexing in progress: results may be incomplete.\n\n{}",
+                output
+            )
+        } else {
+            output
+        }
+    }
+
     /// Start the auto-indexing background task
     /// Performs initial indexing first, then watches for changes
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
+            let initial_indexing = Arc::clone(&self.initial_indexing);
+            initial_indexing.store(true, Ordering::Relaxed);
 
             tokio::spawn(async move {
                 // Perform initial indexing in a blocking task
@@ -134,6 +157,7 @@ impl SemantiqServer {
                     indexer.initial_index()
                 })
                 .await;
+                initial_indexing.store(false, Ordering::Relaxed);
 
                 match initial_result {
                     Ok(Ok(result)) => {
@@ -520,7 +544,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.search(params).await?;
-        structured_result(&output, output.render())
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
 
     #[tool(
@@ -534,7 +558,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<FindRefsParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.find_refs(params).await?;
-        structured_result(&output, output.render())
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
 
     #[tool(
@@ -548,7 +572,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<DepsParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.deps(params).await?;
-        structured_result(&output, output.render())
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
 
     #[tool(
@@ -562,7 +586,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<ExplainParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.explain(params).await?;
-        structured_result(&output, output.render())
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
     #[tool(
         name = "semantiq_impact",
@@ -575,7 +599,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<ImpactParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.impact(params).await?;
-        structured_result(&output, output.render())
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
 }
 
