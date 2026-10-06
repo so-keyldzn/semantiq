@@ -4,6 +4,17 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Code-specific embedding model**: all-MiniLM-L6-v2 (384-D) replaced by
+  nomic-ai/CodeRankEmbed INT8 (768-D, CLS pooling, query prefix via the new
+  `EmbeddingModel::embed_query`). Model and tokenizer URLs are pinned to
+  immutable revisions and verified against hard-coded SHA-256 digests. On a
+  local benchmark (doc comment -> function), R@1 goes from 0.60 to 0.90.
+  Schema v6 rebuilds `chunks_vec` at 768 dimensions and forces a full
+  reindex; the active model id is stored in metadata so future model changes
+  (including stub -> ONNX builds) trigger the same rebuild.
+- HTTP API binds to `127.0.0.1` by default; use `--http-host` to expose it.
+
 ## [0.9.0] - 2026-05-29
 
 Reliability, supply-chain, and search-quality release. Re-indexing no longer

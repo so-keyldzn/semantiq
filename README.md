@@ -250,13 +250,13 @@ crates/
 ├── semantiq-parser/    # Tree-sitter parsing (19 languages)
 ├── semantiq-index/     # SQLite storage (FTS5, sqlite-vec)
 ├── semantiq-retrieval/ # Search engine (4 strategies)
-└── semantiq-embeddings/# ONNX model (MiniLM-L6-v2, 384-D)
+└── semantiq-embeddings/# ONNX model (CodeRankEmbed, 768-D)
 ```
 
 **Data Flow:**
 1. Parse source files with tree-sitter
 2. Extract symbols, chunks, and imports
-3. Generate embeddings (384-D vectors)
+3. Generate embeddings (768-D vectors)
 4. Store in SQLite with FTS5 + vector search
 5. Query via MCP tools with multi-strategy fusion
 
@@ -340,7 +340,7 @@ Automatic reindex is triggered when:
 ## Known Limitations
 
 - **`semantiq_explain`**: Works best with functions, classes, structs, and interfaces. Exported variables (e.g., `export const config = {...}`) may not be indexed as symbols. Use `semantiq_search` as a fallback.
-- **Embedding model**: Downloaded automatically on first run (~90MB from HuggingFace). Stored in:
+- **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). Stored in:
   - macOS: `~/Library/Application Support/semantiq/models/`
   - Linux: `~/.local/share/semantiq/models/`
   - Windows: `%APPDATA%\semantiq\models\`
