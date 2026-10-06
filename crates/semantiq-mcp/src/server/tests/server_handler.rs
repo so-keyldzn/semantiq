@@ -43,7 +43,7 @@ fn test_get_info_enables_tools() {
 fn test_tools_are_annotated_read_only() {
     let tools = super::SemantiqServer::tool_router().list_all();
 
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 8);
     for tool in &tools {
         let annotations = tool
             .annotations

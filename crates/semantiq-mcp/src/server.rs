@@ -20,7 +20,10 @@ use tracing::{debug, error, info};
 
 use crate::version_check::{VersionCheckConfig, check_for_update};
 
+mod structure;
+mod structure_types;
 mod types;
+pub use structure_types::*;
 pub use types::*;
 
 #[derive(Clone)]
@@ -601,6 +604,48 @@ impl SemantiqServer {
         let output = self.impact(params).await?;
         structured_result(&output, self.with_indexing_notice(output.render()))
     }
+
+    #[tool(
+        name = "semantiq_calls",
+        description = "Call graph of a function or method: who calls it (callers) and what it calls (callees), up to max_depth levels. Unlike grep, each edge names the enclosing caller and ignores comments, strings and non-call mentions. Each edge has a confidence (same_file, imports, unique_name, name_only) since matching is by name.",
+        output_schema = schema_for_output::<CallsOutput>(),
+        annotations(title = "Call graph", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_calls(
+        &self,
+        Parameters(params): Parameters<CallsParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.calls(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+
+    #[tool(
+        name = "semantiq_hierarchy",
+        description = "Type hierarchy of a class, interface or trait: what it extends / implements and every subtype or implementor, transitively (Rust impl Trait for Type, extends/implements in TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala; not Go's implicit interfaces). Use it instead of grepping for \"implements X\" / \"impl X for\".",
+        output_schema = schema_for_output::<HierarchyOutput>(),
+        annotations(title = "Type hierarchy", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_hierarchy(
+        &self,
+        Parameters(params): Parameters<HierarchyParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.hierarchy(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+
+    #[tool(
+        name = "semantiq_dead_code",
+        description = "List functions, methods and types that nothing references outside their own definition, filterable by path prefix and language. Entry points, tests, trait/interface members and (unless include_public) public symbols are excluded; each result has a confidence and the reasons. Grep cannot answer this without checking every name.",
+        output_schema = schema_for_output::<DeadCodeOutput>(),
+        annotations(title = "Dead code", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_dead_code(
+        &self,
+        Parameters(params): Parameters<DeadCodeParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.dead_code(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
 }
 
 #[tool_handler]
@@ -612,8 +657,9 @@ impl ServerHandler for SemantiqServer {
                 "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
                  semantic code understanding. Use semantiq_search for natural-language or fuzzy \
                  code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
-                 file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
-                 and documentation. Plain grep remains better for exact string matches.",
+                 file's imports and dependents, semantiq_impact before changing a symbol, semantiq_explain for a symbol's definition \
+                 and documentation, semantiq_calls for callers / callees, semantiq_hierarchy for supertypes and \
+                 implementors, and semantiq_dead_code to find unused code. Plain grep remains better for exact string matches.",
             )
     }
 
