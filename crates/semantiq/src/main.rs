@@ -190,6 +190,25 @@ enum Commands {
         limit: Option<usize>,
     },
 
+    /// Print a ranked map of the repository: key files and their main symbols
+    Map {
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Token budget for the map (256-8000, estimated as chars/4)
+        #[arg(long, default_value_t = semantiq_retrieval::DEFAULT_REPO_MAP_TOKENS)]
+        max_tokens: usize,
+
+        /// Files, directories or symbol names to center the map on
+        /// (repeatable or comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        focus: Vec<String>,
+
+        /// Only list files under this path prefix
+        #[arg(long)]
+        path_prefix: Option<String>,
+    },
+
     /// Calibrate semantic search thresholds using ML
     Calibrate {
         /// Path to the database file
@@ -348,6 +367,12 @@ async fn main() -> Result<()> {
             },
             cli.json,
         ),
+        Commands::Map {
+            index,
+            max_tokens,
+            focus,
+            path_prefix,
+        } => query::map(&index, max_tokens, focus, path_prefix, cli.json),
         Commands::Calibrate {
             database,
             language,

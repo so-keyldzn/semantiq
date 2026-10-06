@@ -92,6 +92,80 @@ impl SearchOutput {
     }
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct RepoMapParams {
+    /// Token budget for the map (default 1500, clamped to 256..8000;
+    /// estimated as characters / 4)
+    pub max_tokens: Option<usize>,
+    /// Files, directories or symbol names the current task is about: the map
+    /// is then centered on them and on the code they use or are used by
+    pub focus: Option<Vec<String>>,
+    /// Only list files whose path starts with this prefix, e.g. "src/api/"
+    pub path_prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RepoMapOutput {
+    pub max_tokens: usize,
+    pub estimated_tokens: usize,
+    /// Source files considered (after path_prefix)
+    pub total_files: usize,
+    /// Symbols considered (after path_prefix)
+    pub total_symbols: usize,
+    pub shown_symbols: usize,
+    /// Focus entries resolved to files (including directories expanded)
+    pub focus_files: Vec<String>,
+    /// Focus entries resolved to symbol names
+    pub focus_symbols: Vec<String>,
+    /// Focus entries matching no indexed source file or symbol
+    pub unmatched_focus: Vec<String>,
+    /// Listed files in directory order, each with its most important symbols
+    pub files: Vec<RepoMapFileOut>,
+    /// Rendered map, sent as the text content
+    #[serde(skip)]
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RepoMapFileOut {
+    pub file_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// PageRank of the file in the reference graph
+    pub rank: f64,
+    pub symbols: Vec<RepoMapSymbolOut>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RepoMapSymbolOut {
+    pub name: String,
+    pub kind: String,
+    pub line: usize,
+    /// Enclosing type or module, for members
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// First line of the declaration
+    pub signature: String,
+    /// First line of the doc comment, truncated
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    /// Importance score (share of rank received through references)
+    pub rank: f64,
+}
+
+impl RepoMapOutput {
+    pub fn render(&self) -> String {
+        let mut output = self.text.clone();
+        if !self.unmatched_focus.is_empty() {
+            output.push_str(&format!(
+                "\nNot found in the index (focus ignored): {}\n",
+                self.unmatched_focus.join(", ")
+            ));
+        }
+        output
+    }
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FindRefsOutput {
     pub symbol: String,

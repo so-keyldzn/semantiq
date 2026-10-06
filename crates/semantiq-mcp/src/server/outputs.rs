@@ -7,13 +7,16 @@
 //! and replaced by an opaque message.
 
 use semantiq_retrieval::{
-    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, RetrievalEngine, SearchOptions,
+    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, DEFAULT_REPO_MAP_TOKENS, RepoMapOptions,
+    RetrievalEngine, SearchOptions,
 };
 use tracing::{debug, error};
 
 use super::types::*;
 
 const MAX_INPUT_LEN: usize = 500;
+/// Maximum number of `focus` entries accepted by `semantiq_repo_map`.
+const MAX_FOCUS_ENTRIES: usize = 50;
 
 /// Trim and bound a required string argument.
 fn validate_input(value: &str, label: &str) -> Result<String, String> {
@@ -299,5 +302,84 @@ pub fn explain_output(
             .collect(),
         usage_count: explanation.usage_count,
         related_symbols,
+    })
+}
+
+pub fn repo_map_output(
+    engine: &RetrievalEngine,
+    params: RepoMapParams,
+) -> Result<RepoMapOutput, String> {
+    debug!(
+        max_tokens = ?params.max_tokens,
+        focus = ?params.focus,
+        path_prefix = ?params.path_prefix,
+        "semantiq_repo_map called"
+    );
+
+    let focus = params.focus.unwrap_or_default();
+    if focus.len() > MAX_FOCUS_ENTRIES {
+        return Err(format!(
+            "focus accepts at most {} entries",
+            MAX_FOCUS_ENTRIES
+        ));
+    }
+    let focus = focus
+        .iter()
+        .filter(|entry| !entry.trim().is_empty())
+        .map(|entry| validate_input(entry, "Focus entry"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let path_prefix = match params.path_prefix {
+        Some(ref prefix) if !prefix.trim().is_empty() => {
+            let prefix = validate_input(prefix, "Path prefix")?;
+            if prefix.contains("..") {
+                return Err("Path prefix must not contain '..'".to_string());
+            }
+            Some(prefix)
+        }
+        _ => None,
+    };
+    let options = RepoMapOptions {
+        max_tokens: params.max_tokens.unwrap_or(DEFAULT_REPO_MAP_TOKENS),
+        focus,
+        path_prefix,
+    };
+
+    let map = engine.repo_map(&options).map_err(|e| {
+        error!("Repo map failed: {}", e);
+        "Repo map failed: an internal error occurred".to_string()
+    })?;
+
+    Ok(RepoMapOutput {
+        max_tokens: map.max_tokens,
+        estimated_tokens: map.estimated_tokens,
+        total_files: map.total_files,
+        total_symbols: map.total_symbols,
+        shown_symbols: map.shown_symbols,
+        focus_files: map.focus_files,
+        focus_symbols: map.focus_symbols,
+        unmatched_focus: map.unmatched_focus,
+        files: map
+            .files
+            .into_iter()
+            .map(|f| RepoMapFileOut {
+                file_path: f.path,
+                language: f.language,
+                rank: f.rank,
+                symbols: f
+                    .symbols
+                    .into_iter()
+                    .map(|s| RepoMapSymbolOut {
+                        name: s.name,
+                        kind: s.kind,
+                        line: s.line,
+                        parent: s.parent,
+                        signature: s.signature,
+                        doc: s.doc,
+                        rank: s.rank,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        text: map.text,
     })
 }

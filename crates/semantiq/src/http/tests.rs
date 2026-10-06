@@ -379,3 +379,52 @@ async fn test_search_get_method_not_allowed() {
 
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+// ============================================
+// Repo map endpoint
+// ============================================
+
+#[tokio::test]
+async fn test_map_empty_index() {
+    let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::post("/map")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"max_tokens": 500}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response_body(response).await;
+    let map: MapResponse = serde_json::from_slice(&body).unwrap();
+    assert!(map.map.contains("no source files"));
+    assert_eq!(map.details["max_tokens"], 500);
+    assert_eq!(map.details["total_files"], 0);
+    assert!(map.details["files"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_map_rejects_path_traversal() {
+    let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::post("/map")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path_prefix": "../etc"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response_body(response).await;
+    let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error.code, "INVALID_MAP_REQUEST");
+}

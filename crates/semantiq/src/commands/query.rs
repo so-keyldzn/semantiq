@@ -1,4 +1,4 @@
-//! Query commands (`search`, `refs`, `deps`, `explain`, `impact`).
+//! Query commands (`search`, `refs`, `deps`, `explain`, `impact`, `map`).
 //!
 //! Each command opens an existing index, refreshes files changed since the
 //! last run (unless `--no-refresh`), then prints the same output as the
@@ -12,8 +12,8 @@ use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
 use semantiq_index::{AutoIndexer, IndexStore, should_exclude_entry, should_exclude_path};
 use semantiq_mcp::server::{
-    DepsParams, ExplainParams, FindRefsParams, ImpactParams, SearchParams, deps_output,
-    explain_output, find_refs_output, impact_output, search_output,
+    DepsParams, ExplainParams, FindRefsParams, ImpactParams, RepoMapParams, SearchParams,
+    deps_output, explain_output, find_refs_output, impact_output, repo_map_output, search_output,
 };
 use semantiq_parser::Language;
 use semantiq_retrieval::RetrievalEngine;
@@ -131,6 +131,32 @@ pub(crate) fn impact(index: &IndexArgs, args: ImpactArgs, json: bool) -> Result<
         },
     )
     .map_err(|e| anyhow!(e))?;
+    print_output(&output, json, || output.render())
+}
+
+pub(crate) fn map(
+    index: &IndexArgs,
+    max_tokens: usize,
+    focus: Vec<String>,
+    path_prefix: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let (engine, _root) = open_engine(index, Engine::WithoutEmbeddings)?;
+    let output = repo_map_output(
+        &engine,
+        RepoMapParams {
+            max_tokens: Some(max_tokens),
+            focus: Some(focus),
+            path_prefix,
+        },
+    )
+    .map_err(|e| anyhow!(e))?;
+    if !json && !output.unmatched_focus.is_empty() {
+        eprintln!(
+            "No indexed file or symbol matches: {}",
+            output.unmatched_focus.join(", ")
+        );
+    }
     print_output(&output, json, || output.render())
 }
 
