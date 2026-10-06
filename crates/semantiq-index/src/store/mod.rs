@@ -7,6 +7,7 @@ mod calibrations;
 mod chunks;
 mod dependencies;
 mod files;
+mod graph;
 mod observations;
 mod references;
 mod structure;
@@ -24,6 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // Re-export types
 pub use calibrations::{CalibrationData, CalibrationRecord};
+pub use graph::{GraphFile, GraphRefCount, RepoGraphData};
 
 /// Global initializer for sqlite-vec extension.
 ///

@@ -1,9 +1,9 @@
 //! Test suite for the MCP server, split by tool.
 //!
 //! Sub-modules group tests by the entry point they exercise:
-//! `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`,
-//! the structural tools (`semantiq_calls`, `semantiq_hierarchy`, `semantiq_dead_code`),
-//! plus `ServerHandler` metadata and broader edge cases.
+//! `semantiq_search`, `semantiq_repo_map`, `semantiq_find_refs`, `semantiq_deps`,
+//! `semantiq_explain`, the structural tools (`semantiq_calls`, `semantiq_hierarchy`,
+//! `semantiq_dead_code`), plus `ServerHandler` metadata and broader edge cases.
 
 use super::{DepsParams, ExplainParams, FindRefsParams, SearchParams, SemantiqServer};
 use rmcp::handler::server::wrapper::Parameters;
@@ -134,6 +134,7 @@ mod deps;
 mod edge_cases;
 mod explain;
 mod find_refs;
+mod repo_map;
 mod search;
 mod server_handler;
 mod structure;

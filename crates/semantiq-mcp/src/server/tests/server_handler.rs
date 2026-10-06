@@ -25,6 +25,7 @@ fn test_get_info_has_instructions() {
     assert!(info.instructions.is_some());
     let instructions = info.instructions.unwrap();
     assert!(instructions.contains("semantiq_search"));
+    assert!(instructions.contains("semantiq_repo_map"));
     assert!(instructions.contains("semantiq_find_refs"));
     assert!(instructions.contains("semantiq_deps"));
     assert!(instructions.contains("semantiq_explain"));
@@ -53,7 +54,7 @@ fn test_get_info_enables_tools() {
 fn test_tools_are_annotated_read_only() {
     let tools = super::SemantiqServer::tool_router().list_all();
 
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 9);
     for tool in &tools {
         let annotations = tool
             .annotations

@@ -252,6 +252,10 @@ impl SemantiqServer {
         self.run_tool("Search", params, search_output).await
     }
 
+    pub async fn repo_map(&self, params: RepoMapParams) -> Result<RepoMapOutput, String> {
+        self.run_tool("Repo map", params, repo_map_output).await
+    }
+
     pub async fn find_refs(&self, params: FindRefsParams) -> Result<FindRefsOutput, String> {
         self.run_tool("Find references", params, find_refs_output)
             .await
@@ -299,6 +303,20 @@ impl SemantiqServer {
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.search(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+
+    #[tool(
+        name = "semantiq_repo_map",
+        description = "Get a compact map of the repository: its most important files and, for each, the signatures of its key symbols, ranked by how much the rest of the code uses them (PageRank over references and imports). Call it first when starting a task in an unfamiliar repository, before searching or reading files. Pass focus (files, directories or symbol names) to center the map on the code a task touches, and max_tokens to size it.",
+        output_schema = schema_for_output::<RepoMapOutput>(),
+        annotations(title = "Repository map", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_repo_map(
+        &self,
+        Parameters(params): Parameters<RepoMapParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.repo_map(params).await?;
         structured_result(&output, self.with_indexing_notice(output.render()))
     }
 
@@ -405,7 +423,9 @@ impl ServerHandler for SemantiqServer {
     fn get_info(&self) -> ServerConfig {
         let mut instructions = String::from(
             "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
-             semantic code understanding. Use semantiq_search for natural-language or fuzzy \
+             semantic code understanding. On an unfamiliar repository, start with \
+             semantiq_repo_map for a ranked overview of its key files and symbols (pass \
+             focus to center it on the files of the task). Use semantiq_search for natural-language or fuzzy \
              code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
              file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
              and documentation. semantiq_calls answers who calls a function and what it calls, \

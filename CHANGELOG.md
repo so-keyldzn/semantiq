@@ -74,6 +74,14 @@ All notable changes to Semantiq will be documented in this file.
   `index` log a warning at startup, `semantiq stats` shows an `Embeddings`
   section, `GET /stats` reports `embedding_model`, `semantic_search` and
   `semantic_search_unavailable_reason`, and the MCP instructions say so.
+- **Repository map**: new MCP tool `semantiq_repo_map`, CLI `semantiq map` and
+  HTTP `POST /map`. Ranks files with PageRank over AST references and resolved
+  imports (personalized by an optional `focus` list of files, directories or
+  symbols), then renders the signatures and first doc line of the most used
+  symbols, grouped by directory, within `max_tokens` (default 1500, 256-8000,
+  chars / 4). Deterministic, no schema change; the unfocused ranking is cached
+  until the index changes. Server instructions now suggest calling it first on
+  an unfamiliar repository.
 - MCP tool responses start with a `⏳ Initial indexing in progress` notice
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 

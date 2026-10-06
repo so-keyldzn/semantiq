@@ -224,6 +224,23 @@ semantiq impact <SYMBOL> [--max-depth 2] [--file <FILE>] [--limit 200]
 All query commands accept `--json`, `--no-refresh`, `--database <FILE>` and
 `--project <DIR>`.
 
+### `semantiq map [OPTIONS]`
+
+Print a ranked map of the repository: its most important files and the
+signatures of their key symbols, within a token budget.
+
+```bash
+semantiq map
+semantiq map --max-tokens 800
+semantiq map --focus src/auth/login.rs --focus SessionStore
+semantiq map --path-prefix crates/core/
+```
+
+Options:
+- `--max-tokens N` - Token budget, estimated as characters / 4 (default: 1500, range 256-8000)
+- `--focus LIST` - Files, directories or symbol names to center the map on (repeatable or comma-separated)
+- `--path-prefix P` - Only list files under this path
+
 ### `semantiq stats`
 
 Display index statistics.
@@ -260,6 +277,24 @@ Semantic + lexical code search combining 4 strategies.
 | `symbol_kind` | string | - | Filter by symbol type (CSV) |
 
 **Symbol kinds:** `function`, `method`, `class`, `struct`, `enum`, `interface`, `trait`, `module`, `variable`, `constant`, `type`
+
+### `semantiq_repo_map`
+
+Compact overview of the repository, meant to be called first on an unfamiliar
+codebase. Files are ranked with PageRank over the reference graph (AST
+references and resolved imports, as in Aider's repo map), then each listed file
+shows the signatures and first doc line of its most used symbols, as many as fit
+in the token budget. No LLM call; the same index always gives the same map, and
+the unfocused ranking is cached until the index changes.
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_tokens` | number | 1500 | Token budget (256-8000, estimated as chars / 4) |
+| `focus` | string[] | - | Files, directories or symbol names to center the map on (personalized PageRank) |
+| `path_prefix` | string | - | Only list files under this path |
+
+Also available as `semantiq map` and `POST /map` in HTTP mode.
 
 ### `semantiq_find_refs`
 

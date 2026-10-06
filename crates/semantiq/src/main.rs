@@ -18,8 +18,8 @@ struct Cli {
     verbose: bool,
 
     /// JSON output: structured results on stdout for query commands (search,
-    /// refs, deps, explain, impact, calls, hierarchy, dead-code); JSON logs for
-    /// the others (default for 'serve')
+    /// refs, deps, explain, impact, map, calls, hierarchy, dead-code); JSON logs
+    /// for the others (default for 'serve')
     #[arg(long, global = true)]
     json: bool,
 
@@ -191,6 +191,25 @@ enum Commands {
         limit: Option<usize>,
     },
 
+    /// Print a ranked map of the repository: key files and their main symbols
+    Map {
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Token budget for the map (256-8000, estimated as chars/4)
+        #[arg(long, default_value_t = semantiq_retrieval::DEFAULT_REPO_MAP_TOKENS)]
+        max_tokens: usize,
+
+        /// Files, directories or symbol names to center the map on
+        /// (repeatable or comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        focus: Vec<String>,
+
+        /// Only list files under this path prefix
+        #[arg(long)]
+        path_prefix: Option<String>,
+    },
+
     /// Show who calls a function or method, and what it calls
     Calls {
         /// Function or method name
@@ -299,6 +318,7 @@ async fn main() -> Result<()> {
             | Commands::Deps { .. }
             | Commands::Explain { .. }
             | Commands::Impact { .. }
+            | Commands::Map { .. }
             | Commands::Calls { .. }
             | Commands::Hierarchy { .. }
             | Commands::DeadCode { .. }
@@ -416,6 +436,12 @@ async fn main() -> Result<()> {
             },
             cli.json,
         ),
+        Commands::Map {
+            index,
+            max_tokens,
+            focus,
+            path_prefix,
+        } => query::map(&index, max_tokens, focus, path_prefix, cli.json),
         Commands::Calls {
             symbol,
             index,

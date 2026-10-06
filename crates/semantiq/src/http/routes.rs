@@ -9,6 +9,7 @@ use axum::{
 use semantiq_mcp::SemantiqServer;
 use semantiq_mcp::server::{
     CallsOutput, CallsParams, DeadCodeOutput, DeadCodeParams, HierarchyOutput, HierarchyParams,
+    RepoMapParams,
 };
 use semantiq_retrieval::{CallDirection, SearchOptions};
 use std::sync::Arc;
@@ -17,8 +18,8 @@ use tracing::{debug, error};
 
 use super::types::{
     Dependency, DepsRequest, DepsResponse, ErrorResponse, ExplainRequest, ExplainResponse,
-    FindRefsRequest, FindRefsResponse, HealthResponse, Reference, SearchMetadata, SearchRequest,
-    SearchResponse, SearchResult, StatsResponse, SymbolDefinition,
+    FindRefsRequest, FindRefsResponse, HealthResponse, MapRequest, MapResponse, Reference,
+    SearchMetadata, SearchRequest, SearchResponse, SearchResult, StatsResponse, SymbolDefinition,
 };
 
 type AppState = Arc<SemantiqServer>;
@@ -29,6 +30,7 @@ pub(crate) fn create_router(server: AppState) -> Router {
         .route("/health", get(health))
         .route("/stats", get(stats))
         .route("/search", post(search))
+        .route("/map", post(map))
         .route("/find-refs", post(find_refs))
         .route("/deps", post(deps))
         .route("/explain", post(explain))
@@ -179,6 +181,64 @@ async fn search(
             ))
         }
     }
+}
+
+// ============================================
+// Repo map
+// ============================================
+
+async fn map(
+    State(server): State<AppState>,
+    Json(req): Json<MapRequest>,
+) -> Result<Json<MapResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let start = Instant::now();
+
+    debug!(max_tokens = ?req.max_tokens, focus = ?req.focus, "HTTP map request");
+
+    let output = server
+        .repo_map(RepoMapParams {
+            max_tokens: req.max_tokens,
+            focus: req.focus,
+            path_prefix: req.path_prefix,
+        })
+        .await
+        .map_err(|e| {
+            // Validation errors are user-facing; internal ones are already opaque.
+            let internal = e.contains("internal error");
+            (
+                if internal {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                Json(ErrorResponse {
+                    error: e,
+                    code: if internal {
+                        "MAP_ERROR"
+                    } else {
+                        "INVALID_MAP_REQUEST"
+                    }
+                    .to_string(),
+                }),
+            )
+        })?;
+
+    let details = serde_json::to_value(&output).map_err(|e| {
+        error!("Failed to serialize repo map: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Repo map failed".to_string(),
+                code: "MAP_ERROR".to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(MapResponse {
+        map: output.render(),
+        details,
+        search_time_ms: start.elapsed().as_millis() as u64,
+    }))
 }
 
 // ============================================

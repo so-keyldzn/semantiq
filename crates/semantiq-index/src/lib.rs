@@ -14,4 +14,5 @@ pub use schema::{
     TypeRelationRecord, UnreferencedSymbol,
 };
 pub use store::{CalibrationData, CalibrationRecord, IndexStats, IndexStore};
+pub use store::{GraphFile, GraphRefCount, RepoGraphData};
 pub use watcher::FileWatcher;
