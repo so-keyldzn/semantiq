@@ -259,7 +259,7 @@ impl IndexStore {
         match result {
             Ok(()) => {
                 conn.execute("COMMIT", [])?;
-                info!("Parser version changed - index cleared for full reindex");
+                info!("Parser version or embedding model changed - index cleared for full reindex");
                 Ok(true)
             }
             Err(e) => {

@@ -84,6 +84,8 @@ fn build_index() -> Arc<IndexStore> {
             if let Ok(chunks) = chunk_extractor.extract(&tree, &content, language) {
                 store.insert_chunks(file_id, &chunks).ok();
                 let stored = store.get_chunks_by_file(file_id).unwrap_or_default();
+                // Documents use `embed` (no prefix); queries go through
+                // `RetrievalEngine::search` -> `embed_query`.
                 for c in stored {
                     if let Ok(emb) = model.embed(&c.content) {
                         let _ = store.update_chunk_embedding(c.id, &emb);

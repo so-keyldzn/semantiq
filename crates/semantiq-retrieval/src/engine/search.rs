@@ -176,8 +176,8 @@ impl RetrievalEngine {
             None => return Ok(Vec::new()),
         };
 
-        // Generate query embedding
-        let query_embedding = model.embed(query_text)?;
+        // Generate query embedding (query-side encoding, see EmbeddingModel::embed_query)
+        let query_embedding = model.embed_query(query_text)?;
 
         // Use sqlite-vec's efficient vector search
         let similar_chunks = self

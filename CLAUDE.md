@@ -78,12 +78,17 @@ crates/
 ### Versioning That Triggers Reindex
 
 - **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
-- **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. No automatic migration — version stored in `metadata` table.
+- **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. Incremental steps in `migrate_schema()` (run before `init_schema()`), version stored in `metadata` table.
+- **Embedding model** (`EMBEDDING_MODEL_ID` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `EMBEDDING_MODEL_ID` whenever the model or its export changes.
 
 ### Embedding Model
 
 - **Feature-gated**: The `onnx` feature on `semantiq-embeddings` is **off by default**. Without it, `StubEmbeddingModel` returns zero vectors — semantic search runs but produces meaningless results.
-- Model: `all-MiniLM-L6-v2` (384-dim, ~90MB), downloaded from HuggingFace on first run to `dirs::data_dir()/semantiq/models/`.
+- Model: `nomic-ai/CodeRankEmbed`, community INT8 ONNX export (768-dim, ~139MB), downloaded on first run to `dirs::data_dir()/semantiq/models/` (`coderankembed-int8.onnx`, `coderankembed-tokenizer.json`). URLs are pinned to a commit and verified against hard-coded SHA-256 digests (`MODEL_SHA256` / `TOKENIZER_SHA256` in `model.rs`); a mismatch triggers a re-download, and a mismatching download is rejected.
+- Single dimension constant: `semantiq_embeddings::EMBEDDING_DIMENSION` (re-exported by `semantiq_index::schema`). Never hard-code it.
+- Query vs document: use `embed_query()` for search queries (prepends `"Represent this query for searching relevant code: "`), `embed()` / `embed_batch()` for code chunks (no prefix).
+- Pooling: CLS (first token) + L2 normalization, configurable per model via `EmbeddingConfig::pooling` (`Pooling::Cls` | `Pooling::Mean`). Truncation (512 tokens) is done by the tokenizer so `[SEP]` is preserved. `token_type_ids` is only sent if the graph declares it.
+- `embed_batch` runs forward passes of at most `batch_size` (32) texts. The INT8 export quantizes activations per batch, so a chunk's vector varies slightly with its batch neighbours (cos ≈ 0.97); accepted for ~1.7x faster indexing.
 - ONNX session wrapped in `Mutex<Session>` (not `Send`). Thread count: `SEMANTIQ_ONNX_THREADS` env var (default: `min(cpu_count, 8)`).
 - Adaptive thresholds: After 500+ search observations, `semantiq calibrate` computes per-language distance thresholds. Fallback cascade: language-specific → global → hardcoded defaults (`max_distance=1.2`, `min_similarity=0.3`).
 
