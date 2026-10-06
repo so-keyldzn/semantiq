@@ -16,7 +16,25 @@ All notable changes to Semantiq will be documented in this file.
 - HTTP API binds to `127.0.0.1` by default; use `--http-host` to expose it.
 - README: indexing before `serve` is optional, `serve` indexes on startup (#17).
 
+- **Real embeddings by default**: the `onnx` feature is now a default feature
+  of the `semantiq` binary, so `cargo install` / `cargo build` get
+  CodeRankEmbed instead of the zero-vector stub. Opt out with
+  `--no-default-features` (used for the `x86_64-apple-darwin` release, which
+  `ort` cannot target). CI and release workflows drop the redundant
+  `--features onnx`.
+- The embedding model id written to the index is resolved at runtime
+  (`embedding_model_id()` replaces the `EMBEDDING_MODEL_ID` const), so
+  switching between the stub and the real model always rebuilds the vectors.
+
 ### Added
+- `SEMANTIQ_EMBEDDINGS=stub` forces the stub model (no download, semantic
+  search off); `SEMANTIQ_EMBEDDINGS=onnx` forces the real one. The test suite
+  uses the stub through a dev-only `test-stub` feature and never downloads the
+  model.
+- When semantic search is unavailable (stub build or override), `serve` and
+  `index` log a warning at startup, `semantiq stats` shows an `Embeddings`
+  section, `GET /stats` reports `embedding_model`, `semantic_search` and
+  `semantic_search_unavailable_reason`, and the MCP instructions say so.
 - MCP tool responses start with a `⏳ Initial indexing in progress` notice
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 

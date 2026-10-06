@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo build                          # Build (debug)
 cargo build --release                # Build (release, with LTO)
-cargo build --features semantiq-embeddings/onnx  # Build with real ONNX embeddings
-cargo test                           # Run all tests
+cargo build --no-default-features    # Stub embeddings, no ONNX Runtime (macOS Intel)
+cargo test                           # Run all tests (stub embeddings, never downloads the model)
 cargo test -p semantiq-parser        # Tests for one crate
 cargo test -p semantiq-parser test_language_from_extension  # Single test
 cargo check                          # Type-check without building
@@ -79,11 +79,13 @@ crates/
 
 - **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
 - **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. Incremental steps in `migrate_schema()` (run before `init_schema()`), version stored in `metadata` table.
-- **Embedding model** (`EMBEDDING_MODEL_ID` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `EMBEDDING_MODEL_ID` whenever the model or its export changes.
+- **Embedding model** (`embedding_model_id()` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`; the id is resolved at runtime, `"stub"` whenever the stub is selected): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `CODERANKEMBED_MODEL_ID` whenever the model or its export changes.
 
 ### Embedding Model
 
-- **Feature-gated**: The `onnx` feature on `semantiq-embeddings` is **off by default**. Without it, `StubEmbeddingModel` returns zero vectors — semantic search runs but produces meaningless results.
+- **Feature-gated, on by default**: the `semantiq` binary has `default = ["onnx"]` (forwarding `semantiq-embeddings/onnx`); library crates keep `default = []`. `--no-default-features` builds the `StubEmbeddingModel` (zero vectors, semantic search skipped) — used for `x86_64-apple-darwin`, where `ort` has no prebuilt runtime.
+- **Backend selection** (`selected_backend()` in `model.rs`): no `onnx` feature → stub; else `SEMANTIQ_EMBEDDINGS=stub|onnx` overrides; else the `test-stub` feature → stub; else ONNX. Every workspace crate enables `test-stub` in its dev-dependencies, so tests never download the model (`--all-features` turns it on too). Real-model tests: `SEMANTIQ_EMBEDDINGS=onnx cargo test -p semantiq-retrieval --features onnx --test intent_queries`.
+- **Stub warning**: `semantic_search_unavailable_reason()` drives the startup WARN (`serve`, `index`), the `Embeddings` section of `semantiq stats`, `semantic_search*` fields of `GET /stats`, and a note appended to the MCP instructions.
 - Model: `nomic-ai/CodeRankEmbed`, community INT8 ONNX export (768-dim, ~139MB), downloaded on first run to `dirs::data_dir()/semantiq/models/` (`coderankembed-int8.onnx`, `coderankembed-tokenizer.json`). URLs are pinned to a commit and verified against hard-coded SHA-256 digests (`MODEL_SHA256` / `TOKENIZER_SHA256` in `model.rs`); a mismatch triggers a re-download, and a mismatching download is rejected.
 - Single dimension constant: `semantiq_embeddings::EMBEDDING_DIMENSION` (re-exported by `semantiq_index::schema`). Never hard-code it.
 - Query vs document: use `embed_query()` for search queries (prepends `"Represent this query for searching relevant code: "`), `embed()` / `embed_batch()` for code chunks (no prefix).
@@ -108,6 +110,7 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 | Variable | Default | Description |
 |---|---|---|
 | `SEMANTIQ_ONNX_THREADS` | `min(cpu_count, 8)` | ONNX intra-op parallelism |
+| `SEMANTIQ_EMBEDDINGS` | unset | `stub` forces zero-vector embeddings (no download, semantic search off); `onnx` forces the real model in a `test-stub` build |
 | `SEMANTIQ_UPDATE_CHECK` | `true` | `"0"` or `"false"` to disable version check |
 | `SEMANTIQ_UPDATE_CACHE_HOURS` | `24` | Hours to cache GitHub version check |
 | `RUST_LOG` | `info,ort=warn` | Tracing filter (`--verbose` sets `debug`) |

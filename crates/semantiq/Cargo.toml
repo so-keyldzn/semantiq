@@ -16,7 +16,10 @@ name = "semantiq"
 path = "src/main.rs"
 
 [features]
-default = []
+# Real embeddings (CodeRankEmbed via ONNX Runtime) are on by default. Opt out
+# with `--no-default-features` (stub model, semantic search disabled), e.g. on
+# x86_64-apple-darwin where `ort` ships no prebuilt runtime.
+default = ["onnx"]
 onnx = ["semantiq-embeddings/onnx"]
 
 [dependencies]
@@ -40,5 +43,7 @@ tower.workspace = true
 tower-http.workspace = true
 
 [dev-dependencies]
+# Tests never download the embedding model (see the `test-stub` feature).
+semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
 tempfile.workspace = true
 http-body-util.workspace = true

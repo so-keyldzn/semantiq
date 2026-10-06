@@ -21,4 +21,6 @@ notify.workspace = true
 ignore.workspace = true
 
 [dev-dependencies]
+# Tests never download the embedding model (see the `test-stub` feature).
+semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
 tempfile.workspace = true

@@ -541,12 +541,75 @@ pub mod onnx {
     }
 }
 
-/// Create an embedding model based on available features
+/// Environment variable overriding the embedding backend: `stub` forces the
+/// zero-vector `StubEmbeddingModel` (no model download, semantic search off),
+/// `onnx` forces the real model even in a `test-stub` build.
+pub const EMBEDDINGS_ENV_VAR: &str = "SEMANTIQ_EMBEDDINGS";
+
+/// Why this process uses the stub model instead of the ONNX one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StubReason {
+    /// Built without the `onnx` feature (`--no-default-features`, macOS Intel).
+    NoOnnxFeature,
+    /// `SEMANTIQ_EMBEDDINGS=stub`.
+    EnvOverride,
+    /// Built with the `test-stub` feature (enabled by the workspace's tests).
+    TestBuild,
+}
+
+impl StubReason {
+    /// Human-readable explanation, used in logs, `semantiq stats` and MCP.
+    pub fn describe(self) -> &'static str {
+        match self {
+            StubReason::NoOnnxFeature => {
+                "this binary was built without the `onnx` feature (e.g. macOS Intel builds)"
+            }
+            StubReason::EnvOverride => "SEMANTIQ_EMBEDDINGS=stub is set",
+            StubReason::TestBuild => "this is a test build (`test-stub` feature)",
+        }
+    }
+}
+
+/// Embedding backend selected for this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingBackend {
+    Onnx,
+    Stub(StubReason),
+}
+
+/// Resolve the backend from the build features and `SEMANTIQ_EMBEDDINGS`.
+pub fn selected_backend() -> EmbeddingBackend {
+    let env = std::env::var(EMBEDDINGS_ENV_VAR).ok();
+    resolve_backend(
+        env.as_deref(),
+        cfg!(feature = "onnx"),
+        cfg!(feature = "test-stub"),
+    )
+}
+
+/// Pure selection logic behind [`selected_backend`]. Unknown values of the
+/// environment variable are ignored.
+fn resolve_backend(env: Option<&str>, onnx_built: bool, test_stub: bool) -> EmbeddingBackend {
+    if !onnx_built {
+        return EmbeddingBackend::Stub(StubReason::NoOnnxFeature);
+    }
+    match env.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("stub") => EmbeddingBackend::Stub(StubReason::EnvOverride),
+        Some("onnx") => EmbeddingBackend::Onnx,
+        _ if test_stub => EmbeddingBackend::Stub(StubReason::TestBuild),
+        _ => EmbeddingBackend::Onnx,
+    }
+}
+
+/// Create the embedding model selected by [`selected_backend`].
+///
+/// With the ONNX backend the model is downloaded on first use (~139 MB).
+/// The stub backend never touches the network.
 pub fn create_embedding_model(
     #[allow(unused_variables)] config: Option<EmbeddingConfig>,
 ) -> Result<Box<dyn EmbeddingModel>> {
     #[cfg(feature = "onnx")]
-    {
+    if selected_backend() == EmbeddingBackend::Onnx {
         // Download models if needed
         let config = match config {
             Some(c) => c,
@@ -570,6 +633,39 @@ pub fn create_embedding_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_backend_without_onnx_is_always_stub() {
+        for env in [None, Some("onnx"), Some("stub")] {
+            for test_stub in [false, true] {
+                assert_eq!(
+                    resolve_backend(env, false, test_stub),
+                    EmbeddingBackend::Stub(StubReason::NoOnnxFeature)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_backend_env_override() {
+        assert_eq!(resolve_backend(None, true, false), EmbeddingBackend::Onnx);
+        assert_eq!(
+            resolve_backend(Some(" STUB "), true, false),
+            EmbeddingBackend::Stub(StubReason::EnvOverride)
+        );
+        assert_eq!(
+            resolve_backend(None, true, true),
+            EmbeddingBackend::Stub(StubReason::TestBuild)
+        );
+        assert_eq!(
+            resolve_backend(Some("onnx"), true, true),
+            EmbeddingBackend::Onnx
+        );
+        assert_eq!(
+            resolve_backend(Some("bogus"), true, false),
+            EmbeddingBackend::Onnx
+        );
+    }
 
     #[test]
     fn test_stub_model() {
