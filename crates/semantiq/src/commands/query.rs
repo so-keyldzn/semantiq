@@ -384,8 +384,13 @@ fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
         let rel_path = to_relative_string(path, root);
         vanished.remove(&rel_path);
 
-        // The indexer never stores these: they cannot make the index stale.
+        // The indexer never stores these: they cannot make the index stale,
+        // unless an older version stored one (it must then be removed).
         if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
+            if store.get_file_by_path(&rel_path)?.is_some() {
+                tracing::debug!("Index stale: {} is no longer indexable", rel_path);
+                return Ok(true);
+            }
             continue;
         }
         let Ok(content) = fs::read_to_string(path) else {

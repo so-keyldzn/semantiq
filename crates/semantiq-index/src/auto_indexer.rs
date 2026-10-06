@@ -92,6 +92,18 @@ impl AutoIndexer {
             let rel_path = crate::paths::to_relative_string(path, &self.project_root);
             seen_paths.insert(rel_path.clone());
 
+            // Files above their size limit are never indexed. Drop a row left
+            // by an older version or by a file that grew past the limit:
+            // the hash check below would otherwise keep it forever.
+            if is_file_too_large(path) {
+                if self.store.get_file_by_path(&rel_path)?.is_some() {
+                    self.store.delete_file(&rel_path)?;
+                    debug!("Removed oversized file from index: {}", rel_path);
+                    result.removed += 1;
+                }
+                continue;
+            }
+
             // Read file content to check if needs reindex
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
@@ -230,6 +242,10 @@ impl AutoIndexer {
         // absolute `path` since it needs the on-disk metadata.
         if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
             debug!("Skipping excluded path: {}", rel_path);
+            // A file that grew past its size limit must not keep its old rows.
+            if self.store.get_file_by_path(&rel_path)?.is_some() {
+                self.store.delete_file(&rel_path)?;
+            }
             return Ok(false);
         }
 

@@ -3,7 +3,9 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use semantiq_embeddings::create_embedding_model;
-use semantiq_index::{IndexStore, MAX_FILE_SIZE, paths::to_relative_string, should_exclude_entry};
+use semantiq_index::{
+    IndexStore, exceeds_indexed_size, paths::to_relative_string, should_exclude_entry,
+};
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
     StructureExtractor, SymbolExtractor, resolve_local_import,
@@ -152,6 +154,18 @@ fn index_one_file(
     language: Language,
     force: bool,
 ) -> Result<Option<FileStats>> {
+    // Skip files above their size limit (lower for JSON/YAML/TOML data files)
+    // before reading them, and drop any row an older version left for them.
+    if let Ok(meta) = fs::metadata(path)
+        && exceeds_indexed_size(path, meta.len())
+    {
+        debug!("Skipping {} (too large: {} bytes)", rel_path, meta.len());
+        if store.get_file_by_path(rel_path)?.is_some() {
+            store.delete_file(rel_path)?;
+        }
+        return Ok(None);
+    }
+
     // Read file content
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -176,12 +190,6 @@ fn index_one_file(
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0i64);
-
-    // Skip large files
-    if size > MAX_FILE_SIZE as i64 {
-        debug!("Skipping {} (too large: {} bytes)", rel_path, size);
-        return Ok(None);
-    }
 
     // Insert file record
     let file_id = store.insert_file(
