@@ -12,7 +12,7 @@ async fn test_find_refs_returns_formatted_output() {
     index_test_file(&server.store, "test.rs", content, "rust");
 
     let result = server
-        .semantiq_find_refs("my_symbol".to_string(), Some(10))
+        .call_find_refs("my_symbol".to_string(), Some(10))
         .await;
 
     assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
@@ -31,7 +31,7 @@ async fn test_find_refs_with_definitions() {
     index_test_file(&server.store, "lib.rs", content, "rust");
 
     let result = server
-        .semantiq_find_refs("calculate".to_string(), Some(50))
+        .call_find_refs("calculate".to_string(), Some(50))
         .await;
 
     assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
@@ -43,9 +43,7 @@ async fn test_find_refs_with_definitions() {
 async fn test_find_refs_default_limit() {
     let (server, _temp) = create_test_server();
 
-    let result = server
-        .semantiq_find_refs("nonexistent".to_string(), None)
-        .await;
+    let result = server.call_find_refs("nonexistent".to_string(), None).await;
 
     assert!(result.is_ok());
 }

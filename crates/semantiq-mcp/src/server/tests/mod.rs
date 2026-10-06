@@ -4,7 +4,9 @@
 //! `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`,
 //! plus `ServerHandler` metadata and broader edge cases.
 
-use super::SemantiqServer;
+use super::{DepsParams, ExplainParams, FindRefsParams, SearchParams, SemantiqServer};
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
 use semantiq_index::IndexStore;
 use semantiq_retrieval::RetrievalEngine;
 use std::sync::Arc;
@@ -55,6 +57,65 @@ pub(super) fn index_test_file(
     }
 
     file_id
+}
+
+/// Text content of a successful tool call.
+fn text_of(result: Result<CallToolResult, String>) -> Result<String, String> {
+    let result = result?;
+    assert_eq!(result.is_error, Some(false));
+    assert!(
+        result.structured_content.is_some(),
+        "tool result must carry structuredContent"
+    );
+    Ok(result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+        .collect())
+}
+
+/// Positional-argument wrappers around the MCP tools, returning their text output.
+impl SemantiqServer {
+    async fn call_search(
+        &self,
+        query: String,
+        limit: Option<usize>,
+        min_score: Option<f32>,
+        file_type: Option<String>,
+        symbol_kind: Option<String>,
+    ) -> Result<String, String> {
+        text_of(
+            self.semantiq_search(Parameters(SearchParams {
+                query,
+                limit,
+                min_score,
+                file_type,
+                symbol_kind,
+            }))
+            .await,
+        )
+    }
+
+    async fn call_find_refs(&self, symbol: String, limit: Option<usize>) -> Result<String, String> {
+        text_of(
+            self.semantiq_find_refs(Parameters(FindRefsParams { symbol, limit }))
+                .await,
+        )
+    }
+
+    async fn call_deps(&self, file_path: String) -> Result<String, String> {
+        text_of(
+            self.semantiq_deps(Parameters(DepsParams { file_path }))
+                .await,
+        )
+    }
+
+    async fn call_explain(&self, symbol: String) -> Result<String, String> {
+        text_of(
+            self.semantiq_explain(Parameters(ExplainParams { symbol }))
+                .await,
+        )
+    }
 }
 
 mod deps;

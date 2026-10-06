@@ -6,7 +6,7 @@ async fn test_search_empty_query_returns_error() {
     let (server, _temp) = create_test_server();
 
     let result = server
-        .semantiq_search(String::new(), None, None, None, None)
+        .call_search(String::new(), None, None, None, None)
         .await;
 
     assert!(result.is_err());
@@ -18,7 +18,7 @@ async fn test_search_whitespace_only_query_returns_error() {
     let (server, _temp) = create_test_server();
 
     let result = server
-        .semantiq_search("   ".to_string(), None, None, None, None)
+        .call_search("   ".to_string(), None, None, None, None)
         .await;
 
     assert!(result.is_err());
@@ -30,9 +30,7 @@ async fn test_search_query_too_long_returns_error() {
     let (server, _temp) = create_test_server();
 
     let long_query = "a".repeat(501);
-    let result = server
-        .semantiq_search(long_query, None, None, None, None)
-        .await;
+    let result = server.call_search(long_query, None, None, None, None).await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("maximum length"));
@@ -43,9 +41,7 @@ async fn test_search_query_at_max_length_succeeds() {
     let (server, _temp) = create_test_server();
 
     let max_query = "a".repeat(500);
-    let result = server
-        .semantiq_search(max_query, None, None, None, None)
-        .await;
+    let result = server.call_search(max_query, None, None, None, None).await;
 
     assert!(result.is_ok());
 }
@@ -62,7 +58,7 @@ async fn test_search_returns_results_format() {
     );
 
     let result = server
-        .semantiq_search("hello".to_string(), Some(10), None, None, None)
+        .call_search("hello".to_string(), Some(10), None, None, None)
         .await;
 
     assert!(result.is_ok());
@@ -84,7 +80,7 @@ async fn test_search_with_file_type_filter() {
     );
 
     let result = server
-        .semantiq_search(
+        .call_search(
             "func".to_string(),
             Some(10),
             None,
@@ -103,7 +99,7 @@ async fn test_search_with_min_score_filter() {
     index_test_file(&server.store, "test.rs", "fn exact_match() {}", "rust");
 
     let result = server
-        .semantiq_search("exact_match".to_string(), Some(10), Some(0.9), None, None)
+        .call_search("exact_match".to_string(), Some(10), Some(0.9), None, None)
         .await;
 
     assert!(result.is_ok());
@@ -121,7 +117,7 @@ async fn test_search_with_symbol_kind_filter() {
     );
 
     let result = server
-        .semantiq_search(
+        .call_search(
             "my".to_string(),
             Some(10),
             None,
