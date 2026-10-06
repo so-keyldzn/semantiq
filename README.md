@@ -8,6 +8,7 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 
 - **3 Search Strategies** (fused in `semantiq_search`): Semantic (embeddings) + Symbol (FTS5) + Lexical (ripgrep)
 - **Dependency Graph Analysis**: separate `semantiq_deps` tool (imports + dependents)
+- **Structural Intelligence**: real references (`semantiq_find_refs`), change impact (`semantiq_impact`), call graph (`semantiq_calls`), type hierarchy (`semantiq_hierarchy`) and dead code (`semantiq_dead_code`), all from the syntax tree
 - **19 Languages**: Full tree-sitter parsing support
 - **Auto-Indexing**: Real-time file watching, no manual reindex needed
 - **Smart Query Expansion**: Automatic case conversion (`camelCase` ↔ `snake_case`)
@@ -87,6 +88,10 @@ semantiq refs should_exclude_path                   # definitions + usages (AST)
 semantiq impact should_exclude_path                 # what breaks + tests to run
 semantiq explain RetrievalEngine                    # signature, docs, usages
 semantiq deps src/server.rs --json                  # imports / imported by
+semantiq calls index_file --direction callers       # who calls it (AST call graph)
+semantiq hierarchy EmbeddingModel                   # supertypes + implementors
+semantiq dead-code --path-prefix src/               # functions/types nothing uses
+semantiq map --focus src/auth/                      # ranked repository overview
 ```
 
 The **`semantiq` skill** (`skills/semantiq/SKILL.md`, installed by
@@ -102,8 +107,8 @@ reindex files changed since the last run before answering (`--no-refresh`
 skips that check). Without an index they exit with code 1 and suggest
 `semantiq index`; usage errors exit with 2.
 
-**Latency.** `refs`, `deps`, `explain` and `impact` don't load the embedding
-model and answer in ~20 ms on this repository. `search` loads the ONNX model on
+**Latency.** `refs`, `deps`, `explain`, `impact`, `calls`, `hierarchy`,
+`dead-code` and `map` don't load the embedding model and answer in ~20 ms on this repository. `search` loads the ONNX model on
 every call: ~0.75–1 s in total, of which ~0.4 s is the model checksum check
 and ~0.3 s the ONNX session, the query itself taking ~20 ms. That stays under
 a second, so there is no daemon; run `semantiq serve` (MCP) if you need
@@ -224,6 +229,17 @@ semantiq impact <SYMBOL> [--max-depth 2] [--file <FILE>] [--limit 200]
 All query commands accept `--json`, `--no-refresh`, `--database <FILE>` and
 `--project <DIR>`.
 
+### `semantiq calls | hierarchy | dead-code`
+
+The structural tools as commands (`semantiq_calls`, `semantiq_hierarchy`,
+`semantiq_dead_code`), with the same parameters:
+
+```bash
+semantiq calls <SYMBOL> [--direction callers|callees|both] [--max-depth 1] [--file <FILE>] [--limit 100]
+semantiq hierarchy <TYPE> [--max-depth 3] [--limit 200]
+semantiq dead-code [--path-prefix src/] [--language rust] [--include-public] [--limit 100]
+```
+
 ### `semantiq map [OPTIONS]`
 
 Print a ranked map of the repository: its most important files and the
@@ -332,6 +348,56 @@ Returns:
 - All definitions found
 - Signatures and documentation
 - Usage patterns and locations
+
+### `semantiq_impact`
+
+List what may break if a function, method or type changes: every place that
+uses it, then the users of those places, grouped by file, with the test files
+to run. Each site has a confidence (`same_file`, `imports`, `unique_name`,
+`name_only`) since matching is by name.
+
+**Parameters:** `symbol` (required), `file_path` (pick one of several
+definitions), `max_depth` (default 2, max 4), `limit` (default 200).
+
+### `semantiq_calls`
+
+Call graph of a function or method: who calls it (`callers`) and what it calls
+(`callees`), up to `max_depth` levels. Each edge names the enclosing caller;
+comments, strings and non-call mentions are ignored. Calls to names the project
+does not define are listed in `external_callees`.
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `symbol` | string | required | Function or method name |
+| `direction` | string | `both` | `callers`, `callees` or `both` |
+| `file_path` | string | - | Restrict to the definition in this file |
+| `max_depth` | number | 1 | Call levels to follow (max 3) |
+| `limit` | number | 100 | Maximum call edges (max 1000) |
+
+### `semantiq_hierarchy`
+
+Supertypes and subtypes / implementors of a class, interface or trait,
+transitively: Rust `impl Trait for Type` and supertraits, TS/JS, Python, Java,
+Kotlin, C#, C++, PHP, Ruby, Scala (not Go's implicit interfaces).
+
+**Parameters:** `symbol` (required), `max_depth` (default 3, max 5), `limit`
+(per direction, default 200).
+
+### `semantiq_dead_code`
+
+Functions, methods and types that nothing references outside their own
+definition. Entry points, tests, trait / interface members and (unless
+`include_public`) public symbols are excluded; each result has a confidence
+(`high`, `medium`, `low`) and the reasons. Matching is by name: confirm before
+deleting.
+
+**Parameters:** `path_prefix`, `language`, `include_public` (default false),
+`limit` (default 100, max 1000).
+
+`semantiq_calls`, `semantiq_hierarchy` and `semantiq_dead_code` are also
+available as `semantiq calls`, `semantiq hierarchy`, `semantiq dead-code` and,
+in HTTP mode, `POST /calls`, `POST /hierarchy`, `POST /dead-code`.
 
 ## Supported Languages
 

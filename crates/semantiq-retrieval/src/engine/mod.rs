@@ -4,7 +4,11 @@
 //! strategies (semantic, symbol, text) into a unified search interface.
 
 mod analysis;
+mod calls;
+mod dead_code;
+mod hierarchy;
 mod impact;
+mod resolution;
 mod search;
 mod threshold;
 
@@ -19,6 +23,18 @@ use tracing::{debug, warn};
 
 // Re-export types
 pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
+pub use calls::{
+    CallDirection, CallGraph, CallSite, DEFAULT_CALL_DEPTH, DEFAULT_CALL_EDGES, MAX_CALL_DEPTH,
+    MAX_CALL_EDGES,
+};
+pub use dead_code::{
+    DEFAULT_DEAD_CODE_LIMIT, DeadCodeConfidence, DeadCodeExclusions, DeadCodeOptions,
+    DeadCodeReport, DeadSymbol, MAX_DEAD_CODE_LIMIT,
+};
+pub use hierarchy::{
+    DEFAULT_HIERARCHY_DEPTH, DEFAULT_HIERARCHY_EDGES, MAX_HIERARCHY_DEPTH, MAX_HIERARCHY_EDGES,
+    TypeEdge, TypeHierarchy,
+};
 pub use impact::{
     DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, EnclosingSymbol, ImpactAnalysis, ImpactConfidence,
     ImpactDefinition, ImpactSite, MAX_IMPACT_DEPTH, MAX_IMPACT_SITES, is_test_location,
@@ -170,5 +186,7 @@ impl RetrievalEngine {
     }
 }
 
+#[cfg(test)]
+mod structure_tests;
 #[cfg(test)]
 mod tests;

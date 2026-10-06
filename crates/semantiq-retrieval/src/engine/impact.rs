@@ -111,7 +111,7 @@ pub fn is_test_location(file_path: &str, enclosing: Option<&str>) -> bool {
 }
 
 /// Last segment of an import path: `a::b::Foo`, `a.b.Foo`, `./a/Foo` → `Foo`.
-fn last_segment(path: &str) -> &str {
+pub(super) fn last_segment(path: &str) -> &str {
     path.rsplit(|c| [':', '.', '/', '\\'].contains(&c))
         .next()
         .unwrap_or(path)

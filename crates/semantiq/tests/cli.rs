@@ -174,13 +174,102 @@ fn queries_refresh_changed_files_unless_disabled() {
     assert!(!stderr(&output).contains("refreshed index"));
 }
 
+/// A project with a trait, an implementor and an unused private function.
+fn structural_project() -> TempDir {
+    let dir = indexed_project();
+    fs::write(
+        dir.path().join("src/shapes.rs"),
+        "pub trait Shape {\n    fn area(&self) -> f64;\n}\n\n\
+         pub struct Circle {\n    pub r: f64,\n}\n\n\
+         impl Shape for Circle {\n    fn area(&self) -> f64 {\n        self.r * self.r * 3.14\n    }\n}\n\n\
+         fn orphan() -> u32 {\n    7\n}\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn structural_commands_print_json() {
+    let project = structural_project();
+    let dir = project.path();
+
+    let callers = query_json(dir, &["calls", "helper", "--direction", "callers"]);
+    assert_eq!(callers["symbol"], "helper");
+    assert_eq!(callers["direction"], "callers");
+    assert_eq!(callers["definitions"][0]["file_path"], "src/util.rs");
+    let edges = callers["callers"].as_array().unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["caller"] == "compute" && e["file_path"] == "src/lib.rs"),
+        "{edges:?}"
+    );
+    assert!(callers["callees"].as_array().unwrap().is_empty());
+
+    let callees = query_json(dir, &["calls", "compute", "--direction", "callees"]);
+    let edges = callees["callees"].as_array().unwrap();
+    assert!(edges.iter().any(|e| e["callee"] == "helper"), "{edges:?}");
+
+    let hierarchy = query_json(dir, &["hierarchy", "Shape"]);
+    assert_eq!(hierarchy["symbol"], "Shape");
+    let subtypes = hierarchy["subtypes"].as_array().unwrap();
+    assert!(
+        subtypes
+            .iter()
+            .any(|r| r["sub_type"] == "Circle" && r["kind"] == "implements"),
+        "{subtypes:?}"
+    );
+
+    let dead = query_json(
+        dir,
+        &["dead-code", "--path-prefix", "src/", "--include-public"],
+    );
+    let names: Vec<&str> = dead["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"orphan"), "{names:?}");
+    // Called from main.rs: alive.
+    assert!(!names.contains(&"compute"), "{names:?}");
+    assert!(dead["excluded"]["entry_points"].as_u64().unwrap() >= 1);
+
+    // Markdown by default.
+    let output = semantiq(dir, &["calls", "helper"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("compute"), "{}", stdout(&output));
+}
+
+#[test]
+fn structural_commands_reject_bad_input() {
+    let project = indexed_project();
+    let dir = project.path();
+    assert_eq!(
+        semantiq(dir, &["calls", "helper", "--direction", "sideways"])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(semantiq(dir, &["hierarchy"]).status.code(), Some(2));
+    let output = semantiq(dir, &["dead-code", "--path-prefix", "../elsewhere"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("must not contain '..'"));
+}
+
 #[test]
 fn missing_index_is_an_error_suggesting_index() {
     let dir = tempfile::Builder::new()
         .prefix("semantiq-cli")
         .tempdir()
         .unwrap();
-    for args in [&["refs", "x"][..], &["search", "x"], &["deps", "a.rs"]] {
+    for args in [
+        &["refs", "x"][..],
+        &["search", "x"],
+        &["deps", "a.rs"],
+        &["calls", "x"],
+        &["dead-code"],
+    ] {
         let output = semantiq(dir.path(), args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         assert!(stderr(&output).contains("semantiq index"), "{args:?}");

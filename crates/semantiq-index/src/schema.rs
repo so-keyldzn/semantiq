@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
@@ -170,8 +170,12 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
     // filled by the full reindex that the PARSER_VERSION bump triggers, so
     // there is nothing to migrate here.
 
+    // v7 -> v8: `call_edges` and `type_relations` tables. Same as v7: created
+    // by `init_schema()` (IF NOT EXISTS) and filled by the full reindex that
+    // the PARSER_VERSION 11 bump triggers.
+
     // Future migrations go here:
-    // if stored < 8 && target >= 8 { ... }
+    // if stored < 9 && target >= 9 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
@@ -203,6 +207,8 @@ fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
         "chunks",
         "symbols",
         "refs",
+        "call_edges",
+        "type_relations",
         "files",
     ] {
         let exists: bool = conn.query_row(
@@ -351,6 +357,31 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         ) WITHOUT ROWID;
 
+        -- Call graph: each call site attached to its enclosing function/method.
+        -- caller = '' / caller_line = 0 for top-level code.
+        CREATE TABLE IF NOT EXISTS call_edges (
+            file_id INTEGER NOT NULL,
+            line INTEGER NOT NULL,
+            callee TEXT NOT NULL,
+            caller TEXT NOT NULL,
+            caller_line INTEGER NOT NULL,
+            PRIMARY KEY (file_id, line, callee),
+            FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+
+        -- Type hierarchy: type_name extends / implements super_name, declared
+        -- by the node spanning line..end_line (class header, Rust impl block).
+        CREATE TABLE IF NOT EXISTS type_relations (
+            file_id INTEGER NOT NULL,
+            line INTEGER NOT NULL,
+            type_name TEXT NOT NULL,
+            super_name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            end_line INTEGER NOT NULL,
+            PRIMARY KEY (file_id, line, type_name, super_name),
+            FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+
         -- Indexes for performance
         CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
         CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -361,6 +392,10 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
         CREATE INDEX IF NOT EXISTS idx_deps_target ON dependencies(target_path);
         CREATE INDEX IF NOT EXISTS idx_deps_resolved ON dependencies(resolved_path);
         CREATE INDEX IF NOT EXISTS idx_refs_file_id ON refs(file_id);
+        CREATE INDEX IF NOT EXISTS idx_call_edges_callee ON call_edges(callee);
+        CREATE INDEX IF NOT EXISTS idx_call_edges_caller ON call_edges(caller);
+        CREATE INDEX IF NOT EXISTS idx_type_relations_type ON type_relations(type_name);
+        CREATE INDEX IF NOT EXISTS idx_type_relations_super ON type_relations(super_name);
 
         -- FTS5 for full-text search on symbols
         CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
@@ -504,6 +539,39 @@ pub struct ReferenceRecord {
     pub file_path: String,
     pub line: i64,
     pub kind: String,
+}
+
+/// One call site from the `call_edges` table, with its file path resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallEdgeRecord {
+    pub file_id: i64,
+    pub file_path: String,
+    pub line: i64,
+    pub callee: String,
+    /// Empty for top-level code.
+    pub caller: String,
+    pub caller_line: i64,
+}
+
+/// One "extends / implements" declaration from the `type_relations` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeRelationRecord {
+    pub file_id: i64,
+    pub file_path: String,
+    pub line: i64,
+    pub end_line: i64,
+    pub type_name: String,
+    pub super_name: String,
+    /// extends or implements
+    pub kind: String,
+}
+
+/// A symbol with no reference outside its own definition (dead-code candidate).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnreferencedSymbol {
+    pub symbol: SymbolRecord,
+    pub file_path: String,
+    pub language: Option<String>,
 }
 
 #[cfg(test)]

@@ -428,3 +428,72 @@ async fn test_map_rejects_path_traversal() {
     let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(error.code, "INVALID_MAP_REQUEST");
 }
+
+// ============================================
+// Structure: calls, hierarchy, dead code
+// ============================================
+
+async fn post_json(path: &str, body: &str) -> (StatusCode, serde_json::Value) {
+    let response = test_router()
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_body(response).await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn test_calls_validation() {
+    let (status, body) = post_json("/calls", r#"{"symbol": " "}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_SYMBOL");
+
+    let (status, body) = post_json("/calls", r#"{"symbol": "f", "direction": "up"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_DIRECTION");
+
+    let (status, body) = post_json("/calls", r#"{"symbol": "f", "file_path": "../secret"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "PATH_TRAVERSAL");
+}
+
+#[tokio::test]
+async fn test_calls_empty_index() {
+    let (status, body) = post_json(
+        "/calls",
+        r#"{"symbol": "index_file", "direction": "callers"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["symbol"], "index_file");
+    assert_eq!(body["callers"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_hierarchy_endpoint() {
+    let (status, body) = post_json("/hierarchy", r#"{"symbol": ""}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_SYMBOL");
+
+    let (status, body) = post_json("/hierarchy", r#"{"symbol": "EmbeddingModel"}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["subtypes"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_dead_code_endpoint() {
+    let (status, body) = post_json("/dead-code", r#"{"path_prefix": "../etc"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "PATH_TRAVERSAL");
+
+    let (status, body) =
+        post_json("/dead-code", r#"{"path_prefix": "crates/", "limit": 5000}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["symbols"].as_array().unwrap().is_empty());
+}

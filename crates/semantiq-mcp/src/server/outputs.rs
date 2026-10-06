@@ -19,7 +19,7 @@ const MAX_INPUT_LEN: usize = 500;
 const MAX_FOCUS_ENTRIES: usize = 50;
 
 /// Trim and bound a required string argument.
-fn validate_input(value: &str, label: &str) -> Result<String, String> {
+pub(super) fn validate_input(value: &str, label: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
         return Err(format!("{} cannot be empty", label));

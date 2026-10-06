@@ -10,6 +10,7 @@ mod files;
 mod graph;
 mod observations;
 mod references;
+mod structure;
 mod symbols;
 
 use crate::schema::{init_schema, migrate_schema};

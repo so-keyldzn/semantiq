@@ -216,6 +216,8 @@ impl IndexStore {
             "BEGIN IMMEDIATE;
              DELETE FROM chunks_vec;
              DELETE FROM refs;
+             DELETE FROM call_edges;
+             DELETE FROM type_relations;
              DELETE FROM dependencies;
              DELETE FROM chunks;
              DELETE FROM symbols;
@@ -247,6 +249,8 @@ impl IndexStore {
             conn.execute_batch(
                 "DELETE FROM chunks_vec;
                  DELETE FROM refs;
+                 DELETE FROM call_edges;
+                 DELETE FROM type_relations;
                  DELETE FROM dependencies;
                  DELETE FROM chunks;
                  DELETE FROM symbols;

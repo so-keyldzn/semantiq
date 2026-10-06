@@ -2,7 +2,8 @@
 //!
 //! Sub-modules group tests by the entry point they exercise:
 //! `semantiq_search`, `semantiq_repo_map`, `semantiq_find_refs`, `semantiq_deps`,
-//! `semantiq_explain`, plus `ServerHandler` metadata and broader edge cases.
+//! `semantiq_explain`, the structural tools (`semantiq_calls`, `semantiq_hierarchy`,
+//! `semantiq_dead_code`), plus `ServerHandler` metadata and broader edge cases.
 
 use super::{DepsParams, ExplainParams, FindRefsParams, SearchParams, SemantiqServer};
 use rmcp::handler::server::wrapper::Parameters;
@@ -57,13 +58,21 @@ pub(super) fn index_test_file(
         let _ = store.insert_symbols(file_id, &symbols);
         let references = semantiq_parser::ReferenceExtractor::extract(&tree, content, lang);
         let _ = store.insert_references(file_id, &references);
+        let structure = semantiq_parser::StructureExtractor::extract(
+            &tree,
+            content,
+            lang,
+            &symbols,
+            &references,
+        );
+        let _ = store.insert_structure(file_id, &structure);
     }
 
     file_id
 }
 
 /// Text content of a successful tool call.
-fn text_of(result: Result<CallToolResult, String>) -> Result<String, String> {
+pub(super) fn text_of(result: Result<CallToolResult, String>) -> Result<String, String> {
     let result = result?;
     assert_eq!(result.is_error, Some(false));
     assert!(
@@ -128,3 +137,4 @@ mod find_refs;
 mod repo_map;
 mod search;
 mod server_handler;
+mod structure;
