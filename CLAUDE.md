@@ -19,13 +19,18 @@ cargo clippy                         # Lint
 ## CLI Usage
 
 ```bash
-cargo run -- init                            # First-time setup: writes .mcp.json, CLAUDE.md, .gitignore, indexes
-cargo run -- init-cursor                     # Same for Cursor (.cursor/) and VS Code (.vscode/)
+cargo run -- init                            # First-time setup: skill (.claude/skills/semantiq/), .mcp.json, CLAUDE.md block, .gitignore, indexes
+cargo run -- init --no-mcp                   # Skill + CLI only (--no-skill: MCP only, --no-index, --force, --global)
+cargo run -- init-cursor                     # Same for Cursor (.cursor/) and VS Code (.vscode/), plus an AGENTS.md block
 cargo run -- index /path/to/project          # Index a project
 cargo run -- index --force                   # Force full reindex
 cargo run -- serve --project /path/to/project  # MCP server (stdio)
 cargo run -- serve --project . --http-port 3000  # HTTP API mode
-cargo run -- search "query"                  # CLI search (testing)
+cargo run -- search "query" --json           # Query commands mirror the MCP tools: markdown or --json
+cargo run -- refs <symbol>                   # = semantiq_find_refs
+cargo run -- deps <file>                     # = semantiq_deps
+cargo run -- explain <symbol>                # = semantiq_explain
+cargo run -- impact <symbol> --max-depth 3   # = semantiq_impact
 cargo run -- stats                           # Index statistics
 cargo run -- calibrate                       # Build adaptive search thresholds (needs 500+ observations)
 cargo run -- update                          # Self-update the binary to the latest GitHub release
@@ -35,6 +40,8 @@ cargo run -- update --check                  # Only report whether an update is 
 ## Architecture
 
 Semantiq is a Rust workspace providing semantic code understanding for AI coding assistants via MCP (Model Context Protocol).
+
+Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
 
 ### Crate Structure
 
@@ -56,9 +63,9 @@ crates/
 
    **References**: `find_references()` takes definitions from `symbols` and usages from the `refs` table (AST identifier leaves, one row per name/file/line, classified definition/import/call/type/reference by `ReferenceExtractor` in `semantiq-parser/src/references.rs`). Comments, strings and substrings never match. Names absent from `refs` (data-file keys) fall back to text search (`match_type = "text"`). Resolution is by name only: homonyms share references.
 
-   **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP.
+   **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP and `semantiq impact`.
 
-3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 5 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
+3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 5 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`, output builders shared with the CLI in `server/outputs.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
 
 ### Languages
 

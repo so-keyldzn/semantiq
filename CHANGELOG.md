@@ -15,8 +15,32 @@ All notable changes to Semantiq will be documented in this file.
   (including stub -> ONNX builds) trigger the same rebuild.
 - HTTP API binds to `127.0.0.1` by default; use `--http-host` to expose it.
 - README: indexing before `serve` is optional, `serve` indexes on startup (#17).
+- `semantiq init` writes its `CLAUDE.md` instructions as a marked block
+  (`<!-- semantiq:start -->`) refreshed in place on re-run and appended to an
+  existing `CLAUDE.md` (previously skipped); it now points at the CLI/skill
+  as well as the MCP tools. An unmodified CLAUDE.md from an older `init` is
+  replaced. Re-running `init` leaves an identical `.mcp.json` untouched.
+- `.gitignore` entry is now `.semantiq.db*` (covers the WAL/SHM files).
+- The global `--json` flag prints results as JSON for query commands (it
+  still switches logs to JSON for the others); query commands log warnings
+  and errors only unless `--verbose`.
 
 ### Added
+- **CLI for every MCP tool**: `semantiq refs`, `deps`, `explain` and `impact`
+  join `search`, all with `--json` printing the exact structured output of the
+  matching MCP tool (shared `*_output()` builders in `semantiq-mcp`). They find
+  `.semantiq.db` in the current directory or a parent, reindex changed files
+  before answering (`--no-refresh` to skip), exit 1 with a `semantiq index`
+  hint when the index is missing or empty, and 2 on usage errors. Only
+  `search` loads the embedding model (new
+  `RetrievalEngine::without_embeddings`): the others answer in ~20 ms.
+- **`semantiq` Agent Skill** (`skills/semantiq/SKILL.md` + `REFERENCE.md`):
+  when to use each command rather than grep and how to read scores and
+  confidences. `semantiq init` installs it in `.claude/skills/semantiq/`
+  (kept if edited, unless `--force`); `semantiq init --global` installs it in
+  `~/.claude/skills/semantiq/`.
+- `semantiq init --no-mcp` (skill only), `--no-skill` (MCP only) and
+  `--no-index`. `init-cursor` adds a Semantiq section to `AGENTS.md`.
 - MCP tool responses start with a `⏳ Initial indexing in progress` notice
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 

@@ -5,6 +5,19 @@ use std::fs;
 use std::path::Path;
 
 use super::common::resolve_project_root;
+use super::init::upsert_managed_block;
+
+/// Semantiq section of AGENTS.md, read by Cursor's agent and other coding
+/// agents that run shell commands: the CLI works without the MCP server.
+const AGENTS_MD_BLOCK: &str = r#"## Semantiq
+
+This project is indexed by Semantiq (`.semantiq.db`). Besides the `semantiq_*`
+MCP tools, the `semantiq` CLI answers the same questions from a terminal:
+`semantiq search "<what the code does>"` (find code by concept),
+`semantiq refs <symbol>` (definitions and usages), `semantiq impact <symbol>`
+(what a change breaks, tests to run), `semantiq explain <symbol>`,
+`semantiq deps <file>`. Add `--json` for structured output. Use grep for exact
+strings."#;
 
 /// Writes content to a file, checking if it already exists.
 /// Returns true if the file was written, false if skipped.
@@ -327,6 +340,9 @@ Gemfile.lock
         println!("Created .gitignore");
     }
 
+    // 12. Point terminal-capable agents at the CLI
+    upsert_managed_block(&project_root.join("AGENTS.md"), AGENTS_MD_BLOCK)?;
+
     println!("\n✓ Cursor/VS Code configuration initialized!");
 
     Ok(())
@@ -351,6 +367,8 @@ mod tests {
         assert!(path.join(".cursor/rules/project.mdc").exists());
         assert!(path.join(".cursor/rules/semantiq.mdc").exists());
         assert!(path.join(".cursor/mcp.json").exists());
+        let agents_md = fs::read_to_string(path.join("AGENTS.md")).unwrap();
+        assert!(agents_md.contains("semantiq refs <symbol>"));
 
         // Check .cursorignore
         assert!(path.join(".cursorignore").exists());
