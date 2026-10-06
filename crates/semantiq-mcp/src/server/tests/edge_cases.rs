@@ -5,7 +5,7 @@ async fn test_search_with_special_characters() {
     let (server, _temp) = create_test_server();
 
     let result = server
-        .semantiq_search("test*".to_string(), Some(10), None, None, None)
+        .call_search("test*".to_string(), Some(10), None, None, None)
         .await;
 
     assert!(result.is_ok());
@@ -16,7 +16,7 @@ async fn test_search_with_unicode() {
     let (server, _temp) = create_test_server();
 
     let result = server
-        .semantiq_search("函数".to_string(), Some(10), None, None, None)
+        .call_search("函数".to_string(), Some(10), None, None, None)
         .await;
 
     assert!(result.is_ok());
@@ -27,7 +27,7 @@ async fn test_find_refs_with_special_characters() {
     let (server, _temp) = create_test_server();
 
     let result = server
-        .semantiq_find_refs("operator+".to_string(), Some(10))
+        .call_find_refs("operator+".to_string(), Some(10))
         .await;
 
     assert!(result.is_ok());

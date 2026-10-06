@@ -8,6 +8,7 @@ mod chunks;
 mod dependencies;
 mod files;
 mod observations;
+mod references;
 mod symbols;
 
 use crate::schema::{init_schema, migrate_schema};

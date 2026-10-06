@@ -12,7 +12,7 @@ async fn test_deps_returns_formatted_output() {
         .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
         .expect("Failed to insert dependency");
 
-    let result = server.semantiq_deps("main.rs".to_string()).await;
+    let result = server.call_deps("main.rs".to_string()).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -31,7 +31,7 @@ async fn test_deps_shows_imports_section() {
         .insert_dependency(file_id, "std::io", Some("io"), "std", None)
         .expect("Failed to insert dependency");
 
-    let result = server.semantiq_deps("app.rs".to_string()).await;
+    let result = server.call_deps("app.rs".to_string()).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -43,7 +43,7 @@ async fn test_deps_shows_imports_section() {
 async fn test_deps_nonexistent_file() {
     let (server, _temp) = create_test_server();
 
-    let result = server.semantiq_deps("nonexistent.rs".to_string()).await;
+    let result = server.call_deps("nonexistent.rs".to_string()).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -62,7 +62,7 @@ async fn test_deps_shows_reverse_dependencies() {
         .insert_dependency(main_id, "crate::utils", Some("utils"), "local", None)
         .expect("Failed to insert dependency");
 
-    let result = server.semantiq_deps("utils.rs".to_string()).await;
+    let result = server.call_deps("utils.rs".to_string()).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();

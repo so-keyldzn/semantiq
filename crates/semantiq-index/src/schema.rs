@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
@@ -166,8 +166,12 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
         reset_embedding_space(conn)?;
     }
 
+    // v6 -> v7: `refs` table. Created by `init_schema()` (IF NOT EXISTS) and
+    // filled by the full reindex that the PARSER_VERSION bump triggers, so
+    // there is nothing to migrate here.
+
     // Future migrations go here:
-    // if stored < 7 && target >= 7 { ... }
+    // if stored < 8 && target >= 8 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
@@ -198,6 +202,7 @@ fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
         "dependencies",
         "chunks",
         "symbols",
+        "refs",
         "files",
     ] {
         let exists: bool = conn.query_row(
@@ -335,6 +340,17 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             FOREIGN KEY (source_file_id) REFERENCES files(id) ON DELETE CASCADE
         );
 
+        -- Identifier occurrences extracted from the AST (find_refs).
+        -- One row per (name, file, line); kind = definition|import|call|type|reference.
+        CREATE TABLE IF NOT EXISTS refs (
+            name TEXT NOT NULL,
+            file_id INTEGER NOT NULL,
+            line INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            PRIMARY KEY (name, file_id, line),
+            FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+
         -- Indexes for performance
         CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
         CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -344,6 +360,7 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
         CREATE INDEX IF NOT EXISTS idx_deps_source ON dependencies(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_deps_target ON dependencies(target_path);
         CREATE INDEX IF NOT EXISTS idx_deps_resolved ON dependencies(resolved_path);
+        CREATE INDEX IF NOT EXISTS idx_refs_file_id ON refs(file_id);
 
         -- FTS5 for full-text search on symbols
         CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
@@ -478,6 +495,15 @@ pub struct DependencyRecord {
     pub import_name: Option<String>,
     pub kind: String,
     pub resolved_path: Option<String>,
+}
+
+/// One identifier occurrence from the `refs` table, with its file path resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceRecord {
+    pub file_id: i64,
+    pub file_path: String,
+    pub line: i64,
+    pub kind: String,
 }
 
 #[cfg(test)]
