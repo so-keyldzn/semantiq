@@ -1,0 +1,479 @@
+{
+  "repo": {
+    "name": "semantiq",
+    "source": "self",
+    "commit": "fa043c2854ddc96ce167b38f0df4433cc5c806ca"
+  },
+  "tasks": [
+    {
+      "id": "sq-concept-rename",
+      "category": "conceptual",
+      "answer_kind": "symbols",
+      "prompt": "While the server is running, files get renamed or moved on disk. How does the index avoid keeping stale entries under the old path? Name the function(s) that handle this.",
+      "expected": [
+        {
+          "id": "process_events/remove_file",
+          "any": [
+            "\\bprocess_events\\b",
+            "\\bremove_file\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bconvert_event\\b",
+        "\\bpoll_events\\b",
+        "\\bdelete_file\\b",
+        "\\binitial_index\\b",
+        "\\bindex_file\\b",
+        "\\bstart\\b",
+        "\\brun\\b",
+        "\\blist_file_paths\\b"
+      ]
+    },
+    {
+      "id": "sq-concept-upgrade-wipe",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "After upgrading to a release whose code-extraction logic changed, existing indexes must be wiped and rebuilt from scratch. Which source files contain the check that decides this and the places that run that check at startup?",
+      "expected": [
+        {
+          "id": "store/files.rs",
+          "any": [
+            "semantiq-index/src/store/files\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/index.rs",
+          "any": [
+            "semantiq/src/commands/index\\.rs$"
+          ]
+        },
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-parser/src/lib\\.rs$",
+        "semantiq-index/src/schema\\.rs$",
+        "semantiq-index/src/store/mod\\.rs$",
+        "semantiq-index/src/auto_indexer\\.rs$",
+        "semantiq/src/commands/serve\\.rs$"
+      ],
+      "min_recall": 0.66
+    },
+    {
+      "id": "sq-concept-model-integrity",
+      "category": "conceptual",
+      "answer_kind": "symbols",
+      "prompt": "How does the tool make sure the machine-learning model file it fetches from the internet has not been tampered with or corrupted? Name the function(s) that perform the check.",
+      "expected": [
+        {
+          "id": "download_file",
+          "any": [
+            "\\bdownload_file\\b"
+          ]
+        },
+        {
+          "id": "ensure_file_downloaded",
+          "any": [
+            "\\bensure_file_downloaded\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bcompute_sha256\\b",
+        "\\bMODEL_SHA256\\b",
+        "\\bTOKENIZER_SHA256\\b",
+        "\\bensure_models_downloaded\\b",
+        "\\bload\\b",
+        "\\bremove_legacy_model_files\\b"
+      ],
+      "min_recall": 0.5
+    },
+    {
+      "id": "sq-concept-calibration",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "Search results are filtered by a similarity cut-off that can adapt per programming language based on past queries. Which source files collect the past measurements and turn them into per-language cut-offs?",
+      "expected": [
+        {
+          "id": "collector.rs",
+          "any": [
+            "semantiq-retrieval/src/threshold/collector\\.rs$"
+          ]
+        },
+        {
+          "id": "calibrator.rs",
+          "any": [
+            "semantiq-retrieval/src/threshold/calibrator\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-retrieval/src/threshold/",
+        "semantiq-retrieval/src/engine/threshold\\.rs$",
+        "semantiq/src/commands/calibrate\\.rs$",
+        "semantiq-index/src/store/(observations|calibrations)\\.rs$",
+        "semantiq-retrieval/src/engine/search\\.rs$"
+      ]
+    },
+    {
+      "id": "sq-concept-exclusions",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "Third-party dependency folders, hidden directories and oversized files must never end up in the index. Which source file defines these rules?",
+      "expected": [
+        {
+          "id": "exclusions.rs",
+          "any": [
+            "semantiq-index/src/exclusions\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-index/src/auto_indexer\\.rs$",
+        "semantiq-index/src/watcher\\.rs$",
+        "semantiq/src/commands/index\\.rs$",
+        "semantiq-index/src/lib\\.rs$"
+      ]
+    },
+    {
+      "id": "sq-struct-search-callers",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "Which non-test source files call `RetrievalEngine::search` (the main search entry point)? List every caller file across the CLI, HTTP API and MCP server.",
+      "expected": [
+        {
+          "id": "http/routes.rs",
+          "any": [
+            "semantiq/src/http/routes\\.rs$"
+          ]
+        },
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/search.rs",
+          "any": [
+            "semantiq/src/commands/search\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-retrieval/src/engine/search\\.rs$"
+      ]
+    },
+    {
+      "id": "sq-struct-relpath-impact",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "If the signature of the function `to_relative_string` changes, which non-test source files would need to be updated (its definition and every caller)?",
+      "expected": [
+        {
+          "id": "paths.rs",
+          "any": [
+            "semantiq-index/src/paths\\.rs$"
+          ]
+        },
+        {
+          "id": "engine/search.rs",
+          "any": [
+            "semantiq-retrieval/src/engine/search\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/index.rs",
+          "any": [
+            "semantiq/src/commands/index\\.rs$"
+          ]
+        },
+        {
+          "id": "auto_indexer.rs",
+          "any": [
+            "semantiq-index/src/auto_indexer\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-retrieval/tests/intent_queries\\.rs$",
+        "semantiq-index/src/lib\\.rs$"
+      ],
+      "min_recall": 0.75
+    },
+    {
+      "id": "sq-struct-embedding-impls",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Which concrete types implement the `EmbeddingModel` trait?",
+      "expected": [
+        {
+          "id": "StubEmbeddingModel",
+          "any": [
+            "\\bStubEmbeddingModel\\b"
+          ]
+        },
+        {
+          "id": "OnnxEmbeddingModel",
+          "any": [
+            "\\bOnnxEmbeddingModel\\b"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "sq-struct-exclude-entry-callers",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "Who uses `should_exclude_entry`? List the non-test source files that call it, excluding the file that defines it and plain re-exports.",
+      "expected": [
+        {
+          "id": "engine/search.rs",
+          "any": [
+            "semantiq-retrieval/src/engine/search\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/index.rs",
+          "any": [
+            "semantiq/src/commands/index\\.rs$"
+          ]
+        },
+        {
+          "id": "auto_indexer.rs",
+          "any": [
+            "semantiq-index/src/auto_indexer\\.rs$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "sq-struct-impact-exposure",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "Which non-test source files call `analyze_impact`? Is impact analysis reachable from the HTTP REST API?",
+      "expected": [
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-retrieval/src/engine/impact\\.rs$"
+      ]
+    },
+    {
+      "id": "sq-struct-fts-escape",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Trace how user input reaches the FTS5 full-text query: which function calls `escape_fts5_query`, and which functions call that function?",
+      "expected": [
+        {
+          "id": "search_symbols",
+          "any": [
+            "\\bsearch_symbols\\b"
+          ]
+        }
+      ],
+      "allowed": [
+        "\\bescape_fts5_query\\b",
+        "\\bsearch\\b",
+        "\\bsearch_symbols_by_term\\b",
+        "\\bsearch_symbol\\w*\\b",
+        "\\bexpand\\w*\\b",
+        "\\bexplain\\w*\\b",
+        "\\bfind_\\w+\\b"
+      ]
+    },
+    {
+      "id": "sq-exact-onnx-threads",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Which source file reads the `SEMANTIQ_ONNX_THREADS` environment variable?",
+      "expected": [
+        {
+          "id": "model.rs",
+          "any": [
+            "semantiq-embeddings/src/model\\.rs$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "sq-exact-default-db",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Where is the constant `DEFAULT_DB_NAME` defined, and which files use it?",
+      "expected": [
+        {
+          "id": "common.rs",
+          "any": [
+            "semantiq/src/commands/common\\.rs$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "sq-exact-parser-version",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Where is `PARSER_VERSION` defined, and which non-test source files reference it in code?",
+      "expected": [
+        {
+          "id": "parser/lib.rs",
+          "any": [
+            "semantiq-parser/src/lib\\.rs$"
+          ]
+        },
+        {
+          "id": "store/files.rs",
+          "any": [
+            "semantiq-index/src/store/files\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-index/src/schema\\.rs$"
+      ]
+    },
+    {
+      "id": "sq-exact-query-expander",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "In which file is the struct `QueryExpander` defined?",
+      "expected": [
+        {
+          "id": "query.rs",
+          "any": [
+            "semantiq-retrieval/src/query\\.rs$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "sq-concept-path-guard",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A client of the server asks to read or analyse a file by path. How is it prevented from reaching files outside the project directory (e.g. with `..`)? List the source files that contain such guards.",
+      "expected": [
+        {
+          "id": "engine/search.rs",
+          "any": [
+            "semantiq-retrieval/src/engine/search\\.rs$"
+          ]
+        },
+        {
+          "id": "http/routes.rs",
+          "any": [
+            "semantiq/src/http/routes\\.rs$"
+          ]
+        },
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-retrieval/src/engine/analysis\\.rs$",
+        "semantiq/src/commands/common\\.rs$",
+        "semantiq-index/src/paths\\.rs$",
+        "semantiq/src/http/mod\\.rs$"
+      ],
+      "min_recall": 0.66
+    },
+    {
+      "id": "sq-struct-transitive-search-symbols",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "If `IndexStore::search_symbols` changes behaviour, which non-test source files are affected directly or transitively, up to the user-facing entry points (CLI command, HTTP route, MCP tool)?",
+      "expected": [
+        {
+          "id": "engine/search.rs",
+          "any": [
+            "semantiq-retrieval/src/engine/search\\.rs$"
+          ]
+        },
+        {
+          "id": "http/routes.rs",
+          "any": [
+            "semantiq/src/http/routes\\.rs$"
+          ]
+        },
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/search.rs",
+          "any": [
+            "semantiq/src/commands/search\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-index/src/store/symbols\\.rs$",
+        "semantiq-index/src/store/mod\\.rs$",
+        "semantiq-retrieval/src/engine/mod\\.rs$"
+      ],
+      "min_recall": 0.75
+    },
+    {
+      "id": "sq-struct-open-callers",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "Which non-test source files call `IndexStore::open` (the file-backed constructor, not `open_in_memory`)?",
+      "expected": [
+        {
+          "id": "calibrate.rs",
+          "any": [
+            "semantiq/src/commands/calibrate\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/index.rs",
+          "any": [
+            "semantiq/src/commands/index\\.rs$"
+          ]
+        },
+        {
+          "id": "commands/search.rs",
+          "any": [
+            "semantiq/src/commands/search\\.rs$"
+          ]
+        },
+        {
+          "id": "stats.rs",
+          "any": [
+            "semantiq/src/commands/stats\\.rs$"
+          ]
+        },
+        {
+          "id": "mcp/server.rs",
+          "any": [
+            "semantiq-mcp/src/server\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "semantiq-index/src/store/mod\\.rs$"
+      ],
+      "min_recall": 0.8
+    }
+  ]
+}
