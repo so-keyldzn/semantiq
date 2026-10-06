@@ -11,7 +11,7 @@ mod stats;
 mod update;
 
 pub(crate) use calibrate::calibrate;
-pub(crate) use index::index;
+pub(crate) use index::{Phases, index_with};
 pub(crate) use init::{InitOptions, init};
 pub(crate) use init_cursor::init_cursor;
 pub(crate) use serve::serve;

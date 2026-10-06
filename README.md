@@ -203,14 +203,24 @@ semantiq update --check  # Check for a newer version without installing
 
 ### `semantiq index [PATH] [OPTIONS]`
 
-Manually index a project.
+Manually index a project, in two phases: the **structure** (symbols,
+references, calls, type relations, imports, chunks) first, then the
+**embeddings** of the chunks. Every command but `search` works as soon as the
+structure is ready; each phase logs its time.
 
 ```bash
 semantiq index                   # Index current directory
 semantiq index /path/to/project
 semantiq index --force           # Force full reindex (ignore cache)
 semantiq index --database /path  # Custom database location
+semantiq index --no-embeddings   # Structure only (seconds): everything but semantic search
+semantiq index --embeddings-only # Compute the embeddings still missing
 ```
+
+Embeddings are committed batch by batch: an interrupted run resumes where it
+stopped with `--embeddings-only` (or under `semantiq serve`). `search` runs
+with the embeddings available and says on stderr how much of the semantic index
+is ready; it embeds the few chunks a refresh leaves pending (64 at most) itself.
 
 ### `semantiq search <QUERY> [OPTIONS]`
 
@@ -460,8 +470,8 @@ crates/
 
 **Data Flow:**
 1. Parse source files with tree-sitter
-2. Extract symbols, chunks, and imports
-3. Generate embeddings (768-D vectors)
+2. Extract symbols, references, calls, type relations, chunks, and imports (phase 1: structure)
+3. Generate embeddings (768-D vectors) for the chunks, across files, in the background (phase 2)
 4. Store in SQLite with FTS5 + vector search
 5. Query via MCP tools with multi-strategy fusion
 
@@ -527,14 +537,20 @@ Semantiq automatically:
 - Indexes your project on MCP server startup
 - Watches for file changes (2-second intervals)
 - Re-indexes modified files incrementally
-- Regenerates embeddings as needed
+- Regenerates embeddings as needed, only for chunks whose content changed
 
 No manual reindexing required for normal development, and `semantiq index` /
 `semantiq init` are not required before `serve`.
 
-While the initial pass runs, tool responses start with a
-`⏳ Initial indexing in progress` notice (results may be incomplete), and the
-HTTP `GET /stats` endpoint reports `"indexing": true`.
+Indexing runs in two phases. While the first pass over the structure runs,
+tool responses start with a `⏳ Initial indexing in progress` notice (results
+may be incomplete), and the HTTP `GET /stats` endpoint reports
+`"indexing": true`. The embeddings are then computed on a background thread
+that blocks neither the tools nor the file watcher: until they are complete,
+`semantiq_search` answers with the embeddings available (plus symbol and text
+matches) and starts with `⏳ Semantic index 42% ready`, and `GET /stats`
+reports `"embedding": true`, `embedded_chunks` and
+`semantic_index_ready_percent`.
 
 The index lives in `.semantiq.db` at the project root, so each git worktree has
 its own index and is indexed separately.

@@ -6,12 +6,12 @@ use rmcp::{
     service::{NotificationContext, Peer, RoleServer},
     tool, tool_handler, tool_router,
 };
-use semantiq_index::{AutoIndexer, IndexStore};
+use semantiq_index::{AutoIndexer, BackgroundEmbedder, EmbeddingCounts, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{error, info};
@@ -32,8 +32,11 @@ pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
     auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
-    /// True while the initial index pass started by `start_auto_indexer` runs.
+    /// True while the initial index pass (phase 1: structure) started by
+    /// `start_auto_indexer` runs.
     initial_indexing: Arc<AtomicBool>,
+    /// Phase 2 (embeddings) runner, started by `start_auto_indexer`.
+    embedder: Arc<OnceLock<BackgroundEmbedder>>,
 }
 
 impl SemantiqServer {
@@ -67,6 +70,7 @@ impl SemantiqServer {
             store,
             auto_indexer,
             initial_indexing: Arc::new(AtomicBool::new(false)),
+            embedder: Arc::new(OnceLock::new()),
         })
     }
 
@@ -133,6 +137,33 @@ impl SemantiqServer {
         self.initial_indexing.load(Ordering::Relaxed)
     }
 
+    /// Embedded / total chunks while the background embedder (phase 2) still
+    /// has chunks to embed; `None` once the semantic index is complete.
+    pub fn embedding_in_progress(&self) -> Option<EmbeddingCounts> {
+        self.embedder.get()?.progress().in_progress()
+    }
+
+    /// Like `with_indexing_notice`, plus the share of the semantic index that
+    /// is ready while phase 2 runs: only `semantiq_search` uses embeddings.
+    fn with_search_notice(&self, output: String) -> String {
+        if self.is_initial_indexing() {
+            return self.with_indexing_notice(output);
+        }
+        match self.embedding_in_progress() {
+            Some(counts) if semantiq_embeddings::semantic_search_unavailable_reason().is_none() => {
+                format!(
+                    "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
+                     matches may be missing; symbol and text matches are complete.\n\n{}",
+                    counts.percent(),
+                    counts.embedded,
+                    counts.total,
+                    output
+                )
+            }
+            _ => output,
+        }
+    }
+
     /// Prepend a warning to a tool response while the initial index is incomplete.
     fn with_indexing_notice(&self, output: String) -> String {
         if self.is_initial_indexing() {
@@ -145,13 +176,36 @@ impl SemantiqServer {
         }
     }
 
-    /// Start the auto-indexing background task
-    /// Performs initial indexing first, then watches for changes
+    /// Start the auto-indexing background task.
+    ///
+    /// Phase 1 (structure) runs first over the whole project; then the
+    /// background embedder (phase 2) is woken and fills the chunk embeddings on
+    /// its own thread while queries and the watcher go on. Watcher events run
+    /// phase 1 right away and queue their new chunks for the embedder.
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
             let initial_indexing = Arc::clone(&self.initial_indexing);
             initial_indexing.store(true, Ordering::Relaxed);
+
+            let embedder = match BackgroundEmbedder::spawn(
+                Arc::clone(&self.store),
+                Box::new(|| semantiq_embeddings::create_embedding_model(None)),
+            ) {
+                Ok(embedder) => {
+                    let _ = self.embedder.set(embedder);
+                    Some(Arc::clone(&self.embedder))
+                }
+                Err(e) => {
+                    error!("Background embedder not started: {}", e);
+                    None
+                }
+            };
+            let notify_embedder = move || {
+                if let Some(embedder) = embedder.as_ref().and_then(|e| e.get()) {
+                    embedder.notify();
+                }
+            };
 
             tokio::spawn(async move {
                 // Perform initial indexing in a blocking task
@@ -162,12 +216,15 @@ impl SemantiqServer {
                 })
                 .await;
                 initial_indexing.store(false, Ordering::Relaxed);
+                // Phase 2 also picks up chunks left pending by an earlier run
+                // (`semantiq index --no-embeddings`, query refresh, a crash).
+                notify_embedder();
 
                 match initial_result {
                     Ok(Ok(result)) => {
                         if result.indexed > 0 {
                             info!(
-                                "Initial indexing complete: {} files indexed, {} skipped",
+                                "Initial indexing complete (structure ready): {} files indexed, {} skipped",
                                 result.indexed, result.skipped
                             );
                         } else if result.scanned > 0 {
@@ -188,8 +245,8 @@ impl SemantiqServer {
                 loop {
                     interval.tick().await;
 
-                    // process_events() parses files, runs ONNX, and writes to SQLite
-                    // (all blocking). Run it on the blocking pool so it does not stall
+                    // process_events() parses files and writes to SQLite (all
+                    // blocking). Run it on the blocking pool so it does not stall
                     // the async runtime. Clone the Arc and move it into the closure.
                     let indexer_clone = Arc::clone(&indexer);
                     let result = tokio::task::spawn_blocking(move || {
@@ -199,7 +256,11 @@ impl SemantiqServer {
                     .await;
 
                     match result {
-                        Ok(Ok(_)) => {}
+                        Ok(Ok(result)) => {
+                            if result.indexed > 0 {
+                                notify_embedder();
+                            }
+                        }
                         Ok(Err(e)) => {
                             tracing::error!("Auto-indexer error: {}", e);
                         }
@@ -303,7 +364,7 @@ impl SemantiqServer {
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, String> {
         let output = self.search(params).await?;
-        structured_result(&output, self.with_indexing_notice(output.render()))
+        structured_result(&output, self.with_search_notice(output.render()))
     }
 
     #[tool(
@@ -438,6 +499,12 @@ impl ServerHandler for SemantiqServer {
                 " Note: semantic (embedding) search is unavailable because {reason}; \
                  semantiq_search only matches symbol names and text."
             ));
+        } else if self.is_initial_indexing() || self.embedding_in_progress().is_some() {
+            instructions.push_str(
+                " The index is being built: structural tools answer as soon as files are \
+                 parsed, while embeddings are computed in the background; until they are \
+                 complete, semantiq_search says how much of the semantic index is ready.",
+            );
         }
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("semantiq", env!("CARGO_PKG_VERSION")))

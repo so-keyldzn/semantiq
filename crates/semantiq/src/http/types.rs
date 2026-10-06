@@ -147,9 +147,20 @@ pub(super) struct StatsResponse {
     pub indexed_symbols: usize,
     pub indexed_chunks: usize,
     pub indexed_dependencies: usize,
-    /// True while the initial index pass is running (counts are still growing).
+    /// True while the initial index pass (phase 1: structure) is running
+    /// (counts are still growing).
     #[serde(default)]
     pub indexing: bool,
+    /// Chunks with an embedding, out of `indexed_chunks`.
+    #[serde(default)]
+    pub embedded_chunks: usize,
+    /// `embedded_chunks` as a share of `indexed_chunks` (100 when empty).
+    #[serde(default)]
+    pub semantic_index_ready_percent: u8,
+    /// True while the background embedder (phase 2) is computing embeddings:
+    /// semantic search uses the ones already computed.
+    #[serde(default)]
+    pub embedding: bool,
     /// Embedding model recorded in the index (`"stub"` = zero vectors).
     #[serde(default)]
     pub embedding_model: String,

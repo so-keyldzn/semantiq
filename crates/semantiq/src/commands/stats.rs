@@ -19,6 +19,7 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
 
     let store = IndexStore::open(&db_path)?;
     let stats = store.get_stats()?;
+    let embeddings = store.embedding_counts()?;
 
     println!("Semantiq Index Statistics");
     println!("=========================");
@@ -33,6 +34,18 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     println!();
     println!("Embeddings:");
     println!("  Model: {}", semantiq_embeddings::embedding_model_id());
+    println!(
+        "  Chunks embedded: {}/{} ({}%)",
+        embeddings.embedded,
+        embeddings.total,
+        embeddings.percent()
+    );
+    if embeddings.pending() > 0 {
+        println!(
+            "    {} pending: `semantiq index --embeddings-only` (or a running `semantiq serve`) computes them.",
+            embeddings.pending()
+        );
+    }
     match semantiq_embeddings::semantic_search_unavailable_reason() {
         None => println!("  Semantic search: enabled"),
         Some(reason) => {

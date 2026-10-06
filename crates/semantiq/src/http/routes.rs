@@ -55,18 +55,22 @@ async fn stats(
     State(server): State<AppState>,
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let store = Arc::clone(server.store());
-    let stats = tokio::task::spawn_blocking(move || store.get_stats())
-        .await
-        .unwrap_or_else(|e| Err(anyhow::anyhow!("blocking task failed: {}", e)));
+    let stats =
+        tokio::task::spawn_blocking(move || Ok((store.get_stats()?, store.embedding_counts()?)))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("blocking task failed: {}", e)));
 
     let unavailable_reason = semantiq_embeddings::semantic_search_unavailable_reason();
     match stats {
-        Ok(stats) => Ok(Json(StatsResponse {
+        Ok((stats, embeddings)) => Ok(Json(StatsResponse {
             indexed_files: stats.file_count,
             indexed_symbols: stats.symbol_count,
             indexed_chunks: stats.chunk_count,
             indexed_dependencies: stats.dependency_count,
             indexing: server.is_initial_indexing(),
+            embedded_chunks: embeddings.embedded,
+            semantic_index_ready_percent: embeddings.percent(),
+            embedding: server.embedding_in_progress().is_some(),
             embedding_model: semantiq_embeddings::embedding_model_id().to_string(),
             semantic_search: unavailable_reason.is_none(),
             semantic_search_unavailable_reason: unavailable_reason.map(str::to_string),
