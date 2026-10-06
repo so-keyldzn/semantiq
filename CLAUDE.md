@@ -50,7 +50,7 @@ crates/
 
 ### Data Flow
 
-1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
+1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` / `StructureExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
 
 2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
 
@@ -58,7 +58,13 @@ crates/
 
    **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP.
 
-3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 5 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
+   **Calls**: `call_graph()` (`engine/calls.rs`) walks the `call_edges` table (each AST `call` reference attached at index time to its innermost enclosing function/method by `StructureExtractor`, `semantiq-parser/src/structure.rs`; caller `''` = top-level code). Callers and callees are resolved by name with the same confidence scale as impact; only non-`name_only` edges are followed beyond depth 1 (max 3), visited definitions are never re-walked (recursion-safe). Callees with no definition in the index are listed in `external_callees`.
+
+   **Hierarchy**: `type_hierarchy()` (`engine/hierarchy.rs`) walks the `type_relations` table (`type_name` extends/implements `super_name`, declared over `line..end_line`): Rust `impl Trait for Type` + supertraits, TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala. Go is out of scope (implicit interfaces). C# extends vs implements is a heuristic (first base, `I`-prefixed names).
+
+   **Dead code**: `find_dead_code()` (`engine/dead_code.rs`) starts from `IndexStore::find_unreferenced_symbols()` (function/method/type symbols whose name has no non-definition ref outside their own span) and excludes entry points, tests (path, `mod tests`, `#[test]`/`@Test`-style attributes read from disk), trait/interface members, Rust trait-impl methods, overrides of project supertypes and, unless `include_public`, public symbols. Confidence is lowered for dynamic languages, public symbols, attributes/decorators (framework or macro registration, e.g. `#[tool]`) and possible overrides of library supertypes.
+
+3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 8 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact`, `semantiq_calls`, `semantiq_hierarchy`, `semantiq_dead_code` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`; the structural tools' internals in `server/structure.rs` + `server/structure_types.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
 
 ### Languages
 
@@ -101,7 +107,7 @@ crates/
 
 ### HTTP API (`--http-port`)
 
-Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /find-refs`, `POST /deps`, `POST /explain`. MCP Streamable HTTP at `/mcp` (Host header restricted to loopback unless `--http-host` is non-loopback). Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp` (Host header restricted to loopback unless `--http-host` is non-loopback). Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
 
 ### Environment Variables
 

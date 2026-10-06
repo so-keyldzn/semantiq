@@ -17,6 +17,21 @@ All notable changes to Semantiq will be documented in this file.
 - README: indexing before `serve` is optional, `serve` indexes on startup (#17).
 
 ### Added
+- **Structural intelligence tools** (MCP and REST):
+  - `semantiq_calls` / `POST /calls`: callers and callees of a function or
+    method up to 3 levels, each edge with a resolution confidence
+    (`same_file`, `imports`, `unique_name`, `name_only`); library calls are
+    summarised separately.
+  - `semantiq_hierarchy` / `POST /hierarchy`: supertypes and subtypes /
+    implementors of a type, transitively (Rust `impl Trait for Type` and
+    supertraits, TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala; Go's
+    implicit interfaces are out of scope).
+  - `semantiq_dead_code` / `POST /dead-code`: functions, methods and types
+    with no reference outside their definition, excluding entry points,
+    tests, trait members and (by default) public symbols, each with a
+    confidence and reasons.
+  `PARSER_VERSION` 10 → 11 and schema v8 (`call_edges`, `type_relations`
+  tables) trigger a one-time full reindex.
 - MCP tool responses start with a `⏳ Initial indexing in progress` notice
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 
