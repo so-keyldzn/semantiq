@@ -28,6 +28,7 @@ fn test_get_info_has_instructions() {
     assert!(instructions.contains("semantiq_find_refs"));
     assert!(instructions.contains("semantiq_deps"));
     assert!(instructions.contains("semantiq_explain"));
+    assert!(instructions.contains("semantiq_impact"));
 }
 
 #[test]
@@ -42,7 +43,7 @@ fn test_get_info_enables_tools() {
 fn test_tools_are_annotated_read_only() {
     let tools = super::SemantiqServer::tool_router().list_all();
 
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 5);
     for tool in &tools {
         let annotations = tool
             .annotations
@@ -89,4 +90,58 @@ async fn test_structured_content_matches_text() {
     assert_eq!(structured["symbol"], "structured_fn");
     assert_eq!(structured["definitions"][0]["file_path"], "lib.rs");
     assert!(structured["usages"].is_array());
+}
+
+#[tokio::test]
+async fn test_impact_groups_sites_by_file() {
+    use super::index_test_file;
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let (server, _temp) = create_test_server();
+    index_test_file(
+        &server.store,
+        "lib.rs",
+        "pub fn core_op() {}\nfn helper() { core_op(); }\n",
+        "rust",
+    );
+    index_test_file(
+        &server.store,
+        "tests.rs",
+        "fn test_it() { helper(); }\n",
+        "rust",
+    );
+
+    let result = server
+        .semantiq_impact(Parameters(crate::server::ImpactParams {
+            symbol: "core_op".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .expect("impact failed");
+
+    let structured = result.structured_content.expect("no structured content");
+    assert_eq!(structured["site_count"], 2);
+    assert_eq!(structured["files"][0]["file_path"], "lib.rs");
+    assert_eq!(structured["files"][0]["sites"][0]["enclosing"], "helper");
+    assert_eq!(structured["files"][1]["file_path"], "tests.rs");
+    assert_eq!(structured["files"][1]["depth"], 2);
+    assert_eq!(structured["test_files"][0], "tests.rs");
+
+    let text = result.content[0].as_text().unwrap().text.clone();
+    assert!(text.contains("Tests to run"), "{text}");
+}
+
+#[tokio::test]
+async fn test_impact_rejects_path_traversal() {
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let (server, _temp) = create_test_server();
+    let result = server
+        .semantiq_impact(Parameters(crate::server::ImpactParams {
+            symbol: "x_y".to_string(),
+            file_path: Some("../etc/passwd".to_string()),
+            ..Default::default()
+        }))
+        .await;
+    assert!(result.is_err());
 }

@@ -376,6 +376,7 @@ pub struct DependencyRecord {
 /// One identifier occurrence from the `refs` table, with its file path resolved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReferenceRecord {
+    pub file_id: i64,
     pub file_path: String,
     pub line: i64,
     pub kind: String,

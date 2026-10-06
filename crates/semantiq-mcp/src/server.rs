@@ -7,7 +7,9 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
-use semantiq_retrieval::{RetrievalEngine, SearchOptions};
+use semantiq_retrieval::{
+    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, RetrievalEngine, SearchOptions,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -368,6 +370,92 @@ impl SemantiqServer {
         })
     }
 
+    pub async fn impact(&self, params: ImpactParams) -> Result<ImpactOutput, String> {
+        debug!(symbol = %params.symbol, file = ?params.file_path, "semantiq_impact called");
+
+        let symbol = validate_input(&params.symbol, "Symbol name")?;
+        let file_path = match params.file_path {
+            Some(ref path) => {
+                let path = validate_input(path, "File path")?;
+                if path.contains("..") {
+                    return Err("File path must not contain '..'".to_string());
+                }
+                Some(path)
+            }
+            None => None,
+        };
+        let max_depth = params.max_depth.unwrap_or(DEFAULT_IMPACT_DEPTH);
+        let limit = params.limit.unwrap_or(DEFAULT_IMPACT_SITES);
+
+        let owned_symbol = symbol.clone();
+        let analysis = self
+            .run_blocking(move |engine| {
+                engine.analyze_impact(&owned_symbol, file_path.as_deref(), max_depth, limit)
+            })
+            .await
+            .map_err(|e| {
+                error!("Impact analysis failed: {}", e);
+                "Impact analysis failed: an internal error occurred".to_string()
+            })?;
+
+        // Group sites by file, closest impact first.
+        let mut files: Vec<ImpactedFile> = Vec::new();
+        for site in &analysis.sites {
+            let out = ImpactSiteOut {
+                line: site.line,
+                depth: site.depth,
+                target: site.target.clone(),
+                kind: site.kind.clone(),
+                enclosing: site.enclosing.as_ref().map(|e| e.name.clone()),
+                confidence: site.confidence.as_str().to_string(),
+            };
+            match files.iter_mut().find(|f| f.file_path == site.file_path) {
+                Some(file) => {
+                    file.depth = file.depth.min(site.depth);
+                    file.is_test |= site.is_test;
+                    file.sites.push(out);
+                }
+                None => files.push(ImpactedFile {
+                    file_path: site.file_path.clone(),
+                    is_test: site.is_test,
+                    depth: site.depth,
+                    sites: vec![out],
+                }),
+            }
+        }
+        files.sort_by(|a, b| {
+            a.depth
+                .cmp(&b.depth)
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
+        for file in &mut files {
+            file.sites
+                .sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.depth.cmp(&b.depth)));
+        }
+        let test_files = files
+            .iter()
+            .filter(|f| f.is_test)
+            .map(|f| f.file_path.clone())
+            .collect();
+
+        Ok(ImpactOutput {
+            symbol: analysis.symbol,
+            definitions: analysis
+                .definitions
+                .into_iter()
+                .map(|d| ImpactDefinitionOut {
+                    file_path: d.file_path,
+                    line: d.line,
+                    kind: d.kind,
+                })
+                .collect(),
+            site_count: analysis.sites.len(),
+            files,
+            test_files,
+            truncated: analysis.truncated,
+        })
+    }
+
     pub async fn explain(&self, params: ExplainParams) -> Result<ExplainOutput, String> {
         debug!(symbol = %params.symbol, "semantiq_explain called");
 
@@ -476,6 +564,19 @@ impl SemantiqServer {
         let output = self.explain(params).await?;
         structured_result(&output, output.render())
     }
+    #[tool(
+        name = "semantiq_impact",
+        description = "Before changing a function, method or type, list what may break: every place that uses it, then the users of those places (up to max_depth), grouped by file, with the test files to run. Each site has a confidence (same_file, imports, unique_name, name_only) since matching is by name.",
+        output_schema = schema_for_output::<ImpactOutput>(),
+        annotations(title = "Change impact", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_impact(
+        &self,
+        Parameters(params): Parameters<ImpactParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.impact(params).await?;
+        structured_result(&output, output.render())
+    }
 }
 
 #[tool_handler]
@@ -487,7 +588,7 @@ impl ServerHandler for SemantiqServer {
                 "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
                  semantic code understanding. Use semantiq_search for natural-language or fuzzy \
                  code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
-                 file's imports and dependents, and semantiq_explain for a symbol's definition \
+                 file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
                  and documentation. Plain grep remains better for exact string matches.",
             )
     }

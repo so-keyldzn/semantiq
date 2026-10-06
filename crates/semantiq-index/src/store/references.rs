@@ -61,7 +61,7 @@ impl IndexStore {
 
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT f.path, r.line, r.kind
+                "SELECT r.file_id, f.path, r.line, r.kind
                  FROM refs r
                  JOIN files f ON f.id = r.file_id
                  WHERE r.name = ?1
@@ -71,9 +71,10 @@ impl IndexStore {
             let records = stmt
                 .query_map(params![name, safe_limit as i64], |row| {
                     Ok(ReferenceRecord {
-                        file_path: row.get(0)?,
-                        line: row.get(1)?,
-                        kind: row.get(2)?,
+                        file_id: row.get(0)?,
+                        file_path: row.get(1)?,
+                        line: row.get(2)?,
+                        kind: row.get(3)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;

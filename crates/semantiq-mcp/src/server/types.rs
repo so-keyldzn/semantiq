@@ -268,3 +268,129 @@ impl ExplainOutput {
         output
     }
 }
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ImpactParams {
+    /// Symbol about to change (function, method, type, constant…)
+    pub symbol: String,
+    /// Restrict to the definition in this file (relative path), when the name
+    /// is defined in several places
+    pub file_path: Option<String>,
+    /// How many levels of callers to follow (default 2, max 4)
+    pub max_depth: Option<usize>,
+    /// Maximum number of impact sites (default 200, max 1000)
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ImpactOutput {
+    pub symbol: String,
+    pub definitions: Vec<ImpactDefinitionOut>,
+    pub site_count: usize,
+    /// Impacted files, closest impact first
+    pub files: Vec<ImpactedFile>,
+    /// Impacted test files: the tests worth running after the change
+    pub test_files: Vec<String>,
+    /// The site limit was reached; the analysis is incomplete
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ImpactDefinitionOut {
+    pub file_path: String,
+    pub line: usize,
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ImpactedFile {
+    pub file_path: String,
+    pub is_test: bool,
+    /// Smallest depth among this file's sites
+    pub depth: usize,
+    pub sites: Vec<ImpactSiteOut>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ImpactSiteOut {
+    pub line: usize,
+    /// 1 = uses the symbol directly, 2 = uses a direct user, …
+    pub depth: usize,
+    /// Name referenced on this line
+    pub target: String,
+    /// call, type, import or reference
+    pub kind: String,
+    /// Function/type containing the line, itself impacted at the next depth
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing: Option<String>,
+    /// same_file, imports, unique_name, or name_only (possibly a homonym)
+    pub confidence: String,
+}
+
+impl ImpactOutput {
+    pub fn render(&self) -> String {
+        let mut output = format!("# Impact of '{}'\n\n", self.symbol);
+
+        if self.definitions.is_empty() {
+            output
+                .push_str("No definition found in the index; sites below match the name only.\n\n");
+        } else {
+            for def in &self.definitions {
+                output.push_str(&format!(
+                    "Defined at {}:{} ({})\n",
+                    def.file_path, def.line, def.kind
+                ));
+            }
+            if self.definitions.len() > 1 {
+                output.push_str(
+                    "Several definitions share this name: pass file_path to analyse one.\n",
+                );
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&format!(
+            "{} sites in {} files ({} test files){}\n\n",
+            self.site_count,
+            self.files.len(),
+            self.test_files.len(),
+            if self.truncated {
+                " — limit reached, results incomplete"
+            } else {
+                ""
+            }
+        ));
+
+        for file in &self.files {
+            output.push_str(&format!(
+                "## {}{} (depth {})\n",
+                file.file_path,
+                if file.is_test { " [test]" } else { "" },
+                file.depth
+            ));
+            for site in &file.sites {
+                output.push_str(&format!("  L{} [{}] {}", site.line, site.kind, site.target));
+                if let Some(ref enclosing) = site.enclosing {
+                    output.push_str(&format!(" in {}", enclosing));
+                }
+                if site.depth > 1 {
+                    output.push_str(&format!(" (depth {})", site.depth));
+                }
+                if site.confidence == "name_only" {
+                    output.push_str(" (name match only)");
+                }
+                output.push('\n');
+            }
+            output.push('\n');
+        }
+
+        if !self.test_files.is_empty() {
+            output.push_str("## Tests to run\n\n");
+            for path in &self.test_files {
+                output.push_str(&format!("- {}\n", path));
+            }
+        }
+
+        output
+    }
+}

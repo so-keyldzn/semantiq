@@ -351,3 +351,91 @@ fn test_explain_usage_count_from_ast() {
     assert!(explanation.found);
     assert_eq!(explanation.usage_count, 2);
 }
+
+fn impact_sites(analysis: &super::ImpactAnalysis) -> Vec<(usize, &str, usize, &str)> {
+    analysis
+        .sites
+        .iter()
+        .map(|s| (s.depth, s.file_path.as_str(), s.line, s.confidence.as_str()))
+        .collect()
+}
+
+#[test]
+fn test_impact_follows_callers_and_flags_tests() {
+    let (engine, _root) = index_rust_project(&[
+        (
+            "lib.rs",
+            "pub fn core_op() -> u32 { 1 }\npub fn helper() -> u32 { core_op() }\n",
+        ),
+        (
+            "app.rs",
+            "fn run() { helper(); }\nfn other() { let helper = 2; }\n",
+        ),
+        ("test_app.rs", "fn test_run() { run(); }\n"),
+    ]);
+
+    let analysis = engine.analyze_impact("core_op", None, 3, 100).unwrap();
+    assert_eq!(analysis.definitions.len(), 1);
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![
+            (1, "lib.rs", 2, "same_file"),
+            // `let helper = 2` is a local variable, not a call: not followed.
+            (2, "app.rs", 1, "unique_name"),
+            (3, "test_app.rs", 1, "unique_name"),
+        ]
+    );
+    assert_eq!(
+        analysis.sites[1]
+            .enclosing
+            .as_ref()
+            .map(|e| e.name.as_str()),
+        Some("run")
+    );
+    assert!(analysis.sites[2].is_test);
+    assert!(!analysis.truncated);
+}
+
+#[test]
+fn test_impact_does_not_propagate_through_homonyms() {
+    let (engine, _root) = index_rust_project(&[
+        ("a.rs", "pub fn process() {}\n"),
+        ("b.rs", "pub fn process() {}\n"),
+        ("c.rs", "fn go() { process(); }\n"),
+        ("d.rs", "fn main() { go(); }\n"),
+    ]);
+
+    let analysis = engine
+        .analyze_impact("process", Some("a.rs"), 3, 100)
+        .unwrap();
+    assert_eq!(analysis.definitions.len(), 1);
+    // c.rs might call b.rs's `process`: reported, but `go` is not followed.
+    assert_eq!(impact_sites(&analysis), vec![(1, "c.rs", 1, "name_only")]);
+}
+
+#[test]
+fn test_impact_respects_depth_and_site_limits() {
+    let (engine, _root) = index_rust_project(&[(
+        "lib.rs",
+        "fn base() {}\nfn one() { base(); }\nfn two() { one(); }\nfn three() { two(); }\n",
+    )]);
+
+    let shallow = engine.analyze_impact("base", None, 1, 100).unwrap();
+    assert_eq!(shallow.sites.len(), 1);
+
+    let capped = engine.analyze_impact("base", None, 4, 2).unwrap();
+    assert_eq!(capped.sites.len(), 2);
+    assert!(capped.truncated);
+}
+
+#[test]
+fn test_is_test_location() {
+    use super::is_test_location;
+    assert!(is_test_location("crates/x/tests/it.rs", None));
+    assert!(is_test_location("src/store/tests.rs", None));
+    assert!(is_test_location("web/app.spec.ts", None));
+    assert!(is_test_location("pkg/handler_test.go", None));
+    assert!(is_test_location("src/lib.rs", Some("test_parse")));
+    assert!(!is_test_location("src/lib.rs", Some("parse")));
+    assert!(!is_test_location("src/contest.rs", None));
+}
