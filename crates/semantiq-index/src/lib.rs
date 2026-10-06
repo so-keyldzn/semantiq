@@ -9,6 +9,9 @@ pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult};
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_FILE_SIZE, should_exclude, should_exclude_entry, should_exclude_path,
 };
-pub use schema::{ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord};
+pub use schema::{
+    CallEdgeRecord, ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord,
+    TypeRelationRecord, UnreferencedSymbol,
+};
 pub use store::{CalibrationData, CalibrationRecord, IndexStats, IndexStore};
 pub use watcher::FileWatcher;

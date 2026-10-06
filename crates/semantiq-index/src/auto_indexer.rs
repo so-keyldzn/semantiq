@@ -6,7 +6,7 @@ use ignore::WalkBuilder;
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
-    SymbolExtractor, resolve_local_import,
+    StructureExtractor, SymbolExtractor, resolve_local_import,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -317,6 +317,11 @@ impl AutoIndexer {
                 // Extract identifier occurrences for AST-based find_refs
                 let references = ReferenceExtractor::extract(&tree, &content, language);
                 self.store.insert_references(file_id, &references)?;
+
+                // Call edges and type relations (semantiq_calls / semantiq_hierarchy)
+                let structure =
+                    StructureExtractor::extract(&tree, &content, language, &symbols, &references);
+                self.store.insert_structure(file_id, &structure)?;
 
                 // Extract chunks and generate embeddings
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
