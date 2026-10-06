@@ -7,7 +7,10 @@ use axum::{
     routing::{get, post},
 };
 use semantiq_mcp::SemantiqServer;
-use semantiq_retrieval::SearchOptions;
+use semantiq_mcp::server::{
+    CallsOutput, CallsParams, DeadCodeOutput, DeadCodeParams, HierarchyOutput, HierarchyParams,
+};
+use semantiq_retrieval::{CallDirection, SearchOptions};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error};
@@ -29,6 +32,9 @@ pub(crate) fn create_router(server: AppState) -> Router {
         .route("/find-refs", post(find_refs))
         .route("/deps", post(deps))
         .route("/explain", post(explain))
+        .route("/calls", post(calls))
+        .route("/hierarchy", post(hierarchy))
+        .route("/dead-code", post(dead_code))
         .with_state(server)
 }
 
@@ -453,4 +459,132 @@ async fn explain(
             ))
         }
     }
+}
+
+// ============================================
+// Structure: calls, hierarchy, dead code
+// ============================================
+
+/// Maximum number of edges / symbols returned by the structural endpoints,
+/// as for the other REST endpoints.
+const MAX_HTTP_LIMIT: usize = 100;
+
+type ApiError = (StatusCode, Json<ErrorResponse>);
+
+fn bad_request(error: &str, code: &str) -> ApiError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: error.to_string(),
+            code: code.to_string(),
+        }),
+    )
+}
+
+fn internal_error(error: &str, code: &str) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: error.to_string(),
+            code: code.to_string(),
+        }),
+    )
+}
+
+fn validate_symbol(symbol: &str) -> Result<(), ApiError> {
+    let symbol = symbol.trim();
+    if symbol.is_empty() {
+        return Err(bad_request("Symbol cannot be empty", "INVALID_SYMBOL"));
+    }
+    if symbol.len() > 500 {
+        return Err(bad_request(
+            "Symbol exceeds maximum length of 500 characters",
+            "SYMBOL_TOO_LONG",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_path(path: Option<&str>) -> Result<(), ApiError> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(bad_request("File path cannot be empty", "INVALID_PATH"));
+    }
+    if path.len() > 500 {
+        return Err(bad_request(
+            "File path exceeds maximum length",
+            "PATH_TOO_LONG",
+        ));
+    }
+    if path.contains("..") {
+        return Err(bad_request(
+            "File path must not contain '..'",
+            "PATH_TRAVERSAL",
+        ));
+    }
+    Ok(())
+}
+
+async fn calls(
+    State(server): State<AppState>,
+    Json(mut req): Json<CallsParams>,
+) -> Result<Json<CallsOutput>, ApiError> {
+    validate_symbol(&req.symbol)?;
+    validate_optional_path(req.file_path.as_deref())?;
+    if req
+        .direction
+        .as_deref()
+        .is_some_and(|d| CallDirection::parse(d).is_none())
+    {
+        return Err(bad_request(
+            "direction must be callers, callees or both",
+            "INVALID_DIRECTION",
+        ));
+    }
+    req.limit = Some(req.limit.unwrap_or(MAX_HTTP_LIMIT).min(MAX_HTTP_LIMIT));
+
+    debug!(symbol = %req.symbol, "HTTP calls request");
+    server
+        .calls(req)
+        .await
+        .map(Json)
+        .map_err(|_| internal_error("Call graph failed", "CALLS_ERROR"))
+}
+
+async fn hierarchy(
+    State(server): State<AppState>,
+    Json(mut req): Json<HierarchyParams>,
+) -> Result<Json<HierarchyOutput>, ApiError> {
+    validate_symbol(&req.symbol)?;
+    req.limit = Some(req.limit.unwrap_or(MAX_HTTP_LIMIT).min(MAX_HTTP_LIMIT));
+
+    debug!(symbol = %req.symbol, "HTTP hierarchy request");
+    server
+        .hierarchy(req)
+        .await
+        .map(Json)
+        .map_err(|_| internal_error("Type hierarchy failed", "HIERARCHY_ERROR"))
+}
+
+async fn dead_code(
+    State(server): State<AppState>,
+    Json(mut req): Json<DeadCodeParams>,
+) -> Result<Json<DeadCodeOutput>, ApiError> {
+    validate_optional_path(req.path_prefix.as_deref())?;
+    if let Some(language) = req.language.as_deref()
+        && (language.trim().is_empty() || language.len() > 500)
+    {
+        return Err(bad_request("Invalid language", "INVALID_LANGUAGE"));
+    }
+    req.limit = Some(req.limit.unwrap_or(MAX_HTTP_LIMIT).min(MAX_HTTP_LIMIT));
+
+    debug!(prefix = ?req.path_prefix, language = ?req.language, "HTTP dead-code request");
+    server
+        .dead_code(req)
+        .await
+        .map(Json)
+        .map_err(|_| internal_error("Dead code analysis failed", "DEAD_CODE_ERROR"))
 }
