@@ -294,10 +294,15 @@ impl SemantiqServer {
         let mut definitions = Vec::new();
         let mut usages = Vec::new();
         for r in results.results {
-            let is_definition = r.metadata.match_type.as_deref() == Some("definition");
+            let kind = r
+                .metadata
+                .match_type
+                .unwrap_or_else(|| "reference".to_string());
+            let is_definition = kind == "definition";
             let reference = Reference {
                 file_path: r.file_path,
                 line: r.start_line,
+                kind,
                 content: r.content,
             };
             if is_definition {
@@ -432,7 +437,7 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_find_refs",
-        description = "Find the definitions and usages of a symbol across the codebase. Useful for understanding how a function or class is used before changing it.",
+        description = "Find the definitions and usages of a symbol across the codebase, from the syntax tree: comments, strings and longer names containing it are never matched (unlike grep). Each usage is tagged call, type, import or reference. Use it before renaming or changing a function, type or method.",
         output_schema = schema_for_output::<FindRefsOutput>(),
         annotations(title = "Find references", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]

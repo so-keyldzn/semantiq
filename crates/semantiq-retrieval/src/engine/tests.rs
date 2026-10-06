@@ -265,3 +265,89 @@ fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
         "prefix match must survive the default min_score: {names:?}"
     );
 }
+
+/// Index `files` (path, Rust source) under a temp root with symbols and AST references.
+fn index_rust_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
+    use semantiq_parser::{Language, LanguageSupport, ReferenceExtractor, SymbolExtractor};
+
+    // Text search skips hidden paths, so avoid the default `.tmpXXXX` name.
+    let root = tempfile::Builder::new()
+        .prefix("semantiq-refs")
+        .tempdir()
+        .unwrap();
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let mut support = LanguageSupport::new().unwrap();
+    for (path, source) in files {
+        std::fs::write(root.path().join(path), source).unwrap();
+        let file_id = store
+            .insert_file(path, Some("rust"), source, source.len() as i64, 0)
+            .unwrap();
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
+        store.insert_symbols(file_id, &symbols).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, Language::Rust);
+        store.insert_references(file_id, &refs).unwrap();
+    }
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+    (engine, root)
+}
+
+#[test]
+fn test_find_references_uses_ast_not_text() {
+    let (engine, _root) = index_rust_project(&[
+        ("lib.rs", "pub fn compute() -> u32 { 1 }\n"),
+        (
+            "main.rs",
+            "// compute is documented here\nfn main() {\n    let s = \"compute\";\n    let compute_all = 2;\n    compute();\n}\n",
+        ),
+    ]);
+
+    let results = engine.find_references("compute", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.file_path.as_str(),
+                r.start_line,
+                r.metadata.match_type.as_deref().unwrap_or(""),
+            )
+        })
+        .collect();
+
+    // Comment (line 1), string (line 3) and `compute_all` (line 4) are excluded.
+    assert_eq!(
+        hits,
+        vec![("lib.rs", 1, "definition"), ("main.rs", 5, "call")],
+        "{hits:?}"
+    );
+    assert_eq!(results.results[1].content, "compute();");
+}
+
+#[test]
+fn test_find_references_falls_back_to_text_for_unknown_names() {
+    // A name that only appears inside a string has no AST reference.
+    let (engine, _root) = index_rust_project(&[(
+        "main.rs",
+        "fn main() {\n    let key = \"only_in_string\";\n}\n",
+    )]);
+
+    let results = engine.find_references("only_in_string", 50).unwrap();
+    assert_eq!(results.results.len(), 1);
+    assert_eq!(
+        results.results[0].metadata.match_type.as_deref(),
+        Some("text")
+    );
+}
+
+#[test]
+fn test_explain_usage_count_from_ast() {
+    let (engine, _root) = index_rust_project(&[(
+        "lib.rs",
+        "fn helper() {}\n// helper helper helper\nfn a() { helper(); }\nfn b() { helper(); }\n",
+    )]);
+
+    let explanation = engine.explain_symbol("helper").unwrap();
+    assert!(explanation.found);
+    assert_eq!(explanation.usage_count, 2);
+}

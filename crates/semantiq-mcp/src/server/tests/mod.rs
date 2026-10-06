@@ -54,6 +54,8 @@ pub(super) fn index_test_file(
         && let Ok(symbols) = semantiq_parser::SymbolExtractor::extract(&tree, content, lang)
     {
         let _ = store.insert_symbols(file_id, &symbols);
+        let references = semantiq_parser::ReferenceExtractor::extract(&tree, content, lang);
+        let _ = store.insert_references(file_id, &references);
     }
 
     file_id

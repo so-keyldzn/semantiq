@@ -215,6 +215,7 @@ impl IndexStore {
         conn.execute_batch(
             "BEGIN IMMEDIATE;
              DELETE FROM chunks_vec;
+             DELETE FROM refs;
              DELETE FROM dependencies;
              DELETE FROM chunks;
              DELETE FROM symbols;
@@ -245,6 +246,7 @@ impl IndexStore {
         let result = (|| -> Result<()> {
             conn.execute_batch(
                 "DELETE FROM chunks_vec;
+                 DELETE FROM refs;
                  DELETE FROM dependencies;
                  DELETE FROM chunks;
                  DELETE FROM symbols;

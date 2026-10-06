@@ -1176,3 +1176,62 @@ fn test_get_dependents_mixed_resolved_and_unresolved() {
         dependents.len()
     );
 }
+
+#[test]
+fn test_references_insert_find_count_and_cascade() {
+    use semantiq_parser::{Reference, ReferenceKind};
+
+    let store = IndexStore::open_in_memory().unwrap();
+    let a = store.insert_file("a.rs", Some("rust"), "x", 1, 0).unwrap();
+    let b = store.insert_file("b.rs", Some("rust"), "y", 1, 0).unwrap();
+    let r = |name: &str, line: usize, kind| Reference {
+        name: name.to_string(),
+        line,
+        kind,
+    };
+
+    store
+        .insert_references(
+            a,
+            &[
+                r("foo", 1, ReferenceKind::Definition),
+                r("foo", 3, ReferenceKind::Call),
+            ],
+        )
+        .unwrap();
+    store
+        .insert_references(
+            b,
+            &[
+                r("foo", 2, ReferenceKind::Type),
+                r("bar", 2, ReferenceKind::Call),
+            ],
+        )
+        .unwrap();
+
+    let found = store.find_references_by_name("foo", 10).unwrap();
+    let got: Vec<_> = found
+        .iter()
+        .map(|f| (f.file_path.as_str(), f.line, f.kind.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("a.rs", 1, "definition"),
+            ("a.rs", 3, "call"),
+            ("b.rs", 2, "type")
+        ]
+    );
+    assert_eq!(store.count_usages("foo").unwrap(), 2);
+    assert_eq!(store.find_references_by_name("foo", 1).unwrap().len(), 1);
+
+    // Re-inserting replaces the file's previous references.
+    store
+        .insert_references(a, &[r("foo", 7, ReferenceKind::Call)])
+        .unwrap();
+    assert_eq!(store.count_usages("foo").unwrap(), 2);
+
+    // Deleting a file cascades to its references.
+    store.delete_file("b.rs").unwrap();
+    assert!(store.find_references_by_name("bar", 10).unwrap().is_empty());
+}

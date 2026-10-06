@@ -105,6 +105,9 @@ pub struct FindRefsOutput {
 pub struct Reference {
     pub file_path: String,
     pub line: usize,
+    /// definition, call, type, import, reference — or text when the name is
+    /// unknown to the AST index and was found by text search
+    pub kind: String,
     pub content: String,
 }
 
@@ -134,9 +137,10 @@ impl FindRefsOutput {
             output.push_str(&format!("## Usages ({} found)\n\n", self.usages.len()));
             for usage in self.usages.iter().take(Self::MAX_RENDERED_USAGES) {
                 output.push_str(&format!(
-                    "📎 {}:{}\n   {}\n\n",
+                    "📎 {}:{} [{}]\n   {}\n\n",
                     usage.file_path,
                     usage.line,
+                    usage.kind,
                     usage.content.trim()
                 ));
             }

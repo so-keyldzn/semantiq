@@ -50,9 +50,11 @@ crates/
 
 ### Data Flow
 
-1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
+1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
 
 2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
+
+   **References**: `find_references()` takes definitions from `symbols` and usages from the `refs` table (AST identifier leaves, one row per name/file/line, classified definition/import/call/type/reference by `ReferenceExtractor` in `semantiq-parser/src/references.rs`). Comments, strings and substrings never match. Names absent from `refs` (data-file keys) fall back to text search (`match_type = "text"`). Resolution is by name only: homonyms share references.
 
 3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 4 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
 
