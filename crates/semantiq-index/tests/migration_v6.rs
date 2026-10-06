@@ -10,6 +10,7 @@
 //! connection.
 
 use rusqlite::{Connection, params};
+use semantiq_embeddings::{CODERANKEMBED_MODEL_ID, STUB_EMBEDDING_MODEL_ID};
 use semantiq_index::IndexStore;
 use semantiq_index::schema::{EMBEDDING_DIMENSION, EMBEDDING_MODEL_ID, SCHEMA_VERSION};
 use std::path::Path;
@@ -262,6 +263,70 @@ fn embedding_model_change_without_schema_bump_rebuilds_vectors() {
 
     let conn = Connection::open(&db).unwrap();
     assert_eq!(count(&conn, "distance_observations"), 0);
+    assert_eq!(
+        metadata(&conn, "embedding_model").as_deref(),
+        Some(EMBEDDING_MODEL_ID)
+    );
+}
+
+/// An index built by a stub build (zero vectors, `embedding_model = 'stub'`)
+/// must be reset when opened by an ONNX build — otherwise unchanged files are
+/// skipped by `needs_reindex` and the zero vectors survive forever. The
+/// reverse switch resets too. Run with and without the `onnx` feature to
+/// cover both directions.
+#[test]
+fn switching_between_stub_and_onnx_builds_resets_index() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+
+    let other_id = if EMBEDDING_MODEL_ID == STUB_EMBEDDING_MODEL_ID {
+        CODERANKEMBED_MODEL_ID
+    } else {
+        STUB_EMBEDDING_MODEL_ID
+    };
+
+    let store = IndexStore::open(&db).unwrap();
+    store.set_parser_version().unwrap();
+    let file_id = store
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 9, 1000)
+        .unwrap();
+    store
+        .insert_chunks(
+            file_id,
+            &[semantiq_parser::CodeChunk {
+                content: "fn a() {}".to_string(),
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 9,
+                symbols: vec!["a".to_string()],
+            }],
+        )
+        .unwrap();
+    let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
+    store
+        .update_chunk_embedding(chunk_id, &vec![0.0; EMBEDDING_DIMENSION])
+        .unwrap();
+    drop(store);
+
+    // Pretend the index was written by the other kind of build.
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE metadata SET value = ?1 WHERE key = 'embedding_model'",
+            params![other_id],
+        )
+        .unwrap();
+    }
+
+    let store = IndexStore::open(&db).unwrap();
+    assert!(store.needs_full_reindex().unwrap());
+    assert!(store.get_file_by_path("src/a.rs").unwrap().is_none());
+    drop(store);
+
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(count(&conn, "chunks_vec"), 0);
     assert_eq!(
         metadata(&conn, "embedding_model").as_deref(),
         Some(EMBEDDING_MODEL_ID)

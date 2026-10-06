@@ -195,8 +195,29 @@ fn ensure_file_downloaded(url: &str, path: &Path, expected_sha256: &str, name: &
     download_file(url, path, expected_sha256)
 }
 
+/// Best-effort removal of the files left by the previous all-MiniLM-L6-v2
+/// model (~90MB), which nothing reads anymore.
+#[cfg(feature = "onnx")]
+fn remove_legacy_model_files(models_dir: &Path) {
+    for name in [
+        "minilm.onnx",
+        "minilm.onnx.sha256",
+        "tokenizer.json",
+        "tokenizer.json.sha256",
+    ] {
+        let path = models_dir.join(name);
+        if path.exists() {
+            match fs::remove_file(&path) {
+                Ok(()) => info!("Removed legacy model file {:?}", path),
+                Err(e) => warn!("Could not remove legacy model file {:?}: {}", path, e),
+            }
+        }
+    }
+}
+
 #[cfg(feature = "onnx")]
 pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
+    remove_legacy_model_files(&get_models_dir());
     let config = EmbeddingConfig::default();
     let model_path = Path::new(&config.model_path);
     let tokenizer_path = Path::new(&config.tokenizer_path);

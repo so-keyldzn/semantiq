@@ -575,37 +575,36 @@ mod tests {
         )
         .unwrap();
 
-        // Run migration — should add resolved_path column
-        migrate_schema(&conn).unwrap();
+        // Run migration up to v4 only — should add resolved_path column. The
+        // v5 -> v6 step (embedding model switch) wipes indexed data and is
+        // covered separately in tests/migration_v6.rs.
+        migrate_schema_to(&conn, 4).unwrap();
 
         // Run init_schema — should succeed now (CREATE INDEX on resolved_path won't fail)
         init_schema(&conn).unwrap();
 
-        // The v5 -> v6 step clears indexed data (embedding model change forces
-        // a full re-index), so the v3 dependency row is gone.
-        let deps: i64 = conn
-            .query_row("SELECT COUNT(*) FROM dependencies", [], |row| row.get(0))
+        // Verify the column exists and old data is preserved with NULL resolved_path
+        let (target, resolved): (String, Option<String>) = conn
+            .query_row(
+                "SELECT target_path, resolved_path FROM dependencies WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(deps, 0);
+        assert_eq!(target, "crate::utils");
+        assert!(resolved.is_none());
 
         // Verify we can insert with resolved_path
         conn.execute(
-            "INSERT INTO files (path, language, hash, size, last_modified, indexed_at)
-             VALUES ('test.rs', 'rust', 'abc', 10, 1000, 2000)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
             "INSERT INTO dependencies (source_file_id, target_path, import_name, kind, resolved_path)
-             SELECT id, 'crate::schema', 'schema', 'local', 'src/schema.rs'
-             FROM files WHERE path = 'test.rs'",
+             VALUES (1, 'crate::schema', 'schema', 'local', 'src/schema.rs')",
             [],
         )
         .unwrap();
 
         let resolved: Option<String> = conn
             .query_row(
-                "SELECT resolved_path FROM dependencies WHERE target_path = 'crate::schema'",
+                "SELECT resolved_path FROM dependencies WHERE id = 2",
                 [],
                 |row| row.get(0),
             )
