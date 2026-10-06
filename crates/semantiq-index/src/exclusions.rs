@@ -3,10 +3,33 @@
 //! This module provides common exclusion patterns for files and directories
 //! that should not be indexed (hidden dirs, dependencies, large files, etc.)
 
+use semantiq_parser::Language;
 use std::path::Path;
 
 /// Maximum file size in bytes (1MB)
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+/// Maximum size of an indexed data file (JSON, YAML, TOML): 256 KB.
+///
+/// Large data files (fixtures, exports, benchmark results, lockfile-like
+/// dumps) carry thousands of keys and chunks but little code meaning: a single
+/// 800 KB JSON file can hold most of a project's chunks and half of the
+/// embedding time. Code files keep the [`MAX_FILE_SIZE`] limit.
+pub const MAX_DATA_FILE_SIZE: u64 = 256 * 1024;
+
+/// Size limit above which `path` is not indexed: [`MAX_DATA_FILE_SIZE`] for
+/// data languages, [`MAX_FILE_SIZE`] otherwise.
+pub fn max_indexed_size(path: &Path) -> u64 {
+    match Language::from_path(path) {
+        Some(Language::Json | Language::Yaml | Language::Toml) => MAX_DATA_FILE_SIZE,
+        _ => MAX_FILE_SIZE,
+    }
+}
+
+/// Whether a file of `size` bytes at `path` is above its indexing limit.
+pub fn exceeds_indexed_size(path: &Path, size: u64) -> bool {
+    size > max_indexed_size(path)
+}
 
 /// Directories to exclude from indexing
 pub const EXCLUDED_DIRS: &[&str] = &[
@@ -54,10 +77,10 @@ pub fn should_exclude_path(path: &Path) -> bool {
     false
 }
 
-/// Check if a file should be excluded based on its size
+/// Check if a file should be excluded based on its size (see [`max_indexed_size`])
 pub fn is_file_too_large(path: &Path) -> bool {
     if let Ok(metadata) = std::fs::metadata(path) {
-        return metadata.len() > MAX_FILE_SIZE;
+        return exceeds_indexed_size(path, metadata.len());
     }
     false
 }
@@ -78,6 +101,19 @@ pub fn should_exclude_entry(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_data_files_have_a_lower_size_limit() {
+        let big = 300 * 1024;
+        for data in ["results.json", "config.yaml", "ci.yml", "Cargo.toml"] {
+            assert!(exceeds_indexed_size(Path::new(data), big), "{data}");
+            assert!(!exceeds_indexed_size(Path::new(data), MAX_DATA_FILE_SIZE));
+        }
+        for code in ["main.rs", "app.ts", "README.md", "noext"] {
+            assert!(!exceeds_indexed_size(Path::new(code), big), "{code}");
+            assert!(exceeds_indexed_size(Path::new(code), MAX_FILE_SIZE + 1));
+        }
+    }
 
     #[test]
     fn test_should_exclude_hidden_dirs() {

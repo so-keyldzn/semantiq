@@ -4,6 +4,14 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Large data files no longer slow indexing down**: JSON, YAML and TOML files
+  above 256 KB (`MAX_DATA_FILE_SIZE`) are skipped; code files keep the 1 MB
+  limit. A single 840 KB JSON file held 52 % of this repository's chunks:
+  a full index now takes 56 s instead of 243 s. Oversized files indexed by an
+  earlier version (or that grew past the limit) are removed from the index on
+  the next run.
+
 ## [0.10.0] - 2026-10-06
 
 Pivot release: Semantiq moves from "semantic search over MCP" to structural

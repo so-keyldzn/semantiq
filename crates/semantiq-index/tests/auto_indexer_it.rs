@@ -211,3 +211,39 @@ fn initial_index_prunes_files_deleted_while_offline() {
     assert!(store.get_file_by_path("src/helpers.rs").unwrap().is_some());
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
+
+#[test]
+fn oversized_data_files_are_skipped_and_stale_rows_removed() {
+    use semantiq_index::MAX_DATA_FILE_SIZE;
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(&root, "data/small.json", "{\"name\": \"semantiq\"}\n");
+
+    // A JSON file above the data-file limit, as an older version would have
+    // indexed it (simulated by a row inserted directly).
+    let mut big = String::from("{\n");
+    while big.len() < MAX_DATA_FILE_SIZE as usize + 1024 {
+        big.push_str("  \"key_padding_value\": \"0123456789abcdef\",\n");
+    }
+    big.push_str("  \"end\": 0\n}\n");
+    write_file(&root, "data/big.json", &big);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    store
+        .insert_file("data/big.json", Some("json"), &big, big.len() as i64, 0)
+        .unwrap();
+
+    let indexer = AutoIndexer::new(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+
+    assert_eq!(result.errors, 0);
+    assert!(
+        store.get_file_by_path("data/big.json").unwrap().is_none(),
+        "an oversized data file must be dropped from the index"
+    );
+    assert!(store.get_file_by_path("data/small.json").unwrap().is_some());
+    assert!(store.get_file_by_path("src/lib.rs").unwrap().is_some());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
