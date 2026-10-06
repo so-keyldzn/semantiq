@@ -268,6 +268,13 @@ fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
 
 /// Index `files` (path, Rust source) under a temp root with symbols and AST references.
 fn index_rust_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
+    index_rust_project_with(files, RetrievalEngine::new)
+}
+
+fn index_rust_project_with(
+    files: &[(&str, &str)],
+    build: fn(Arc<IndexStore>, &str) -> RetrievalEngine,
+) -> (RetrievalEngine, tempfile::TempDir) {
     use semantiq_parser::{Language, LanguageSupport, ReferenceExtractor, SymbolExtractor};
 
     // Text search skips hidden paths, so avoid the default `.tmpXXXX` name.
@@ -288,8 +295,35 @@ fn index_rust_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::Tem
         let refs = ReferenceExtractor::extract(&tree, source, Language::Rust);
         store.insert_references(file_id, &refs).unwrap();
     }
-    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+    let engine = build(store, root.path().to_str().unwrap());
     (engine, root)
+}
+
+#[test]
+fn test_without_embeddings_answers_non_search_queries() {
+    let (engine, _root) = index_rust_project_with(
+        &[
+            (
+                "lib.rs",
+                "pub fn core_op() -> u32 { 1 }
+",
+            ),
+            ("main.rs", "fn main() {\n    core_op();\n}\n"),
+        ],
+        RetrievalEngine::without_embeddings,
+    );
+    assert!(engine.embedding_model.is_none());
+    assert!(engine.distance_collector().is_none());
+
+    let refs = engine.find_references("core_op", 50).unwrap();
+    assert_eq!(refs.results.len(), 2);
+    assert!(engine.explain_symbol("core_op").unwrap().found);
+    let impact = engine.analyze_impact("core_op", None, 2, 100).unwrap();
+    assert_eq!(impact.sites.len(), 1);
+    assert!(engine.get_dependencies("main.rs").is_ok());
+    assert!(engine.get_dependents("lib.rs").is_ok());
+    // Search still works, without its semantic strategy.
+    assert!(engine.search("core_op", 10, None).is_ok());
 }
 
 #[test]

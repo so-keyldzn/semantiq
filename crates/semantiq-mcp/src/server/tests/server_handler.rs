@@ -32,6 +32,16 @@ fn test_get_info_has_instructions() {
 }
 
 #[test]
+fn test_get_info_flags_unavailable_semantic_search() {
+    // Tests run with the stub model (`test-stub` feature).
+    let (server, _temp) = create_test_server();
+    let instructions = server.get_info().instructions.unwrap();
+
+    assert!(semantiq_embeddings::semantic_search_unavailable_reason().is_some());
+    assert!(instructions.contains("semantic (embedding) search is unavailable"));
+}
+
+#[test]
 fn test_get_info_enables_tools() {
     let (server, _temp) = create_test_server();
     let info = server.get_info();

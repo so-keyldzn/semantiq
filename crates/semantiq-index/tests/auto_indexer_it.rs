@@ -6,7 +6,7 @@
 //!   1. after a file is (re)indexed, `chunks_vec` has zero orphan rows, and
 //!   2. the stored data reflects the *current* file content.
 //!
-//! Embeddings use the default stub model (the `onnx` feature is off in tests),
+//! Embeddings use the stub model (the `test-stub` feature is on in tests),
 //! which still writes a `chunks_vec` row per chunk — so the orphan invariant is
 //! genuinely exercised on reindex even without a real model.
 

@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo build                          # Build (debug)
 cargo build --release                # Build (release, with LTO)
-cargo build --features semantiq-embeddings/onnx  # Build with real ONNX embeddings
-cargo test                           # Run all tests
+cargo build --no-default-features    # Stub embeddings, no ONNX Runtime (macOS Intel)
+cargo test                           # Run all tests (stub embeddings, never downloads the model)
 cargo test -p semantiq-parser        # Tests for one crate
 cargo test -p semantiq-parser test_language_from_extension  # Single test
 cargo check                          # Type-check without building
@@ -19,13 +19,18 @@ cargo clippy                         # Lint
 ## CLI Usage
 
 ```bash
-cargo run -- init                            # First-time setup: writes .mcp.json, CLAUDE.md, .gitignore, indexes
-cargo run -- init-cursor                     # Same for Cursor (.cursor/) and VS Code (.vscode/)
+cargo run -- init                            # First-time setup: skill (.claude/skills/semantiq/), .mcp.json, CLAUDE.md block, .gitignore, indexes
+cargo run -- init --no-mcp                   # Skill + CLI only (--no-skill: MCP only, --no-index, --force, --global)
+cargo run -- init-cursor                     # Same for Cursor (.cursor/) and VS Code (.vscode/), plus an AGENTS.md block
 cargo run -- index /path/to/project          # Index a project
 cargo run -- index --force                   # Force full reindex
 cargo run -- serve --project /path/to/project  # MCP server (stdio)
 cargo run -- serve --project . --http-port 3000  # HTTP API mode
-cargo run -- search "query"                  # CLI search (testing)
+cargo run -- search "query" --json           # Query commands mirror the MCP tools: markdown or --json
+cargo run -- refs <symbol>                   # = semantiq_find_refs
+cargo run -- deps <file>                     # = semantiq_deps
+cargo run -- explain <symbol>                # = semantiq_explain
+cargo run -- impact <symbol> --max-depth 3   # = semantiq_impact
 cargo run -- stats                           # Index statistics
 cargo run -- calibrate                       # Build adaptive search thresholds (needs 500+ observations)
 cargo run -- update                          # Self-update the binary to the latest GitHub release
@@ -35,6 +40,8 @@ cargo run -- update --check                  # Only report whether an update is 
 ## Architecture
 
 Semantiq is a Rust workspace providing semantic code understanding for AI coding assistants via MCP (Model Context Protocol).
+
+Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
 
 ### Crate Structure
 
@@ -56,9 +63,9 @@ crates/
 
    **References**: `find_references()` takes definitions from `symbols` and usages from the `refs` table (AST identifier leaves, one row per name/file/line, classified definition/import/call/type/reference by `ReferenceExtractor` in `semantiq-parser/src/references.rs`). Comments, strings and substrings never match. Names absent from `refs` (data-file keys) fall back to text search (`match_type = "text"`). Resolution is by name only: homonyms share references.
 
-   **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP.
+   **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP and `semantiq impact`.
 
-3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 5 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
+3. **Serving**: MCP on stdio (`rmcp::transport::stdio()`) OR HTTP (`--http-port`), which serves both the REST API and MCP Streamable HTTP at `/mcp`. These are mutually exclusive modes. The MCP server (rmcp 3.x, `#[tool_router]`) exposes 5 read-only tools: `semantiq_search`, `semantiq_find_refs`, `semantiq_deps`, `semantiq_explain`, `semantiq_impact` (handlers in `semantiq-mcp/src/server.rs`, params/outputs in `server/types.rs`, output builders shared with the CLI in `server/outputs.rs`). Each tool returns markdown text plus `structuredContent` matching its `outputSchema`.
 
 ### Languages
 
@@ -79,11 +86,13 @@ crates/
 
 - **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
 - **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. Incremental steps in `migrate_schema()` (run before `init_schema()`), version stored in `metadata` table.
-- **Embedding model** (`EMBEDDING_MODEL_ID` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `EMBEDDING_MODEL_ID` whenever the model or its export changes.
+- **Embedding model** (`embedding_model_id()` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`; the id is resolved at runtime, `"stub"` whenever the stub is selected): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `CODERANKEMBED_MODEL_ID` whenever the model or its export changes.
 
 ### Embedding Model
 
-- **Feature-gated**: The `onnx` feature on `semantiq-embeddings` is **off by default**. Without it, `StubEmbeddingModel` returns zero vectors — semantic search runs but produces meaningless results.
+- **Feature-gated, on by default**: the `semantiq` binary has `default = ["onnx"]` (forwarding `semantiq-embeddings/onnx`); library crates keep `default = []`. `--no-default-features` builds the `StubEmbeddingModel` (zero vectors, semantic search skipped) — used for `x86_64-apple-darwin`, where `ort` has no prebuilt runtime.
+- **Backend selection** (`selected_backend()` in `model.rs`): no `onnx` feature → stub; else `SEMANTIQ_EMBEDDINGS=stub|onnx` overrides; else the `test-stub` feature → stub; else ONNX. Every workspace crate enables `test-stub` in its dev-dependencies, so tests never download the model (`--all-features` turns it on too). Real-model tests: `SEMANTIQ_EMBEDDINGS=onnx cargo test -p semantiq-retrieval --features onnx --test intent_queries`.
+- **Stub warning**: `semantic_search_unavailable_reason()` drives the startup WARN (`serve`, `index`), the `Embeddings` section of `semantiq stats`, `semantic_search*` fields of `GET /stats`, and a note appended to the MCP instructions.
 - Model: `nomic-ai/CodeRankEmbed`, community INT8 ONNX export (768-dim, ~139MB), downloaded on first run to `dirs::data_dir()/semantiq/models/` (`coderankembed-int8.onnx`, `coderankembed-tokenizer.json`). URLs are pinned to a commit and verified against hard-coded SHA-256 digests (`MODEL_SHA256` / `TOKENIZER_SHA256` in `model.rs`); a mismatch triggers a re-download, and a mismatching download is rejected.
 - Single dimension constant: `semantiq_embeddings::EMBEDDING_DIMENSION` (re-exported by `semantiq_index::schema`). Never hard-code it.
 - Query vs document: use `embed_query()` for search queries (prepends `"Represent this query for searching relevant code: "`), `embed()` / `embed_batch()` for code chunks (no prefix).
@@ -108,6 +117,7 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 | Variable | Default | Description |
 |---|---|---|
 | `SEMANTIQ_ONNX_THREADS` | `min(cpu_count, 8)` | ONNX intra-op parallelism |
+| `SEMANTIQ_EMBEDDINGS` | unset | `stub` forces zero-vector embeddings (no download, semantic search off); `onnx` forces the real model in a `test-stub` build |
 | `SEMANTIQ_UPDATE_CHECK` | `true` | `"0"` or `"false"` to disable version check |
 | `SEMANTIQ_UPDATE_CACHE_HOURS` | `24` | Hours to cache GitHub version check |
 | `RUST_LOG` | `info,ort=warn` | Tracing filter (`--verbose` sets `debug`) |

@@ -23,6 +23,29 @@ npm install -g semantiq-mcp
 cargo install --git https://github.com/so-keyldzn/semantiq.git
 ```
 
+### Embedding model (first run)
+
+Semantic search uses [CodeRankEmbed](https://huggingface.co/nomic-ai/CodeRankEmbed)
+(INT8 ONNX export, 768-D), enabled by default in the npm binaries and in
+`cargo install` / `cargo build`.
+
+- **Download**: on first `index` / `serve`, about **140 MB** (model ~139 MB +
+  tokenizer ~0.7 MB) is fetched once from HuggingFace and verified against
+  pinned SHA-256 digests. The build itself also downloads the ONNX Runtime
+  library (`ort`).
+- **Cache**: `~/Library/Application Support/semantiq/models/` (macOS),
+  `~/.local/share/semantiq/models/` (Linux), `%APPDATA%\semantiq\models\`
+  (Windows). Delete it to force a re-download.
+- **Indexing time**: the first full index embeds every chunk; as a reference, this repository (~110 files, ~31k lines, ~450 chunks) takes about 2 minutes on an Apple M1 Max (8 ONNX threads, see `SEMANTIQ_ONNX_THREADS`). Later runs only reindex changed files.
+- **Opting out**: `SEMANTIQ_EMBEDDINGS=stub` skips the model (no download);
+  symbol and text search still work, semantic search is disabled. To build
+  without ONNX Runtime at all: `cargo install --git
+  https://github.com/so-keyldzn/semantiq.git --no-default-features`.
+- **macOS Intel (x86_64)**: ONNX Runtime has no prebuilt binary for this
+  target, so its release is built without embeddings. `semantiq serve` logs a
+  warning, `semantiq stats` / `GET /stats` report semantic search as
+  unavailable, and search falls back to symbols and text.
+
 ## Quick Start
 
 ```bash
@@ -31,12 +54,14 @@ semantiq init
 ```
 
 This automatically:
+- Installs the `semantiq` [Agent Skill](#use-with-claude-code--agents) in `.claude/skills/semantiq/`
 - Creates (or merges) `.mcp.json` at the project root with the `semantiq` MCP server entry
-- Creates `CLAUDE.md` with tool usage instructions
-- Updates `.gitignore` to exclude `.semantiq.db`
+- Adds a short Semantiq section to `CLAUDE.md` pointing at the CLI/skill and the MCP tools
+- Updates `.gitignore` to exclude `.semantiq.db*`
 - Indexes your entire project with embeddings
 
-Restart Claude Code and you're ready to go!
+Restart Claude Code and you're ready to go! `semantiq init --no-mcp` installs
+the skill only, `--no-skill` the MCP server only.
 
 The indexing step of `init` is optional: `semantiq serve` indexes the project
 in the background on startup (see [Auto-Indexing](#auto-indexing)). Running
@@ -49,6 +74,40 @@ semantiq init-cursor
 ```
 
 Creates `.cursor/` and `.vscode/` configurations with MCP server setup.
+
+## Use with Claude Code / agents
+
+Every Semantiq capability is a CLI command that agents can run through their
+shell tool. Results go to stdout (markdown by default, `--json` for the exact
+structured output of the matching MCP tool), logs to stderr.
+
+```bash
+semantiq search "where are file renames handled"   # find code by concept
+semantiq refs should_exclude_path                   # definitions + usages (AST)
+semantiq impact should_exclude_path                 # what breaks + tests to run
+semantiq explain RetrievalEngine                    # signature, docs, usages
+semantiq deps src/server.rs --json                  # imports / imported by
+```
+
+The **`semantiq` skill** (`skills/semantiq/SKILL.md`, installed by
+`semantiq init` into `.claude/skills/semantiq/`) teaches Claude Code when to
+reach for these commands instead of grep and how to read their output. Unlike
+MCP tool definitions, which are loaded into every session, a skill only enters
+the context when it is relevant. Install it for all your projects with
+`semantiq init --global` (`~/.claude/skills/semantiq/`); other agents
+(Cursor, Codex…) get a pointer in `AGENTS.md` from `semantiq init-cursor`.
+
+Query commands find `.semantiq.db` in the current directory or a parent and
+reindex files changed since the last run before answering (`--no-refresh`
+skips that check). Without an index they exit with code 1 and suggest
+`semantiq index`; usage errors exit with 2.
+
+**Latency.** `refs`, `deps`, `explain` and `impact` don't load the embedding
+model and answer in ~20 ms on this repository. `search` loads the ONNX model on
+every call: ~0.75–1 s in total, of which ~0.4 s is the model checksum check
+and ~0.3 s the ONNX session, the query itself taking ~20 ms. That stays under
+a second, so there is no daemon; run `semantiq serve` (MCP) if you need
+warm semantic search.
 
 ## Manual Setup
 
@@ -72,9 +131,18 @@ If you prefer manual configuration, add to your MCP config:
 Initialize Semantiq for a project (recommended first step).
 
 ```bash
-semantiq init              # Current directory
+semantiq init              # Current directory: skill + MCP + CLAUDE.md + index
 semantiq init /my/project  # Specific path
+semantiq init --no-mcp     # Skill + CLI only (no .mcp.json entry)
+semantiq init --no-skill   # MCP only
+semantiq init --no-index   # Skip the initial indexing
+semantiq init --force      # Replace skill files you modified with the bundled ones
+semantiq init --global     # Install the skill in ~/.claude/skills/semantiq/ only
 ```
+
+Re-running `init` is safe: unchanged files are left alone, the Semantiq section
+of `CLAUDE.md` (between `<!-- semantiq:start -->` markers) is refreshed in
+place, and an edited `SKILL.md` is kept unless `--force`.
 
 ### `semantiq init-cursor [PATH]`
 
@@ -90,6 +158,7 @@ Creates:
 - `.cursor/mcp.json` - MCP server config
 - `.cursorignore` - Indexing exclusions
 - `.vscode/settings.json`, `tasks.json`, `launch.json`, `extensions.json`
+- `AGENTS.md` - Semantiq section pointing terminal agents at the CLI
 
 ### `semantiq serve [OPTIONS]`
 
@@ -124,7 +193,7 @@ semantiq index --database /path  # Custom database location
 
 ### `semantiq search <QUERY> [OPTIONS]`
 
-Search from the command line (useful for testing).
+Search code by meaning, symbol name or text (same as `semantiq_search`).
 
 ```bash
 semantiq search "authentication handler"
@@ -136,9 +205,24 @@ semantiq search "handler" --symbol-kind function,method
 
 Options:
 - `--limit N` - Maximum results (default: 10)
-- `--min-score F` - Minimum score threshold 0.0-1.0 (default: 0.35)
+- `--min-score F` - Minimum score threshold 0.0-1.0 (default: 0.3)
 - `--file-type CSV` - Filter by extensions (e.g., `rs,ts,py`)
 - `--symbol-kind CSV` - Filter by symbol types (e.g., `function,method,class`)
+
+### `semantiq refs | deps | explain | impact`
+
+The other MCP tools as commands (`semantiq_find_refs`, `semantiq_deps`,
+`semantiq_explain`, `semantiq_impact`):
+
+```bash
+semantiq refs <SYMBOL> [--limit 50]
+semantiq deps <FILE>
+semantiq explain <SYMBOL>
+semantiq impact <SYMBOL> [--max-depth 2] [--file <FILE>] [--limit 200]
+```
+
+All query commands accept `--json`, `--no-refresh`, `--database <FILE>` and
+`--project <DIR>`.
 
 ### `semantiq stats`
 
@@ -352,11 +436,8 @@ Automatic reindex is triggered when:
 ## Known Limitations
 
 - **`semantiq_explain`**: Works best with functions, classes, structs, and interfaces. Exported variables (e.g., `export const config = {...}`) may not be indexed as symbols. Use `semantiq_search` as a fallback.
-- **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). Stored in:
-  - macOS: `~/Library/Application Support/semantiq/models/`
-  - Linux: `~/.local/share/semantiq/models/`
-  - Windows: `%APPDATA%\semantiq\models\`
-- **macOS Intel (x86_64)**: Not supported due to ONNX Runtime limitation.
+- **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). See [Embedding model (first run)](#embedding-model-first-run) for the cache location and opt-out.
+- **macOS Intel (x86_64)**: No semantic (embedding) search, due to an ONNX Runtime limitation; symbol and text search work.
 - **File size limit**: Files larger than 1MB are skipped.
 
 ## Excluded Directories

@@ -69,6 +69,10 @@ async fn test_stats_returns_ok() {
     assert_eq!(stats.indexed_files, 0);
     assert_eq!(stats.indexed_symbols, 0);
     assert!(!stats.indexing);
+    // Tests run with the stub model (`test-stub` feature).
+    assert_eq!(stats.embedding_model, "stub");
+    assert!(!stats.semantic_search);
+    assert!(stats.semantic_search_unavailable_reason.is_some());
 }
 
 // ============================================
