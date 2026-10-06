@@ -6,7 +6,9 @@
 //!       `strip_prefix(root).unwrap_or(path)` fallthrough).
 //!
 //! These tests seed a hand-built v4 database containing both kinds of residue,
-//! run `migrate_schema`, and assert the cleanup + version bump + idempotence.
+//! run the migration up to v5 (`migrate_schema_to(conn, 5)`; v6 then wipes
+//! all indexed data for the embedding model switch, see `migration_v6.rs`),
+//! and assert the cleanup + version bump + idempotence.
 //!
 //! Why a raw `rusqlite::Connection` instead of `IndexStore`: the public store
 //! API always opens at the *current* schema version, so it can't represent a
@@ -18,7 +20,7 @@
 
 use rusqlite::Connection;
 use semantiq_index::IndexStore;
-use semantiq_index::schema::{SCHEMA_VERSION, migrate_schema};
+use semantiq_index::schema::migrate_schema_to;
 
 /// The DDL of a v4 database. v4 == v3 + `dependencies.resolved_path`, so the
 /// `dependencies` table here already has that column. `chunks_vec` is the vec0
@@ -82,7 +84,7 @@ fn register_sqlite_vec() {
     let _ = IndexStore::open_in_memory().expect("bootstrap IndexStore registers sqlite-vec");
 }
 
-/// A 384-d embedding blob (little-endian f32) for the vec0 table.
+/// A 384-d embedding blob (the pre-v6 MiniLM dimension) (little-endian f32) for the vec0 table.
 fn embedding_blob(seed: f32) -> Vec<u8> {
     (0..384)
         .flat_map(|i| (seed + i as f32 * 0.001).to_le_bytes())
@@ -197,7 +199,7 @@ fn migrate_v4_to_v5_purges_orphans_and_ghost_files() {
         "seed should have an orphan vec row"
     );
 
-    migrate_schema(&conn).unwrap();
+    migrate_schema_to(&conn, 5).unwrap();
 
     // The absolute-path ghost file is gone; only the relative file remains.
     assert_eq!(
@@ -236,7 +238,7 @@ fn migrate_v4_to_v5_purges_orphans_and_ghost_files() {
     );
 
     // Version bumped to current.
-    assert_eq!(stored_version(&conn), SCHEMA_VERSION.to_string());
+    assert_eq!(stored_version(&conn), "5");
 }
 
 #[test]
@@ -244,17 +246,17 @@ fn migrate_v4_to_v5_is_idempotent() {
     register_sqlite_vec();
     let conn = seed_v4_db();
 
-    migrate_schema(&conn).unwrap();
+    migrate_schema_to(&conn, 5).unwrap();
     let files_after_first = count(&conn, "SELECT COUNT(*) FROM files");
     let chunks_after_first = count(&conn, "SELECT COUNT(*) FROM chunks");
     let vecs_after_first = count(&conn, "SELECT COUNT(*) FROM chunks_vec");
 
     // Re-running migrate on an already-v5 database is a no-op (stored >= target
     // short-circuits) and must not corrupt or further mutate any rows.
-    migrate_schema(&conn).unwrap();
-    migrate_schema(&conn).unwrap();
+    migrate_schema_to(&conn, 5).unwrap();
+    migrate_schema_to(&conn, 5).unwrap();
 
-    assert_eq!(stored_version(&conn), SCHEMA_VERSION.to_string());
+    assert_eq!(stored_version(&conn), "5");
     assert_eq!(
         count(&conn, "SELECT COUNT(*) FROM files"),
         files_after_first

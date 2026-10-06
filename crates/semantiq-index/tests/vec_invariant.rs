@@ -20,8 +20,10 @@ fn make_chunk(content: &str, start_line: usize, end_line: usize) -> CodeChunk {
 }
 
 fn make_embedding(seed: f32) -> Vec<f32> {
-    // Distinct but valid 384-d vectors; values matter little for the invariant.
-    (0..384).map(|i| seed + (i as f32) * 0.0001).collect()
+    // Distinct but valid full-dimension vectors; values matter little for the invariant.
+    (0..semantiq_index::schema::EMBEDDING_DIMENSION)
+        .map(|i| seed + (i as f32) * 0.0001)
+        .collect()
 }
 
 fn assert_no_orphans(store: &IndexStore, ctx: &str) {

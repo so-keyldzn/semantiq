@@ -1,10 +1,11 @@
-use rusqlite::{Connection, Result as SqliteResult};
+use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
-/// Embedding dimension (MiniLM-L6-v2 produces 384-dimensional vectors)
-pub const EMBEDDING_DIMENSION: usize = 384;
+/// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
+/// the model can never disagree.
+pub use semantiq_embeddings::{EMBEDDING_DIMENSION, EMBEDDING_MODEL_ID};
 
 /// Read the current schema version from the database.
 /// Returns 0 if the metadata table doesn't exist yet (fresh database).
@@ -35,9 +36,17 @@ fn get_stored_schema_version(conn: &Connection) -> SqliteResult<i32> {
 /// Apply incremental migrations to bring an existing database up to the current schema.
 /// This must be called BEFORE `init_schema()` on existing databases.
 pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
+    migrate_schema_to(conn, SCHEMA_VERSION)
+}
+
+/// Like [`migrate_schema`] but stops at `target` (clamped to `SCHEMA_VERSION`).
+/// Lets tests pin the effect of one migration step in isolation.
+#[doc(hidden)]
+pub fn migrate_schema_to(conn: &Connection, target: i32) -> SqliteResult<()> {
+    let target = target.min(SCHEMA_VERSION);
     let stored = get_stored_schema_version(conn)?;
 
-    if stored == 0 || stored >= SCHEMA_VERSION {
+    if stored == 0 || stored >= target {
         // Fresh database or already up to date — nothing to migrate
         return Ok(());
     }
@@ -49,7 +58,7 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
     // next start re-run cleanly (the DELETEs are idempotent) — which works
     // but mixes a half-applied state with the engine's startup canary.
     conn.execute("BEGIN IMMEDIATE", [])?;
-    let result = migrate_schema_inner(conn, stored);
+    let result = migrate_schema_inner(conn, stored, target);
     match &result {
         Ok(()) => {
             conn.execute("COMMIT", [])?;
@@ -61,9 +70,9 @@ pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
     result
 }
 
-fn migrate_schema_inner(conn: &Connection, stored: i32) -> SqliteResult<()> {
+fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteResult<()> {
     // v3 -> v4: add resolved_path column to dependencies
-    if stored < 4 {
+    if stored < 4 && target >= 4 {
         tracing::info!(
             "Migrating schema v{} -> v4: adding resolved_path column",
             stored
@@ -90,7 +99,7 @@ fn migrate_schema_inner(conn: &Connection, stored: i32) -> SqliteResult<()> {
     //     This left ghost rows in `files` (and their dependent chunks) that
     //     duplicate the relative-path version. Removing them lets FK CASCADE
     //     clean up the dependent rows for free.
-    if stored < 5 {
+    if stored < 5 && target >= 5 {
         let chunks_vec_exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
             [],
@@ -144,18 +153,125 @@ fn migrate_schema_inner(conn: &Connection, stored: i32) -> SqliteResult<()> {
         }
     }
 
+    // v5 -> v6: switch from all-MiniLM-L6-v2 (384-dim) to CodeRankEmbed
+    // (768-dim). A vec0 column's dimension is fixed at CREATE time, so the
+    // table must be dropped (DELETE would keep `float[384]`); `init_schema`
+    // recreates it at the new dimension.
+    if stored < 6 && target >= 6 {
+        tracing::info!(
+            "Migrating schema v{} -> v6: rebuilding chunks_vec for {}-dim embeddings",
+            stored,
+            EMBEDDING_DIMENSION
+        );
+        reset_embedding_space(conn)?;
+    }
+
     // Future migrations go here:
-    // if stored < 6 { ... }
+    // if stored < 7 && target >= 7 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
     // database that was bumped from v3->v4 here would still see stored=3.
     conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
-        [SCHEMA_VERSION.to_string()],
+        [target.to_string()],
     )?;
 
     Ok(())
+}
+
+/// Drop every artifact tied to the current embedding space and force a full
+/// re-index:
+/// - `chunks_vec` is dropped (recreated by `init_schema` at the current dimension);
+/// - distance observations and calibrated thresholds are cleared, since
+///   distances from different models are not comparable;
+/// - indexed data is cleared and `parser_version` removed so the next
+///   `check_and_prepare_for_reindex()` reports a full re-index.
+///
+/// Not transactional on its own: callers wrap it.
+fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch("DROP TABLE IF EXISTS chunks_vec")?;
+    // Older databases being migrated may predate some of these tables.
+    for table in [
+        "distance_observations",
+        "threshold_calibration",
+        "dependencies",
+        "chunks",
+        "symbols",
+        "files",
+    ] {
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            params![table],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        if exists {
+            conn.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+    }
+    conn.execute(
+        "DELETE FROM metadata
+          WHERE key IN ('parser_version', 'embedding_model', 'embedding_dim')",
+        [],
+    )?;
+    Ok(())
+}
+
+fn get_metadata(conn: &Connection, key: &str) -> SqliteResult<Option<String>> {
+    match conn.query_row(
+        "SELECT value FROM metadata WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Make sure the stored vectors were produced by the current embedding model.
+///
+/// Compares the `embedding_model` / `embedding_dim` metadata (and the declared
+/// `chunks_vec` dimension) with the compiled-in values; on any mismatch the
+/// embedding space is reset. This catches model changes that don't come with
+/// a schema bump.
+fn reconcile_embedding_space(conn: &Connection) -> SqliteResult<()> {
+    let vec_sql: Option<String> = match conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e),
+    };
+    // No vector table yet: fresh database, or already reset by a migration.
+    let Some(vec_sql) = vec_sql else {
+        return Ok(());
+    };
+
+    let expected_dim = EMBEDDING_DIMENSION.to_string();
+    let up_to_date = vec_sql.contains(&format!("float[{EMBEDDING_DIMENSION}]"))
+        && get_metadata(conn, "embedding_model")?.as_deref() == Some(EMBEDDING_MODEL_ID)
+        && get_metadata(conn, "embedding_dim")?.as_deref() == Some(expected_dim.as_str());
+    if up_to_date {
+        return Ok(());
+    }
+
+    tracing::info!(
+        "Embedding model changed (now {}, {}-dim): rebuilding vector index",
+        EMBEDDING_MODEL_ID,
+        EMBEDDING_DIMENSION
+    );
+    conn.execute_batch("SAVEPOINT reset_embedding_space")?;
+    match reset_embedding_space(conn) {
+        Ok(()) => conn.execute_batch("RELEASE reset_embedding_space"),
+        Err(e) => {
+            let _ = conn
+                .execute_batch("ROLLBACK TO reset_embedding_space; RELEASE reset_embedding_space");
+            Err(e)
+        }
+    }
 }
 
 pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
@@ -288,6 +404,8 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
         "#,
     )?;
 
+    reconcile_embedding_space(conn)?;
+
     // Create sqlite-vec virtual table for vector similarity search
     // This table stores chunk embeddings for semantic search
     conn.execute_batch(&format!(
@@ -299,10 +417,15 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
         "#
     ))?;
 
-    // Set schema version
+    // Set schema version and record which embedding model fills chunks_vec
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
-        [SCHEMA_VERSION.to_string()],
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES
+            ('schema_version', ?1), ('embedding_model', ?2), ('embedding_dim', ?3)",
+        params![
+            SCHEMA_VERSION.to_string(),
+            EMBEDDING_MODEL_ID,
+            EMBEDDING_DIMENSION.to_string()
+        ],
     )?;
 
     Ok(())
@@ -458,28 +581,31 @@ mod tests {
         // Run init_schema — should succeed now (CREATE INDEX on resolved_path won't fail)
         init_schema(&conn).unwrap();
 
-        // Verify the column exists and old data is preserved with NULL resolved_path
-        let (target, resolved): (String, Option<String>) = conn
-            .query_row(
-                "SELECT target_path, resolved_path FROM dependencies WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+        // The v5 -> v6 step clears indexed data (embedding model change forces
+        // a full re-index), so the v3 dependency row is gone.
+        let deps: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dependencies", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(target, "crate::utils");
-        assert!(resolved.is_none());
+        assert_eq!(deps, 0);
 
         // Verify we can insert with resolved_path
         conn.execute(
+            "INSERT INTO files (path, language, hash, size, last_modified, indexed_at)
+             VALUES ('test.rs', 'rust', 'abc', 10, 1000, 2000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
             "INSERT INTO dependencies (source_file_id, target_path, import_name, kind, resolved_path)
-             VALUES (1, 'crate::schema', 'schema', 'local', 'src/schema.rs')",
+             SELECT id, 'crate::schema', 'schema', 'local', 'src/schema.rs'
+             FROM files WHERE path = 'test.rs'",
             [],
         )
         .unwrap();
 
         let resolved: Option<String> = conn
             .query_row(
-                "SELECT resolved_path FROM dependencies WHERE id = 2",
+                "SELECT resolved_path FROM dependencies WHERE target_path = 'crate::schema'",
                 [],
                 |row| row.get(0),
             )

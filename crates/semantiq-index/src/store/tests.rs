@@ -223,7 +223,9 @@ fn test_update_chunk_embedding() {
     let chunks = store.get_chunks_by_file(file_id).unwrap();
     let chunk_id = chunks[0].id;
 
-    let embedding: Vec<f32> = (0..384).map(|i| i as f32 * 0.001).collect();
+    let embedding: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.001)
+        .collect();
     store.update_chunk_embedding(chunk_id, &embedding).unwrap();
 
     let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
@@ -392,9 +394,15 @@ fn test_vector_search() {
     store.insert_chunks(file_id, &chunks).unwrap();
     let stored_chunks = store.get_chunks_by_file(file_id).unwrap();
 
-    let embedding1: Vec<f32> = (0..384).map(|i| i as f32 * 0.001).collect();
-    let embedding2: Vec<f32> = (0..384).map(|i| i as f32 * 0.002).collect();
-    let embedding3: Vec<f32> = (0..384).map(|i| i as f32 * 0.003).collect();
+    let embedding1: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.001)
+        .collect();
+    let embedding2: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.002)
+        .collect();
+    let embedding3: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.003)
+        .collect();
 
     store
         .update_chunk_embedding(stored_chunks[0].id, &embedding1)
@@ -406,7 +414,9 @@ fn test_vector_search() {
         .update_chunk_embedding(stored_chunks[2].id, &embedding3)
         .unwrap();
 
-    let query: Vec<f32> = (0..384).map(|i| i as f32 * 0.0011).collect();
+    let query: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
+        .map(|i| i as f32 * 0.0011)
+        .collect();
     let results = store.search_similar_chunks(&query, 2).unwrap();
 
     assert_eq!(results.len(), 2);
