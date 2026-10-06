@@ -7,8 +7,9 @@ description: Code intelligence for the current project through the `semantiq` CL
 
 `semantiq` answers questions about the code from a local index (`.semantiq.db`,
 found in the current directory or a parent). Each command refreshes files
-changed since the last run, then prints results on stdout. Add `--json` to get
-structured output (same schema as the MCP tools), ideal for `jq` and chaining.
+changed since the last run, then prints compact results on stdout: one line
+per result, each path written once. Add `--json` to get structured output
+(same schema as the MCP tools), ideal for `jq` and chaining.
 
 ## Pick the command
 
@@ -35,6 +36,7 @@ run the listed tests.
 ```bash
 semantiq map --focus src/auth/ --max-tokens 1000
 semantiq search "where are file renames handled" --limit 5
+semantiq search "retry with backoff" --snippets   # code of each hit
 semantiq search "retry with backoff" --file-type rs,ts --json | jq -r '.results[].file_path'
 semantiq refs should_exclude_path --json | jq '.usages[] | "\(.file_path):\(.line) \(.kind)"'
 semantiq calls index_file --direction callers --max-depth 2
@@ -49,7 +51,8 @@ semantiq deps src/server.rs --json | jq '.imported_by'
 Options shared by all query commands: `--json`, `--no-refresh` (skip the
 freshness check, fastest), `-d/--database <file>`, `-p/--project <dir>`.
 `search` also takes `-l/--limit` (10), `--min-score` (0.3), `--file-type rs,py`,
-`--symbol-kind function,struct,…`; `refs` takes `-l/--limit` (50); `impact`
+`--symbol-kind function,struct,…`, `--snippets`; `refs` takes `-l/--limit`
+(30); `impact`
 takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
 `--direction` (both), `--max-depth` (1, max 3), `--file`, `-l/--limit` (100);
 `hierarchy` takes `--max-depth` (3, max 5), `-l/--limit` (200 per direction);
@@ -63,18 +66,25 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
   over references and imports), each with its key symbols' signatures. With
   `--focus`, the map centers on those files / symbols and their neighbours;
   `unmatched_focus` lists entries that matched nothing.
-- **search**: hits come from three strategies merged together: symbol names
+- **search**: one hit per entry, `path:start-end kind name (score)` then its
+  most relevant line (the declaration, or the line with most query words),
+  cut to 120 characters; read the file at those lines, or add `--snippets`
+  for the code. Hits come from three strategies merged together: symbol names
   (score up to 1.0), semantic similarity (up to 0.95) and plain text (up to
   0.75). Scores are relative to the query: compare hits within one result
   list, not across queries. A hit with `symbol_name` points at a definition.
+  `(more exist: raise limit)` / `truncated: true` means the list was cut.
   Few or weak hits? Rephrase as what the code *does*, or fall back to grep.
-- **refs**: `definitions` vs `usages`; each usage has a `kind`: `call`, `type`,
-  `import`, `reference`. Comments, strings and longer names never match.
+- **refs**: `definitions` (with the symbol kind and declaration line) vs
+  `usages` grouped by file, one `line kind  code` entry each; each usage has a
+  `kind`: `call`, `type`, `import`, `reference`. Comments, strings and longer
+  names never match.
   `kind: "text"` means the name is not a code symbol (e.g. a JSON/YAML key)
   and was found by text search. Matching is by name: homonyms (two `new`
   methods) share references, so check the file before trusting a hit.
 - **calls**: `callers` are call sites of the symbol (`caller` = enclosing
-  function, absent for top-level code), `callees` the calls it makes;
+  function, absent for top-level code), `callees` the calls it makes; the
+  text lists them by file as `line name`, the queried symbol being implied;
   `depth` 2+ follows callers of callers / callees of callees. Names the
   project does not define (library calls) go to `external_callees`. Each edge
   has the same `confidence` scale as impact. Only real calls count: passing a
@@ -84,7 +94,9 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
   `extends` or `implements`, `resolved: false` marks a library type. Covers
   Rust `impl Trait for Type` and supertraits, TS/JS, Python, Java, Kotlin, C#,
   C++, PHP, Ruby, Scala; not Go's implicit interfaces.
-- **impact**: sites grouped by file, closest first. `depth` 1 uses the symbol
+- **impact**: sites grouped by file, closest first; sites with the same
+  description share one line (`120,134 call index_file in initial_index`).
+  `depth` 1 uses the symbol
   directly, 2 uses a direct user, etc. (`enclosing` is the function that
   carries the impact one level further). `confidence`, strongest first:
   `same_file` > `imports` (the file imports the definition) > `unique_name`
@@ -93,15 +105,16 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
   site limit was hit. Several definitions listed → rerun with `--file`.
 - **dead-code**: symbols whose name is referenced nowhere outside their own
   definition, most certain first, each with a `confidence` (`high`, `medium`,
-  `low`) and `reasons`. Entry points, tests, trait / interface members and
+  `low`) and the `reasons` that lower it. Entry points, tests, trait / interface members and
   (without `--include-public`) public symbols are excluded and counted in
   `excluded`. Matching is by name and misses reflection, macros and
   framework registration: confirm with `refs` or grep before deleting.
 - **explain**: `found: false` means no symbol with that exact name: try
-  `search`. `definitions` can include `import` entries; `related_symbols` are
-  other symbols from the same files.
-- **deps**: `imports` (each with `kind`: `local`, `external` or `std`) and
-  `imported_by` (files whose local imports resolve to this file). Paths are
+  `search`. Import statements are listed apart (`imported_in`);
+  `related_symbols` are other symbols from the same files.
+- **deps**: `imports` (each with `kind`: `local`, `external` or `std`; the
+  text groups them by kind and module, `a::{X, Y}`) and `imported_by` (files
+  whose local imports resolve to this file, each once). Paths are
   relative to the project root.
 
 ## Errors and exit codes

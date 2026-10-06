@@ -95,8 +95,9 @@ Creates `.cursor/` and `.vscode/` configurations with MCP server setup.
 ## Use with Claude Code / agents
 
 Every Semantiq capability is a CLI command that agents can run through their
-shell tool. Results go to stdout (markdown by default, `--json` for the exact
-structured output of the matching MCP tool), logs to stderr.
+shell tool. Results go to stdout (compact text by default: one line per
+result, each path written once; `--json` for the exact structured output of
+the matching MCP tool), logs to stderr.
 
 ```bash
 semantiq search "where are file renames handled"   # find code by concept
@@ -222,13 +223,19 @@ semantiq search "db connection" --limit 20
 semantiq search "error" --min-score 0.5
 semantiq search "api" --file-type rs,ts,py
 semantiq search "handler" --symbol-kind function,method
+semantiq search "retry with backoff" --snippets   # code of each hit, not just one line
 ```
+
+Each hit is `path:start-end kind name (score)` followed by its most relevant
+line (cut to 120 characters); `(more exist: raise limit)` flags a truncated
+list.
 
 Options:
 - `--limit N` - Maximum results (default: 10)
 - `--min-score F` - Minimum score threshold 0.0-1.0 (default: 0.3)
 - `--file-type CSV` - Filter by extensions (e.g., `rs,ts,py`)
 - `--symbol-kind CSV` - Filter by symbol types (e.g., `function,method,class`)
+- `--snippets` - Print each hit's code instead of one preview line
 
 ### `semantiq refs | deps | explain | impact`
 
@@ -236,7 +243,7 @@ The other MCP tools as commands (`semantiq_find_refs`, `semantiq_deps`,
 `semantiq_explain`, `semantiq_impact`):
 
 ```bash
-semantiq refs <SYMBOL> [--limit 50]
+semantiq refs <SYMBOL> [--limit 30]
 semantiq deps <FILE>
 semantiq explain <SYMBOL>
 semantiq impact <SYMBOL> [--max-depth 2] [--file <FILE>] [--limit 200]
@@ -297,16 +304,18 @@ Dependencies: 142
 
 ### `semantiq_search`
 
-Semantic + lexical code search combining 4 strategies.
+Semantic + lexical code search combining 3 strategies. Returns, per hit,
+`path:lines`, the symbol and one preview line; `snippets: true` adds the code.
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `query` | string | required | Search query (max 500 chars) |
-| `limit` | number | 20 | Maximum results |
-| `min_score` | number | 0.35 | Score threshold (0.0-1.0) |
+| `limit` | number | 10 | Maximum results |
+| `min_score` | number | 0.3 | Score threshold (0.0-1.0) |
 | `file_type` | string | - | Filter by extensions (CSV: `rs,ts,py`) |
 | `symbol_kind` | string | - | Filter by symbol type (CSV) |
+| `snippets` | boolean | false | Include each hit's code (default: one preview line) |
 
 **Symbol kinds:** `function`, `method`, `class`, `struct`, `enum`, `interface`, `trait`, `module`, `variable`, `constant`, `type`
 
@@ -336,7 +345,7 @@ Find all references (definitions + usages) of a symbol.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `symbol` | string | required | Symbol name to search |
-| `limit` | number | 50 | Maximum results |
+| `limit` | number | 30 | Maximum results |
 
 ### `semantiq_deps`
 

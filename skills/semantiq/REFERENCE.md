@@ -2,15 +2,14 @@
 
 Each query command prints one JSON object on stdout, identical to the
 `structuredContent` of the matching MCP tool. Optional fields are omitted when
-empty. Line numbers are 1-based; paths are relative to the project root.
+empty (never `null`). Line numbers are 1-based; paths are relative to the
+project root.
 
 ## `semantiq search <query> --json`
 
 ```jsonc
 {
   "query": "where are file renames handled",
-  "total_count": 10,
-  "search_time_ms": 14,
   "results": [
     {
       "file_path": "crates/semantiq-index/src/watcher.rs",
@@ -18,36 +17,46 @@ empty. Line numbers are 1-based; paths are relative to the project root.
       "score": 0.95,
       "symbol_name": "poll_events",      // optional: the hit is a definition
       "symbol_kind": "function",         // optional
-      "content": "pub fn poll_events(&self) -> Vec<FileEvent> { ..."
+      "preview": "pub fn poll_events(&self) -> Vec<FileEvent> {",
+      "content": "pub fn poll_events(&self) -> Vec<FileEvent> { ..."   // only with --snippets
     }
-  ]
+  ],
+  "truncated": true
 }
 ```
 
-`score`: symbol matches up to 1.0, semantic up to 0.95, text up to 0.75,
-normalized within each strategy (relative to this query only).
+- `score`: symbol matches up to 1.0, semantic up to 0.95, text up to 0.75,
+  normalized within each strategy (relative to this query only), rounded to
+  2 decimals.
+- `preview`: the most relevant line of the hit (the line declaring
+  `symbol_name`, else the line holding most query words), trimmed and cut to
+  120 characters.
+- `content`: the hit's code, only with `--snippets` (MCP: `snippets: true`).
+- `truncated`: more results exist beyond `--limit` (default 10).
 
 ## `semantiq refs <symbol> --json`
 
 ```jsonc
 {
   "symbol": "should_exclude_path",
-  "total_count": 19,
-  "search_time_ms": 2,
   "definitions": [
     { "file_path": "crates/semantiq-index/src/exclusions.rs", "line": 40,
-      "kind": "definition", "content": "pub fn should_exclude_path(path: &Path) -> bool {\n ..." }
+      "kind": "function", "content": "pub fn should_exclude_path(path: &Path) -> bool {" }
   ],
   "usages": [
     { "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 2, "kind": "import",
       "content": "use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};" }
-  ]
+  ],
+  "truncated": false
 }
 ```
 
-`kind`: `definition`, `call`, `type`, `import`, `reference`, or `text` (name
-unknown to the syntax index, found by text search). A definition's `content` is
-its full source; a usage's `content` is its line.
+- Usage `kind`: `call`, `type`, `import`, `reference`, or `text` (name unknown
+  to the syntax index, found by text search). Definition `kind`: the symbol
+  kind (`function`, `struct`…), or `definition` when unknown.
+- `content`: one line, trimmed and cut to 120 characters (for a definition,
+  the line declaring the name).
+- `truncated`: the limit (`--limit`, default 30) was reached.
 
 ## `semantiq deps <file> --json`
 
@@ -55,17 +64,19 @@ its full source; a usage's `content` is its line.
 {
   "file_path": "crates/semantiq-index/src/watcher.rs",
   "imports": [
-    { "target_path": "crate::exclusions::should_exclude_path", "import_name": "should_exclude_path", "kind": "local" },
-    { "target_path": "anyhow::Result", "import_name": "Result", "kind": "external" }
+    { "target_path": "crate::exclusions::should_exclude_path", "kind": "local" },
+    { "target_path": "./util", "import_name": "helper", "kind": "local" },
+    { "target_path": "anyhow::Result", "kind": "external" }
   ],
   "imported_by": [ "crates/semantiq-index/src/auto_indexer.rs", "crates/semantiq-index/src/lib.rs" ]
 }
 ```
 
 `target_path` is the import as written (module path, relative file…), not
-always a project file. `imported_by` has one entry per importing statement, so
-a file can appear more than once. Both are `null` if the lookup failed (not
-merely empty); a file absent from the index gives two empty lists.
+always a project file; `import_name` is omitted when `target_path` already
+ends with it. `imported_by` lists each importing file once, sorted. Both are
+absent if the lookup failed (not merely empty); a file absent from the index
+gives two empty lists.
 
 ## `semantiq explain <symbol> --json`
 
@@ -79,14 +90,15 @@ merely empty); a file absent from the index gives two empty lists.
       "signature": "pub struct RetrievalEngine {",                // optional
       "doc_comment": "/// The main search and retrieval engine." }  // optional
   ],
+  "imported_in": [ "crates/semantiq-mcp/src/server.rs:10" ],
   "usage_count": 25,
   "related_symbols": [ "FileListCache", "FILE_LIST_CACHE_TTL_SECS" ]
 }
 ```
 
-`definitions` may include `import` entries (files that import the name).
-`related_symbols`: up to 10 other symbols from the files of those definitions,
-sorted.
+`definitions` leaves out import statements, listed as `path:line` in
+`imported_in`. `related_symbols`: up to 10 other symbols from the files of
+those definitions, sorted.
 
 ## `semantiq impact <symbol> --json`
 
@@ -137,13 +149,13 @@ sorted.
     {
       "file_path": "crates/semantiq-index/src/auto_indexer.rs",
       "language": "rust",             // optional
-      "rank": 0.175043,
+      "rank": 0.175,
       "symbols": [
         { "name": "remove_file", "kind": "method", "line": 432,
           "parent": "AutoIndexer",                               // optional: enclosing type
           "signature": "fn remove_file(&self, path: &Path) -> Result<()>",
           "doc": "Remove a file from the index",                 // optional, first line
-          "rank": 0.044485 }
+          "rank": 0.04449 }
       ]
     }
   ]
@@ -154,7 +166,7 @@ sorted.
   graph of references and imports (higher = more used by the rest of the
   code), personalized toward `--focus` entries when given.
 - A symbol's `rank` is the share of importance it receives through
-  references. The map keeps the best symbols that fit `--max-tokens`
+  references. Ranks keep 4 significant digits. The map keeps the best symbols that fit `--max-tokens`
   (default 1500, 256 to 8000).
 - `focus_files` / `focus_symbols`: how `--focus` entries were resolved
   (directories expand to their files); `unmatched_focus` matched nothing.
@@ -229,7 +241,7 @@ sorted.
       "file_path": "crates/semantiq-index/src/watcher.rs", "start_line": 46, "end_line": 50,
       "signature": "pub fn unwatch(&mut self, path: &Path) -> Result<()> {",   // optional
       "confidence": "low",
-      "reasons": [ "no reference outside its own definition", "public / exported: other packages may use it" ] }
+      "reasons": [ "public / exported: other packages may use it" ] }
   ],
   "candidates": 524,
   "excluded": { "entry_points": 2, "tests": 517, "public": 0, "trait_members": 2 },
@@ -239,10 +251,10 @@ sorted.
 
 - `symbols`: functions, methods and types whose name has no reference outside
   their own definition, most certain first.
-- `confidence`: `high`, `medium` or `low`; `reasons` says why the symbol is
-  reported and what lowers the confidence (dynamic language, public symbol,
-  attribute / decorator that may register it, possible override of a library
-  type).
+- `confidence`: `high`, `medium` or `low`; `reasons` (omitted when empty,
+  i.e. for `high`) says what lowers the confidence (dynamic language, public
+  symbol, attribute / decorator that may register it, possible override of a
+  library type).
 - `candidates`: unreferenced definitions examined; `excluded` counts those
   kept as alive by convention: `entry_points` (`main`, constructors, dunder
   methods), `tests`, `public` (unless `--include-public`), `trait_members`
