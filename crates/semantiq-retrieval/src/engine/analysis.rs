@@ -125,19 +125,21 @@ impl RetrievalEngine {
     }
 
     /// Get dependents for a file (what imports it).
+    ///
+    /// Uses `get_dependents_with_source_path` so the source file path is
+    /// resolved as part of the same query (single JOIN), avoiding the
+    /// previous N+1 lookup pattern.
     pub fn get_dependents(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
-        let mut deps = Vec::new();
+        let records = self.store.get_dependents_with_source_path(file_path)?;
 
-        let records = self.store.get_dependents(file_path)?;
-
-        for record in records {
-            let source_path = self.get_file_path(record.source_file_id)?;
-            deps.push(DependencyInfo {
+        let deps = records
+            .into_iter()
+            .map(|(record, source_path)| DependencyInfo {
                 target_path: source_path,
                 import_name: record.import_name,
                 kind: record.kind,
-            });
-        }
+            })
+            .collect();
 
         Ok(deps)
     }
@@ -188,22 +190,30 @@ impl RetrievalEngine {
             }
         }
 
-        // Count usages via FTS5 (much faster than reading files from disk)
-        // Falls back to text search if FTS5 returns no results
-        let usage_count = match self.store.search_symbols(symbol_name, 100) {
-            Ok(fts_results) => {
-                // FTS5 returns symbol definitions; add a conservative estimate
-                // for text usages beyond definitions
-                let definition_count = definitions.len();
-                fts_results.len().saturating_sub(definition_count)
-            }
-            Err(_) => {
-                // Fallback: use text search (slower but more accurate)
-                let usage_results =
-                    self.search_text(&Query::new(symbol_name), 100, &SearchOptions::default())?;
-                usage_results.len()
-            }
-        };
+        // Count usages via text search.
+        //
+        // `usage_count` is "occurrences of the symbol name in source files,
+        // minus the number of known definitions". We deliberately avoid
+        // arithmetic with `search_symbols` (FTS5) results because FTS5 only
+        // returns *definitions* of the symbol, so subtracting from it would
+        // be meaningless.
+        //
+        // The cap (`USAGE_SEARCH_CAP`) bounds the work performed by
+        // `search_text`, which scans files on disk. It is intentionally
+        // generous; `usage_count` should be read as "at least N usages"
+        // when the cap is reached.
+        const USAGE_SEARCH_CAP: usize = 1000;
+
+        // Total definitions known to the index (NOT capped by `max_definitions`,
+        // which only limits how many definitions we hydrate above).
+        let total_definitions = symbols.len();
+
+        let usage_results = self.search_text(
+            &Query::new(symbol_name),
+            USAGE_SEARCH_CAP,
+            &SearchOptions::default(),
+        )?;
+        let usage_count = usage_results.len().saturating_sub(total_definitions);
 
         Ok(SymbolExplanation {
             name: symbol_name.to_string(),

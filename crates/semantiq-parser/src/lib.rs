@@ -8,7 +8,7 @@ pub mod symbols;
 
 /// Version du parser. Incrémenter force une réindexation complète.
 /// Incrémenter quand : ajout/modif de types de noeuds, changement logique d'extraction
-pub const PARSER_VERSION: u32 = 8; // Multi-declarator dedup (name range in key), Scala multi-binding val/var, doc-comment blank-line break
+pub const PARSER_VERSION: u32 = 9; // Rust brace imports expanded into one import per leaf. v8: Multi-declarator dedup (name range in key), Scala multi-binding val/var, doc-comment blank-line break
 
 pub use chunks::{ChunkExtractor, CodeChunk};
 pub use imports::{Import, ImportExtractor, ImportKind};
