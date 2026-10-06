@@ -7,7 +7,7 @@ mod commands;
 mod http;
 
 use commands::InitOptions;
-use commands::query::{self, ImpactArgs, IndexArgs, SearchArgs};
+use commands::query::{self, CallsArgs, DeadCodeArgs, ImpactArgs, IndexArgs, SearchArgs};
 
 #[derive(Parser)]
 #[command(name = "semantiq")]
@@ -18,7 +18,8 @@ struct Cli {
     verbose: bool,
 
     /// JSON output: structured results on stdout for query commands (search,
-    /// refs, deps, explain, impact); JSON logs for the others (default for 'serve')
+    /// refs, deps, explain, impact, calls, hierarchy, dead-code); JSON logs for
+    /// the others (default for 'serve')
     #[arg(long, global = true)]
     json: bool,
 
@@ -190,6 +191,70 @@ enum Commands {
         limit: Option<usize>,
     },
 
+    /// Show who calls a function or method, and what it calls
+    Calls {
+        /// Function or method name
+        symbol: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// callers, callees or both (default both)
+        #[arg(long, value_parser = ["callers", "callees", "both"])]
+        direction: Option<String>,
+
+        /// Restrict to the definition in this file, when the name is defined in several places
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Call levels to follow (default 1, max 3)
+        #[arg(long)]
+        max_depth: Option<usize>,
+
+        /// Maximum call edges (default 100, max 1000)
+        #[arg(short, long)]
+        limit: Option<usize>,
+    },
+
+    /// Show what a type extends / implements and what extends / implements it
+    Hierarchy {
+        /// Type, class, interface or trait name
+        symbol: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Inheritance levels to follow (default 3, max 5)
+        #[arg(long)]
+        max_depth: Option<usize>,
+
+        /// Maximum relations per direction (default 200, max 1000)
+        #[arg(short, long)]
+        limit: Option<usize>,
+    },
+
+    /// List functions, methods and types that nothing references
+    DeadCode {
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Only files whose project-relative path starts with this prefix
+        #[arg(long)]
+        path_prefix: Option<String>,
+
+        /// Only this language (rust, typescript, python, go, …)
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Also report public / exported symbols
+        #[arg(long)]
+        include_public: bool,
+
+        /// Maximum symbols (default 100, max 1000)
+        #[arg(short, long)]
+        limit: Option<usize>,
+    },
+
     /// Calibrate semantic search thresholds using ML
     Calibrate {
         /// Path to the database file
@@ -234,6 +299,9 @@ async fn main() -> Result<()> {
             | Commands::Deps { .. }
             | Commands::Explain { .. }
             | Commands::Impact { .. }
+            | Commands::Calls { .. }
+            | Commands::Hierarchy { .. }
+            | Commands::DeadCode { .. }
     );
 
     // Setup logging - filter out verbose ONNX Runtime logs
@@ -344,6 +412,46 @@ async fn main() -> Result<()> {
                 symbol,
                 file,
                 max_depth,
+                limit,
+            },
+            cli.json,
+        ),
+        Commands::Calls {
+            symbol,
+            index,
+            direction,
+            file,
+            max_depth,
+            limit,
+        } => query::calls(
+            &index,
+            CallsArgs {
+                symbol,
+                direction,
+                file,
+                max_depth,
+                limit,
+            },
+            cli.json,
+        ),
+        Commands::Hierarchy {
+            symbol,
+            index,
+            max_depth,
+            limit,
+        } => query::hierarchy(&index, symbol, max_depth, limit, cli.json),
+        Commands::DeadCode {
+            index,
+            path_prefix,
+            language,
+            include_public,
+            limit,
+        } => query::dead_code(
+            &index,
+            DeadCodeArgs {
+                path_prefix,
+                language,
+                include_public,
                 limit,
             },
             cli.json,

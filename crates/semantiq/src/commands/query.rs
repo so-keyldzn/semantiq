@@ -1,4 +1,5 @@
-//! Query commands (`search`, `refs`, `deps`, `explain`, `impact`).
+//! Query commands (`search`, `refs`, `deps`, `explain`, `impact`, `calls`,
+//! `hierarchy`, `dead-code`).
 //!
 //! Each command opens an existing index, refreshes files changed since the
 //! last run (unless `--no-refresh`), then prints the same output as the
@@ -12,8 +13,9 @@ use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
 use semantiq_index::{AutoIndexer, IndexStore, should_exclude_entry, should_exclude_path};
 use semantiq_mcp::server::{
-    DepsParams, ExplainParams, FindRefsParams, ImpactParams, SearchParams, deps_output,
-    explain_output, find_refs_output, impact_output, search_output,
+    CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
+    ImpactParams, SearchParams, calls_output, dead_code_output, deps_output, explain_output,
+    find_refs_output, hierarchy_output, impact_output, search_output,
 };
 use semantiq_parser::Language;
 use semantiq_retrieval::RetrievalEngine;
@@ -47,7 +49,7 @@ pub(crate) struct IndexArgs {
 enum Engine {
     /// Load the embedding model (semantic search).
     WithEmbeddings,
-    /// Skip the model: references, dependencies, explain and impact never use it.
+    /// Skip the model: only `search` uses it.
     WithoutEmbeddings,
 }
 
@@ -127,6 +129,72 @@ pub(crate) fn impact(index: &IndexArgs, args: ImpactArgs, json: bool) -> Result<
             symbol: args.symbol,
             file_path: args.file.map(|f| normalize_file_arg(&f, &root)),
             max_depth: args.max_depth,
+            limit: args.limit,
+        },
+    )
+    .map_err(|e| anyhow!(e))?;
+    print_output(&output, json, || output.render())
+}
+
+pub(crate) struct CallsArgs {
+    pub symbol: String,
+    pub direction: Option<String>,
+    pub file: Option<String>,
+    pub max_depth: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+pub(crate) fn calls(index: &IndexArgs, args: CallsArgs, json: bool) -> Result<()> {
+    let (engine, root) = open_engine(index, Engine::WithoutEmbeddings)?;
+    let output = calls_output(
+        &engine,
+        CallsParams {
+            symbol: args.symbol,
+            direction: args.direction,
+            file_path: args.file.map(|f| normalize_file_arg(&f, &root)),
+            max_depth: args.max_depth,
+            limit: args.limit,
+        },
+    )
+    .map_err(|e| anyhow!(e))?;
+    print_output(&output, json, || output.render())
+}
+
+pub(crate) fn hierarchy(
+    index: &IndexArgs,
+    symbol: String,
+    max_depth: Option<usize>,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let (engine, _) = open_engine(index, Engine::WithoutEmbeddings)?;
+    let output = hierarchy_output(
+        &engine,
+        HierarchyParams {
+            symbol,
+            max_depth,
+            limit,
+        },
+    )
+    .map_err(|e| anyhow!(e))?;
+    print_output(&output, json, || output.render())
+}
+
+pub(crate) struct DeadCodeArgs {
+    pub path_prefix: Option<String>,
+    pub language: Option<String>,
+    pub include_public: bool,
+    pub limit: Option<usize>,
+}
+
+pub(crate) fn dead_code(index: &IndexArgs, args: DeadCodeArgs, json: bool) -> Result<()> {
+    let (engine, _) = open_engine(index, Engine::WithoutEmbeddings)?;
+    let output = dead_code_output(
+        &engine,
+        DeadCodeParams {
+            path_prefix: args.path_prefix,
+            language: args.language,
+            include_public: Some(args.include_public),
             limit: args.limit,
         },
     )
