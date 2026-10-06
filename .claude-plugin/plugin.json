@@ -1,0 +1,20 @@
+{
+  "name": "semantiq",
+  "displayName": "Semantiq",
+  "version": "0.10.0",
+  "description": "Structural code intelligence for Claude Code: real references, call graph, type hierarchy, change impact, dead code, repository map and semantic search, through the semantiq CLI (Agent Skill) and MCP server. Requires the semantiq binary (npm install -g semantiq-mcp).",
+  "author": {
+    "name": "keyldzn",
+    "url": "https://github.com/so-keyldzn"
+  },
+  "homepage": "https://github.com/so-keyldzn/semantiq",
+  "repository": "https://github.com/so-keyldzn/semantiq",
+  "license": "MIT",
+  "keywords": ["code-intelligence", "code-search", "call-graph", "impact-analysis", "mcp", "skill"],
+  "mcpServers": {
+    "semantiq": {
+      "command": "semantiq",
+      "args": ["serve", "--project", "${CLAUDE_PROJECT_DIR}"]
+    }
+  }
+}

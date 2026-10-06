@@ -4,6 +4,31 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-06
+
+Pivot release: Semantiq moves from "semantic search over MCP" to structural
+code intelligence usable three ways (MCP, CLI + Agent Skill, HTTP), backed by
+a code-specific embedding model that is now on by default.
+
+### Upgrade notes
+- **One-time full reindex** on first start: schema v5 -> v8 and
+  `PARSER_VERSION` 8 -> 11 (new embedding space, AST references, call edges,
+  type relations). Nothing to do by hand.
+- **New embedding model download** (~139 MB, CodeRankEmbed INT8, SHA-256
+  pinned) on first run, cached in the data directory. Set
+  `SEMANTIQ_EMBEDDINGS=stub` to skip it (semantic search off).
+- **HTTP API listens on `127.0.0.1` by default** (was `0.0.0.0`); pass
+  `--http-host 0.0.0.0` to expose it. The API is unauthenticated.
+- **MCP**: `rmcp` 0.1 -> 3.5. Tools now return `structuredContent` with an
+  `outputSchema`, plus read-only annotations; `semantiq serve --http-port`
+  also serves MCP Streamable HTTP at `/mcp`. MCP tools: `semantiq_search`,
+  `semantiq_repo_map`, `semantiq_find_refs`, `semantiq_deps`,
+  `semantiq_explain`, `semantiq_impact`, `semantiq_calls`,
+  `semantiq_hierarchy`, `semantiq_dead_code`.
+- `semantiq init` now also installs the `semantiq` Agent Skill and rewrites
+  its `CLAUDE.md` section as a marked block (see below); re-run it in existing
+  projects to pick up the skill.
+
 ### Changed
 - **Code-specific embedding model**: all-MiniLM-L6-v2 (384-D) replaced by
   nomic-ai/CodeRankEmbed INT8 (768-D, CLS pooling, query prefix via the new
@@ -48,6 +73,20 @@ All notable changes to Semantiq will be documented in this file.
   switching between the stub and the real model always rebuilds the vectors.
 
 ### Added
+- **AST-based references**: `semantiq_find_refs` (and `semantiq refs`) read
+  identifier occurrences from the syntax tree (`refs` table) instead of text
+  search, so comments, strings and longer names never match; each usage is
+  tagged `call`, `type`, `import` or `reference`.
+- **Change impact**: `semantiq_impact` / `semantiq impact` lists the places
+  that may break when a symbol changes (transitive, up to `max_depth`),
+  grouped by file, with a confidence per site and the test files to run.
+- **Claude Code plugin**: install the skill and the MCP server from Claude
+  Code with `/plugin marketplace add so-keyldzn/semantiq` then
+  `/plugin install semantiq@semantiq` (the `semantiq` binary is still
+  installed separately).
+- **Agent benchmark** (`bench/agent/`): reproducible harness running Claude
+  Code headless with and without Semantiq (MCP, guided, CLI + skill), with
+  automatic scoring and a first 300-run report.
 - **Structural intelligence tools** (MCP, REST and CLI):
   - `semantiq_calls` / `POST /calls` / `semantiq calls`: callers and callees of a function or
     method up to 3 levels, each edge with a resolution confidence
@@ -102,9 +141,31 @@ All notable changes to Semantiq will be documented in this file.
   while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
 
 ### Fixed
+- File watcher: exclusions are evaluated on the path relative to the project
+  root, so projects living under a hidden or excluded directory (e.g.
+  `~/.config/app`, a `.tmpXXXX` dir) are auto-indexed again.
+- Renamed, moved or deleted files are removed from the index (watcher events
+  on vanished paths, and files missing at startup are pruned); unchanged
+  files are no longer re-parsed and re-embedded on every watcher event.
+- Semantic search keeps the nearest chunks (results were truncated in rowid
+  order), and `min_score` is applied to raw per-strategy scores, so the
+  weakest hit of each strategy is no longer always dropped.
+- MCP and HTTP handlers run engine calls on the blocking pool, so a long
+  reindex no longer stalls the async runtime.
+- Rust brace imports (`use a::{B, C}`) are expanded into one import per item,
+  and `get_dependents` no longer issues one query per importer.
+- `semantiq update`: a failed Windows install restores the previous binary;
+  `--force` never downgrades a newer build; pre-release versions compare
+  correctly (`1.0.1` > `1.0.1-beta`).
+- The update notice points at `semantiq update` instead of `npm install -g`,
+  and the `semantiq_search` description states the real default `min_score`
+  (0.3).
 - npm: Windows install ran the `/bin/sh` placeholder instead of `semantiq.exe`.
   The `bin` entry is now a Node launcher, so npm's `.cmd`/`.ps1` shims work in
   PowerShell, cmd and VS Code (#16).
+
+### Security
+- Bump `rustls` 0.23.36 -> 0.23.45 and `rustls-webpki` 0.103.13 -> 0.103.15.
 
 ## [0.9.0] - 2026-05-29
 

@@ -183,6 +183,8 @@ async function install() {
     fs.unlinkSync(archivePath);
 
     console.log('Semantiq installed successfully!');
+    console.log('Next: run `semantiq init` in your project (installs the Claude Code skill + MCP server and indexes it),');
+    console.log('or `semantiq init --global` to install the skill for all your projects.');
   } catch (error) {
     removeArtifacts();
     console.error('Failed to install Semantiq:', error.message);

@@ -68,6 +68,22 @@ The indexing step of `init` is optional: `semantiq serve` indexes the project
 in the background on startup (see [Auto-Indexing](#auto-indexing)). Running
 `init` just makes the index ready before the first query.
 
+### Claude Code plugin
+
+Prefer installing from inside Claude Code? The repository is also a plugin
+marketplace: the plugin bundles the `semantiq` skill and the MCP server
+(`semantiq serve --project ${CLAUDE_PROJECT_DIR}`).
+
+```
+/plugin marketplace add so-keyldzn/semantiq
+/plugin install semantiq@semantiq
+```
+
+The plugin calls the `semantiq` binary, so install it first (see
+[Installation](#installation)). Plugin skills are namespaced: the skill shows
+up as `semantiq:semantiq`, separate from a project-level skill installed by
+`semantiq init`. Use one or the other, not both.
+
 ### For Cursor / VS Code
 
 ```bash

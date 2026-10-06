@@ -1,0 +1,17 @@
+{
+  "name": "semantiq",
+  "owner": {
+    "name": "keyldzn",
+    "url": "https://github.com/so-keyldzn"
+  },
+  "description": "Semantiq plugin for Claude Code",
+  "plugins": [
+    {
+      "name": "semantiq",
+      "source": "./",
+      "displayName": "Semantiq",
+      "description": "Structural code intelligence (references, calls, hierarchy, impact, dead code, repo map, semantic search) via the semantiq CLI skill and MCP server.",
+      "version": "0.10.0"
+    }
+  ]
+}
