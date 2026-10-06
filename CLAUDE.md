@@ -33,6 +33,9 @@ cargo run -- explain <symbol>                # = semantiq_explain
 cargo run -- impact <symbol> --max-depth 3   # = semantiq_impact
 cargo run -- stats                           # Index statistics
 cargo run -- map --max-tokens 1000 --focus src/x.rs  # Ranked repo map (PageRank, token budget)
+cargo run -- calls <symbol> --direction callers  # = semantiq_calls
+cargo run -- hierarchy <type>                # = semantiq_hierarchy
+cargo run -- dead-code --path-prefix crates/  # = semantiq_dead_code
 cargo run -- calibrate                       # Build adaptive search thresholds (needs 500+ observations)
 cargo run -- update                          # Self-update the binary to the latest GitHub release
 cargo run -- update --check                  # Only report whether an update is available

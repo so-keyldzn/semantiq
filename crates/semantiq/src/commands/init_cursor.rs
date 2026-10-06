@@ -18,7 +18,8 @@ hits), `semantiq impact <symbol>` (what a change breaks, tests to run),
 `semantiq calls <symbol>` (callers and callees), `semantiq hierarchy <type>`
 (what implements or extends it), `semantiq dead-code` (unused code),
 `semantiq search "<what the code does>"` (code for a concept with no keyword
-to grep), `semantiq explain <symbol>`, `semantiq deps <file>`. Add `--json`
+to grep), `semantiq map` (ranked overview of the repository),
+`semantiq explain <symbol>`, `semantiq deps <file>`. Add `--json`
 for structured output. Keep grep for exact strings, error messages and config
 keys."#;
 
@@ -103,6 +104,7 @@ This project uses Semantiq for semantic code understanding.
 - `semantiq_calls` - Callers and callees of a function
 - `semantiq_hierarchy` - Supertypes, subtypes and implementors of a type
 - `semantiq_dead_code` - Unused functions, methods and types
+- `semantiq_repo_map` - Ranked map of the repository's key files and symbols
 
 ## When to use them
 
@@ -118,6 +120,7 @@ exact strings, error messages and config keys, where it is faster.
 | Is this code still used? | `semantiq_dead_code` |
 | Where is a concept handled, with no keyword to grep? | `semantiq_search` |
 | What does this file import / who imports it? | `semantiq_deps` |
+| What are the key files of an unfamiliar repository? | `semantiq_repo_map` |
 "#;
     write_if_not_exists(
         &rules_dir.join("semantiq.mdc"),

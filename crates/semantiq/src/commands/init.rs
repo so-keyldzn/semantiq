@@ -51,14 +51,16 @@ fn claude_md_block(options: InitOptions) -> String {
          what a change breaks and the tests to run (`semantiq impact <symbol>`), who calls\n\
          a function and what it calls (`semantiq calls <symbol>`), what implements or\n\
          extends a type (`semantiq hierarchy <type>`), unused code (`semantiq dead-code`),\n\
-         or code for a concept with no keyword to grep\n\
-         (`semantiq search \"<what the code does>\"`). Add `--json` to chain.",
+         code for a concept with no keyword to grep\n\
+         (`semantiq search \"<what the code does>\"`), or a ranked overview of the\n\
+         repository (`semantiq map`). Add `--json` to chain.",
     );
     if !options.no_mcp {
         block.push_str(
             " The same capabilities are available as the `semantiq_*` MCP\n\
              tools (`semantiq_find_refs`, `semantiq_impact`, `semantiq_calls`,\n\
-             `semantiq_hierarchy`, `semantiq_dead_code`, `semantiq_search`, …).",
+             `semantiq_hierarchy`, `semantiq_dead_code`, `semantiq_search`,\n\
+             `semantiq_repo_map`, …).",
         );
     }
     block.push_str(

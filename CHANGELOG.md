@@ -21,6 +21,18 @@ All notable changes to Semantiq will be documented in this file.
   as well as the MCP tools. An unmodified CLAUDE.md from an older `init` is
   replaced. Re-running `init` leaves an identical `.mcp.json` untouched.
 - `.gitignore` entry is now `.semantiq.db*` (covers the WAL/SHM files).
+- **`semantiq` skill**: covers `calls`, `hierarchy`, `dead-code` and `map`
+  (command table, examples, how to read the results, JSON fields in
+  `REFERENCE.md`). Its description now lists the structural and conceptual
+  questions that should trigger it ("who calls", "what implements", unused
+  code, "where is X handled", before renaming or changing a symbol): the
+  agent benchmark never loaded the previous one.
+- The `CLAUDE.md` block written by `semantiq init`, the `AGENTS.md` block and
+  the Cursor rules of `init-cursor` now say *when* to prefer Semantiq (real
+  references, impact, calls, hierarchy, dead code, concepts with no keyword)
+  and to keep grep for exact strings, instead of "use Semantiq first", which
+  doubled the cost in the benchmark without better answers. They mention the
+  new commands and tools.
 - The global `--json` flag prints results as JSON for query commands (it
   still switches logs to JSON for the others); query commands log warnings
   and errors only unless `--verbose`.
@@ -36,21 +48,25 @@ All notable changes to Semantiq will be documented in this file.
   switching between the stub and the real model always rebuilds the vectors.
 
 ### Added
-- **Structural intelligence tools** (MCP and REST):
-  - `semantiq_calls` / `POST /calls`: callers and callees of a function or
+- **Structural intelligence tools** (MCP, REST and CLI):
+  - `semantiq_calls` / `POST /calls` / `semantiq calls`: callers and callees of a function or
     method up to 3 levels, each edge with a resolution confidence
     (`same_file`, `imports`, `unique_name`, `name_only`); library calls are
     summarised separately.
-  - `semantiq_hierarchy` / `POST /hierarchy`: supertypes and subtypes /
+  - `semantiq_hierarchy` / `POST /hierarchy` / `semantiq hierarchy`: supertypes and subtypes /
     implementors of a type, transitively (Rust `impl Trait for Type` and
     supertraits, TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala; Go's
     implicit interfaces are out of scope).
-  - `semantiq_dead_code` / `POST /dead-code`: functions, methods and types
+  - `semantiq_dead_code` / `POST /dead-code` / `semantiq dead-code`: functions, methods and types
     with no reference outside their definition, excluding entry points,
     tests, trait members and (by default) public symbols, each with a
     confidence and reasons.
   `PARSER_VERSION` 10 → 11 and schema v8 (`call_edges`, `type_relations`
   tables) trigger a one-time full reindex.
+  The CLI commands take the same parameters as the tools, print their
+  structured output with `--json` (shared `calls_output` /
+  `hierarchy_output` / `dead_code_output` builders) and skip the embedding
+  model.
 - **CLI for every MCP tool**: `semantiq refs`, `deps`, `explain` and `impact`
   join `search`, all with `--json` printing the exact structured output of the
   matching MCP tool (shared `*_output()` builders in `semantiq-mcp`). They find
