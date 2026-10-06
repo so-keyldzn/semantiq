@@ -452,6 +452,26 @@ __pycache__, venv, .venv, coverage, .nyc_output,
 
 Hidden directories (starting with `.`) are also excluded.
 
+## Benchmark
+
+`bench/agent/` measures Claude Code on read-only code-navigation tasks with and
+without Semantiq (Python 3 stdlib harness, headless `claude -p`, throw-away
+checkouts, automatic precision/recall scoring):
+
+```bash
+python3 bench/agent/run.py --dry-run          # list planned runs and cost estimate
+python3 bench/agent/run.py --build --jobs 4   # baseline vs semantiq MCP
+```
+
+The first run is in
+[`bench/agent/results/2026-10-06/`](bench/agent/results/2026-10-06/report.md):
+25 tasks on semantiq and ripgrep, 3 repetitions, Sonnet. On these medium-sized
+repositories grep already answers 96% of the questions, and Semantiq adds no
+measurable accuracy. The MCP tool definitions add about 1.6k tokens per request
+(+22% input tokens, +12% cost), and they are rarely called unless the agent is
+told to use them. See [`bench/agent/README.md`](bench/agent/README.md) for the
+method.
+
 ## Documentation
 
 - **[MCP Setup Guide](docs/MCP-SETUP-GUIDE.md)** - Detailed configuration for all IDEs

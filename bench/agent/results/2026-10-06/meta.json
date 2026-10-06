@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-06T12:21:22",
+  "model": "claude-sonnet-5-5",
+  "effort": null,
+  "configs": [
+    "baseline",
+    "semantiq",
+    "semantiq-guided",
+    "cli-skill"
+  ],
+  "reps": 3,
+  "jobs": 4,
+  "keep_agent_docs": false,
+  "claude_version": "2.1.291 (Claude Code)",
+  "semantiq_version": "semantiq 0.9.0",
+  "cli_skill": {
+    "cli_bin": "/private/tmp/claude-502/-Users-nicolas-orca-workspaces-semantiq-agent-benchmark/f0bc8903-f157-4fdc-a8ce-351859216c27/scratchpad/cli-target/release/semantiq",
+    "cli_version": "semantiq 0.9.0",
+    "skill_path": "/private/tmp/claude-502/-Users-nicolas-orca-workspaces-semantiq-agent-benchmark/f0bc8903-f157-4fdc-a8ce-351859216c27/scratchpad/cli-skill-snapshot/semantiq",
+    "skill_sha256": "d3bd9273307594af79464f97a77a91d854896c7288a6e1a67267a25474013d0d"
+  },
+  "repos": {
+    "ripgrep": {
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "source": "https://github.com/BurntSushi/ripgrep"
+    },
+    "semantiq": {
+      "commit": "fa043c2854ddc96ce167b38f0df4433cc5c806ca",
+      "source": "self"
+    }
+  },
+  "index": {
+    "ripgrep": {
+      "seconds": 141.8,
+      "reused": false,
+      "db_bytes": 13500416,
+      "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/index/ripgrep.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+    },
+    "semantiq": {
+      "seconds": 62.9,
+      "reused": false,
+      "db_bytes": 8409088,
+      "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/index/semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+    },
+    "ripgrep (cli-skill)": {
+      "seconds": 171.5,
+      "reused": false,
+      "db_bytes": 13500416,
+      "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+    },
+    "semantiq (cli-skill)": {
+      "seconds": 72.5,
+      "reused": false,
+      "db_bytes": 8409088,
+      "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+    }
+  }
+}
