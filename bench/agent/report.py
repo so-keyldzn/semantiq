@@ -15,7 +15,9 @@ from pathlib import Path
 CATEGORIES = ("conceptual", "structural", "exact")
 NATIVE = ("Read", "Grep", "Glob", "Bash", "Skill")
 SQ_PREFIX = "mcp__semantiq__"
-CLI_RE = re.compile(r"\bsemantiq\s+(search|refs|deps|explain|impact|index|stats)\b")
+CLI_RE = re.compile(
+    r"\bsemantiq\s+(search|refs|deps|explain|impact|calls|hierarchy|dead-code|map|index|stats)\b"
+)
 
 
 def semantiq_ops(r):

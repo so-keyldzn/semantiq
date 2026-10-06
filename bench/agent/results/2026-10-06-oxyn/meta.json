@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-06T18:07:30",
+  "model": "claude-sonnet-5-5",
+  "effort": null,
+  "configs": [
+    "baseline",
+    "semantiq",
+    "semantiq-guided",
+    "cli-skill"
+  ],
+  "reps": 2,
+  "jobs": 3,
+  "keep_agent_docs": false,
+  "claude_version": "2.1.292 (Claude Code)",
+  "semantiq_version": "semantiq 0.10.1",
+  "cli_skill": {
+    "cli_bin": "/Users/nicolas/.nvm/versions/node/v22.23.2/lib/node_modules/semantiq-mcp/bin/semantiq.js",
+    "cli_version": "semantiq 0.10.1",
+    "skill_path": "/Users/nicolas/orca/workspaces/semantiq/bench-oxyn/skills/semantiq",
+    "skill_sha256": "585b16944d6b1ebf38d7d7f578fd3e9df60be7725326aa0d5a233152a5a24735"
+  },
+  "repos": {
+    "oxyn": {
+      "commit": "f2fb2ab97f2f4b355970c254c95b16753d3cab5f",
+      "source": "https://github.com/so-keyldzn/oxyn"
+    }
+  },
+  "index": {
+    "oxyn": {
+      "seconds": null,
+      "reused": true,
+      "db_bytes": 96296960
+    },
+    "oxyn (cli-skill)": {
+      "seconds": null,
+      "reused": true,
+      "copied_from": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench-oxyn/index/oxyn.db",
+      "db_bytes": 96296960
+    }
+  }
+}

@@ -235,6 +235,19 @@ def build_index(bin_path: Path, checkout: Path, db: Path, reuse: bool) -> dict:
     }
 
 
+def copy_db(src: Path, dest: Path) -> None:
+    """Consistent copy of a SQLite index (WAL included) through the backup API."""
+    import sqlite3
+
+    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    target = sqlite3.connect(dest)
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+
 def write_mcp_configs(work: Path, bin_path: Path, checkout: Path, db: Path, name: str):
     mcp_dir = work / "mcp"
     mcp_dir.mkdir(parents=True, exist_ok=True)
@@ -280,13 +293,37 @@ def uses_semantiq(config: str) -> bool:
     return config.startswith("semantiq")
 
 
-def init_guidance() -> str:
-    """The CLAUDE.md text `semantiq init` writes, read from its source so it stays in sync."""
-    src = (REPO_ROOT / "crates/semantiq/src/commands/init.rs").read_text()
-    m = re.search(r'let claude_md_content = r#"(.*?)"#;', src, re.DOTALL)
-    if not m:
-        raise RuntimeError("could not extract the CLAUDE.md guidance from init.rs")
-    return m.group(1)
+_guidance: dict[str, str] = {}
+_guidance_lock = threading.Lock()
+
+
+def init_guidance(bin_path: Path) -> str:
+    """The CLAUDE.md block `semantiq init --no-skill` (MCP, no skill) writes, produced by
+    the binary under test in a throw-away directory so it matches its version.
+
+    Since 0.10 the block is built in code (`claude_md_block` in init.rs), which the
+    former regex over a `claude_md_content` literal no longer finds; that path is kept
+    for older binaries."""
+    with _guidance_lock:
+        if "text" in _guidance:
+            return _guidance["text"]
+        with tempfile.TemporaryDirectory() as tmp:
+            sh(["git", "init", "-q"], cwd=tmp)
+            env = dict(os.environ, SEMANTIQ_UPDATE_CHECK="0")
+            proc = subprocess.run([str(bin_path), "init", "--no-skill", "--no-index"], cwd=tmp,
+                                  env=env, text=True, capture_output=True)
+            claude_md = Path(tmp) / "CLAUDE.md"
+            text = claude_md.read_text() if proc.returncode == 0 and claude_md.exists() else ""
+        m = re.search(r"<!-- semantiq:start -->\n(.*?)<!-- semantiq:end -->", text, re.DOTALL)
+        if m:
+            _guidance["text"] = m.group(1)
+        else:
+            src = (REPO_ROOT / "crates/semantiq/src/commands/init.rs").read_text()
+            m = re.search(r'let claude_md_content = r#"(.*?)"#;', src, re.DOTALL)
+            if not m:
+                raise RuntimeError("could not obtain the CLAUDE.md guidance of semantiq init")
+            _guidance["text"] = m.group(1)
+        return _guidance["text"]
 
 
 def claude_command(args, prompt: str, mcp_config: Path, config: str) -> list[str]:
@@ -319,7 +356,7 @@ def claude_command(args, prompt: str, mcp_config: Path, config: str) -> list[str
     if not skill:
         cmd.append("--disable-slash-commands")
     if config == "semantiq-guided":
-        cmd += ["--append-system-prompt", init_guidance()]
+        cmd += ["--append-system-prompt", init_guidance(args.semantiq_bin)]
     if args.max_budget_usd:
         cmd += ["--max-budget-usd", str(args.max_budget_usd)]
     if args.effort:
@@ -623,10 +660,24 @@ def main(argv=None) -> int:
         if skill_dir:
             skilled = prepare_checkout(repo, work, args.keep_agent_docs, skill_dir)
             key = f"{name} (cli-skill)"
-            log(f"[index] {key}: indexing {skilled}")
             # The CLI looks for .semantiq.db in the working directory or a parent.
-            index_info[key] = build_index(args.cli_bin, skilled, skilled / ".semantiq.db",
-                                          args.reuse_index)
+            skilled_db = skilled / ".semantiq.db"
+            if (any_semantiq and db.exists()
+                    and args.cli_bin.resolve() == args.semantiq_bin.resolve()):
+                # Same binary, same files (the skill is Markdown, which is not
+                # indexed) and paths stored relative to the project root: copy
+                # the index instead of rebuilding it, which takes tens of
+                # minutes on a large repository.
+                log(f"[index] {key}: copying {db}")
+                for suffix in ("-wal", "-shm"):
+                    Path(str(skilled_db) + suffix).unlink(missing_ok=True)
+                copy_db(db, skilled_db)
+                index_info[key] = {"seconds": None, "reused": True, "copied_from": str(db),
+                                   "db_bytes": skilled_db.stat().st_size}
+            else:
+                log(f"[index] {key}: indexing {skilled}")
+                index_info[key] = build_index(args.cli_bin, skilled, skilled_db,
+                                              args.reuse_index)
             log(f"[index] {key}: {index_info[key]['seconds']} s")
             checkouts[(name, "cli-skill")] = skilled
 
