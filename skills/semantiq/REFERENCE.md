@@ -120,3 +120,91 @@ sorted.
   sites above `name_only` propagate to the next depth; beyond depth 1, only
   `call` sites of functions/methods are followed.
 - `truncated`: the site limit (`--limit`, default 200, max 1000) was reached.
+
+## `semantiq calls <symbol> --json`
+
+```jsonc
+{
+  "symbol": "index_file",
+  "direction": "both",                 // callers, callees or both
+  "definitions": [ { "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 218, "kind": "method" } ],
+  "callers": [
+    { "depth": 1, "caller": "process_events", "callee": "index_file",
+      "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 186, "confidence": "same_file" }
+  ],
+  "callees": [
+    { "depth": 1, "caller": "index_file", "callee": "to_relative_string",
+      "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 220, "confidence": "unique_name" }
+  ],
+  "external_callees": [ "read_to_string", "lock" ],
+  "truncated": false
+}
+```
+
+- Each edge is one call site: `caller` (the enclosing function or method;
+  omitted for top-level code) calls `callee` at `file_path:line`.
+- `depth`: 1 = calls the symbol / made by the symbol; n = one hop further
+  (callers of callers, callees of callees), up to `--max-depth` (max 3).
+- `confidence`: how the edge was resolved to the definition, `same_file` >
+  `imports` > `unique_name` > `name_only` (possibly a homonym). Only edges
+  above `name_only` are followed beyond depth 1.
+- `external_callees`: names the symbol calls that the index does not define
+  (standard library, dependencies), sorted.
+- `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached.
+
+## `semantiq hierarchy <type> --json`
+
+```jsonc
+{
+  "symbol": "EmbeddingModel",
+  "definitions": [ { "file_path": "crates/semantiq-embeddings/src/model.rs", "line": 281, "kind": "trait" } ],
+  "supertypes": [
+    { "depth": 1, "sub_type": "EmbeddingModel", "super_type": "Send", "kind": "extends",
+      "file_path": "crates/semantiq-embeddings/src/model.rs", "line": 281, "resolved": false }
+  ],
+  "subtypes": [
+    { "depth": 1, "sub_type": "StubEmbeddingModel", "super_type": "EmbeddingModel", "kind": "implements",
+      "file_path": "crates/semantiq-embeddings/src/model.rs", "line": 317, "resolved": true }
+  ],
+  "truncated": false
+}
+```
+
+- Each relation reads `sub_type` `kind` (`extends` / `implements`)
+  `super_type`, declared at `file_path:line` (class header, `impl` block).
+- `depth`: 1 = direct relation, n = through n-1 intermediate types, up to
+  `--max-depth` (default 3, max 5).
+- `resolved`: the type at the far end is defined in the project; `false` is
+  a library type (`Send`, `Exception`…), not walked further.
+- Rust: `impl Trait for Type` gives `implements`, supertraits give `extends`.
+  C#: extends vs implements is a heuristic (first base, `I`-prefixed names).
+- `truncated`: the limit per direction (`--limit`, default 200) was reached.
+
+## `semantiq dead-code --json`
+
+```jsonc
+{
+  "symbols": [
+    { "name": "unwatch", "kind": "method",
+      "file_path": "crates/semantiq-index/src/watcher.rs", "start_line": 46, "end_line": 50,
+      "signature": "pub fn unwatch(&mut self, path: &Path) -> Result<()> {",   // optional
+      "confidence": "low",
+      "reasons": [ "no reference outside its own definition", "public / exported: other packages may use it" ] }
+  ],
+  "candidates": 524,
+  "excluded": { "entry_points": 2, "tests": 517, "public": 0, "trait_members": 2 },
+  "truncated": true
+}
+```
+
+- `symbols`: functions, methods and types whose name has no reference outside
+  their own definition, most certain first.
+- `confidence`: `high`, `medium` or `low`; `reasons` says why the symbol is
+  reported and what lowers the confidence (dynamic language, public symbol,
+  attribute / decorator that may register it, possible override of a library
+  type).
+- `candidates`: unreferenced definitions examined; `excluded` counts those
+  kept as alive by convention: `entry_points` (`main`, constructors, dunder
+  methods), `tests`, `public` (unless `--include-public`), `trait_members`
+  (trait / interface declarations, trait impls, overrides).
+- `truncated`: the limit (`--limit`, default 100, max 1000) was reached.
