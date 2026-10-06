@@ -33,7 +33,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rmcp.workspace = true
+rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 ignore.workspace = true
 axum.workspace = true
 tower.workspace = true

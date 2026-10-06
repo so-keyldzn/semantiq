@@ -1,15 +1,16 @@
 use anyhow::Result;
 use rmcp::{
     ServerHandler,
-    model::{
-        Implementation, LoggingLevel, LoggingMessageNotificationParam, ServerCapabilities,
-        ServerInfo,
-    },
-    service::{Peer, RequestContext, RoleServer},
-    tool,
+    handler::server::{tool::schema_for_output, wrapper::Parameters},
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
+    service::{NotificationContext, Peer, RoleServer},
+    tool, tool_handler, tool_router,
 };
 use semantiq_index::{AutoIndexer, IndexStore};
-use semantiq_retrieval::{RetrievalEngine, SearchOptions};
+use semantiq_retrieval::{
+    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, RetrievalEngine, SearchOptions,
+};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +19,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use crate::version_check::{VersionCheckConfig, check_for_update};
+
+mod types;
+pub use types::*;
 
 #[derive(Clone)]
 pub struct SemantiqServer {
@@ -63,6 +67,10 @@ impl SemantiqServer {
     }
 
     /// Spawn a background version check that notifies the MCP client if an update is available.
+    ///
+    /// MCP logging is deprecated (SEP-2577) but remains the only channel clients
+    /// surface to the user without a tool call.
+    #[allow(deprecated)]
     fn spawn_version_check(peer: Peer<RoleServer>) {
         tokio::spawn(async move {
             let info = tokio::task::spawn_blocking(|| {
@@ -81,11 +89,13 @@ impl SemantiqServer {
                     info.current_version, info.latest_version
                 );
                 let _ = peer
-                    .notify_logging_message(LoggingMessageNotificationParam {
-                        level: LoggingLevel::Warning,
-                        logger: Some("semantiq".into()),
-                        data: serde_json::json!(message),
-                    })
+                    .notify_logging_message(
+                        rmcp::model::LoggingMessageNotificationParam::new(
+                            rmcp::model::LoggingLevel::Warning,
+                            serde_json::json!(message),
+                        )
+                        .with_logger("semantiq"),
+                    )
                     .await;
             }
         });
@@ -201,216 +211,153 @@ impl SemantiqServer {
     }
 }
 
-#[tool(tool_box)]
+/// Wrap a tool output as both markdown text (for clients that only read
+/// text) and `structuredContent` matching the tool's `outputSchema`.
+fn structured_result<T: Serialize>(output: &T, text: String) -> Result<CallToolResult, String> {
+    let value = serde_json::to_value(output).map_err(|e| {
+        error!("Failed to serialize tool output: {}", e);
+        "an internal error occurred".to_string()
+    })?;
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+    result.structured_content = Some(value);
+    Ok(result)
+}
+
+/// Trim and bound a required string argument.
+fn validate_input(value: &str, label: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{} cannot be empty", label));
+    }
+    if value.len() > MAX_INPUT_LEN {
+        return Err(format!(
+            "{} exceeds maximum length of {} characters",
+            label, MAX_INPUT_LEN
+        ));
+    }
+    Ok(value.to_string())
+}
+
+const MAX_INPUT_LEN: usize = 500;
+
 impl SemantiqServer {
-    #[tool(
-        name = "semantiq_search",
-        description = "Search for code patterns, symbols, or text in the codebase. Returns relevant matches with file paths and line numbers. Supports filtering: min_score (0.0-1.0, default 0.3), file_type (comma-separated extensions like 'rs,ts,py'), symbol_kind (function,method,class,struct,enum,interface,trait,module,variable,constant,type)."
-    )]
-    pub async fn semantiq_search(
-        &self,
-        #[tool(param)] query: String,
-        #[tool(param)] limit: Option<usize>,
-        #[tool(param)] min_score: Option<f32>,
-        #[tool(param)] file_type: Option<String>,
-        #[tool(param)] symbol_kind: Option<String>,
-    ) -> Result<String, String> {
+    pub async fn search(&self, params: SearchParams) -> Result<SearchOutput, String> {
         debug!(
-            query = %query,
-            limit = ?limit,
-            file_type = ?file_type,
-            symbol_kind = ?symbol_kind,
+            query = %params.query,
+            limit = ?params.limit,
+            file_type = ?params.file_type,
+            symbol_kind = ?params.symbol_kind,
             "semantiq_search called"
         );
 
-        // Validate query
-        let query = query.trim();
-        if query.is_empty() {
-            return Err("Query cannot be empty".to_string());
-        }
-        if query.len() > 500 {
-            return Err("Query exceeds maximum length of 500 characters".to_string());
-        }
+        let query = validate_input(&params.query, "Query")?;
+        let limit = params.limit.unwrap_or(20).min(1000);
 
-        let limit = limit.unwrap_or(20).min(1000);
-
-        // Build SearchOptions
         let mut options = SearchOptions::new();
 
-        if let Some(score) = min_score {
+        if let Some(score) = params.min_score {
             options = options.with_min_score(score);
         }
 
-        if let Some(ref ft) = file_type {
+        if let Some(ref ft) = params.file_type {
             let types = SearchOptions::parse_csv(ft);
             if !types.is_empty() {
                 options = options.with_file_types(types);
             }
         }
 
-        if let Some(ref sk) = symbol_kind {
+        if let Some(ref sk) = params.symbol_kind {
             let kinds = SearchOptions::parse_csv(sk);
             if !kinds.is_empty() {
                 options = options.with_symbol_kinds(kinds);
             }
         }
 
-        let owned_query = query.to_string();
-        let search = self
+        let owned_query = query.clone();
+        let results = self
             .run_blocking(move |engine| engine.search(&owned_query, limit, Some(options)))
-            .await;
-        match search {
-            Ok(results) => {
-                let mut output = format!(
-                    "Found {} results for '{}' ({} ms)\n\n",
-                    results.total_count, query, results.search_time_ms
-                );
-
-                for result in &results.results {
-                    output.push_str(&format!(
-                        "📄 {}\n   Lines {}-{} | Score: {:.2}\n",
-                        result.file_path, result.start_line, result.end_line, result.score
-                    ));
-
-                    if let Some(ref symbol_name) = result.metadata.symbol_name {
-                        output.push_str(&format!(
-                            "   Symbol: {} ({})\n",
-                            symbol_name,
-                            result.metadata.symbol_kind.as_deref().unwrap_or("unknown")
-                        ));
-                    }
-
-                    let snippet: String = result.content.chars().take(200).collect();
-                    output.push_str(&format!("   ```\n   {}\n   ```\n\n", snippet.trim()));
-                }
-
-                Ok(self.with_indexing_notice(output))
-            }
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 error!("Search failed: {}", e);
-                Err("Search failed: an internal error occurred".to_string())
-            }
-        }
+                "Search failed: an internal error occurred".to_string()
+            })?;
+
+        Ok(SearchOutput {
+            query,
+            total_count: results.total_count,
+            search_time_ms: results.search_time_ms,
+            results: results
+                .results
+                .into_iter()
+                .map(|r| SearchHit {
+                    file_path: r.file_path,
+                    start_line: r.start_line,
+                    end_line: r.end_line,
+                    score: r.score,
+                    symbol_name: r.metadata.symbol_name,
+                    symbol_kind: r.metadata.symbol_kind,
+                    content: r.content,
+                })
+                .collect(),
+        })
     }
 
-    #[tool(
-        name = "semantiq_find_refs",
-        description = "Find all references to a symbol including definitions and usages. Useful for understanding how a function or class is used."
-    )]
-    pub async fn semantiq_find_refs(
-        &self,
-        #[tool(param)] symbol: String,
-        #[tool(param)] limit: Option<usize>,
-    ) -> Result<String, String> {
-        debug!(symbol = %symbol, limit = ?limit, "semantiq_find_refs called");
+    pub async fn find_refs(&self, params: FindRefsParams) -> Result<FindRefsOutput, String> {
+        debug!(symbol = %params.symbol, limit = ?params.limit, "semantiq_find_refs called");
 
-        // Validate symbol input
-        let symbol = symbol.trim().to_string();
-        if symbol.is_empty() {
-            return Err("Symbol name cannot be empty".to_string());
-        }
-        if symbol.len() > 500 {
-            return Err("Symbol name exceeds maximum length of 500 characters".to_string());
-        }
-
-        let limit = limit.unwrap_or(50).min(1000);
+        let symbol = validate_input(&params.symbol, "Symbol name")?;
+        let limit = params.limit.unwrap_or(50).min(1000);
 
         let owned_symbol = symbol.clone();
-        let refs = self
+        let results = self
             .run_blocking(move |engine| engine.find_references(&owned_symbol, limit))
-            .await;
-        match refs {
-            Ok(results) => {
-                let mut output = format!(
-                    "Found {} references to '{}' ({} ms)\n\n",
-                    results.total_count, symbol, results.search_time_ms
-                );
-
-                let definitions: Vec<_> = results
-                    .results
-                    .iter()
-                    .filter(|r| {
-                        r.metadata
-                            .match_type
-                            .as_ref()
-                            .map(|t| t == "definition")
-                            .unwrap_or(false)
-                    })
-                    .collect();
-
-                let usages: Vec<_> = results
-                    .results
-                    .iter()
-                    .filter(|r| {
-                        r.metadata
-                            .match_type
-                            .as_ref()
-                            .map(|t| t != "definition")
-                            .unwrap_or(true)
-                    })
-                    .collect();
-
-                if !definitions.is_empty() {
-                    output.push_str("## Definitions\n\n");
-                    for def in &definitions {
-                        output.push_str(&format!(
-                            "📍 {}:{}\n   {}\n\n",
-                            def.file_path,
-                            def.start_line,
-                            def.content.lines().next().unwrap_or("")
-                        ));
-                    }
-                }
-
-                if !usages.is_empty() {
-                    output.push_str(&format!("## Usages ({} found)\n\n", usages.len()));
-                    for usage in usages.iter().take(20) {
-                        output.push_str(&format!(
-                            "📎 {}:{}\n   {}\n\n",
-                            usage.file_path,
-                            usage.start_line,
-                            usage.content.trim()
-                        ));
-                    }
-
-                    if usages.len() > 20 {
-                        output.push_str(&format!("... and {} more usages\n", usages.len() - 20));
-                    }
-                }
-
-                Ok(self.with_indexing_notice(output))
-            }
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 error!("Find references failed: {}", e);
-                Err("Find references failed: an internal error occurred".to_string())
+                "Find references failed: an internal error occurred".to_string()
+            })?;
+
+        let mut definitions = Vec::new();
+        let mut usages = Vec::new();
+        for r in results.results {
+            let kind = r
+                .metadata
+                .match_type
+                .unwrap_or_else(|| "reference".to_string());
+            let is_definition = kind == "definition";
+            let reference = Reference {
+                file_path: r.file_path,
+                line: r.start_line,
+                kind,
+                content: r.content,
+            };
+            if is_definition {
+                definitions.push(reference);
+            } else {
+                usages.push(reference);
             }
         }
+
+        Ok(FindRefsOutput {
+            symbol,
+            total_count: results.total_count,
+            search_time_ms: results.search_time_ms,
+            definitions,
+            usages,
+        })
     }
 
-    #[tool(
-        name = "semantiq_deps",
-        description = "Analyze the dependency graph for a file. Shows what the file imports and what other files import it."
-    )]
-    pub async fn semantiq_deps(&self, #[tool(param)] file_path: String) -> Result<String, String> {
-        debug!(file = %file_path, "semantiq_deps called");
+    pub async fn deps(&self, params: DepsParams) -> Result<DepsOutput, String> {
+        debug!(file = %params.file_path, "semantiq_deps called");
 
-        // Validate file_path input
-        let file_path = file_path.trim().to_string();
-        if file_path.is_empty() {
-            return Err("File path cannot be empty".to_string());
-        }
-        if file_path.len() > 500 {
-            return Err("File path exceeds maximum length of 500 characters".to_string());
-        }
+        let file_path = validate_input(&params.file_path, "File path")?;
         // Reject path traversal attempts
         if file_path.contains("..") {
             return Err("File path must not contain '..'".to_string());
         }
 
-        let mut output = format!("Dependency analysis for '{}'\n\n", file_path);
-
         let owned_path = file_path.clone();
-        let (dependencies, dependents) = match self
+        let (dependencies, dependents) = self
             .run_blocking(move |engine| {
                 Ok((
                     engine.get_dependencies(&owned_path),
@@ -418,143 +365,261 @@ impl SemantiqServer {
                 ))
             })
             .await
-        {
-            Ok(both) => both,
-            Err(e) => {
+            .map_err(|e| {
                 error!("Dependency analysis failed: {}", e);
-                return Err("Dependency analysis failed: an internal error occurred".to_string());
-            }
-        };
+                "Dependency analysis failed: an internal error occurred".to_string()
+            })?;
 
-        match dependencies {
-            Ok(deps) => {
-                output.push_str(&format!("## Imports ({} dependencies)\n\n", deps.len()));
-                for dep in &deps {
-                    output.push_str(&format!("→ {}", dep.target_path));
-                    if let Some(ref name) = dep.import_name {
-                        output.push_str(&format!(" (as {})", name));
-                    }
-                    output.push_str(&format!(" [{}]\n", dep.kind));
-                }
-                output.push('\n');
-            }
-            Err(e) => {
-                output.push_str(&format!("Could not analyze imports: {}\n\n", e));
-            }
-        }
+        let imports = dependencies
+            .inspect_err(|e| error!("Could not analyze imports: {}", e))
+            .ok()
+            .map(|deps| {
+                deps.into_iter()
+                    .map(|d| Import {
+                        target_path: d.target_path,
+                        import_name: d.import_name,
+                        kind: d.kind,
+                    })
+                    .collect()
+            });
+        let imported_by = dependents
+            .inspect_err(|e| error!("Could not analyze dependents: {}", e))
+            .ok()
+            .map(|deps| deps.into_iter().map(|d| d.target_path).collect());
 
-        match dependents {
-            Ok(deps) => {
-                output.push_str(&format!("## Imported by ({} files)\n\n", deps.len()));
-                for dep in &deps {
-                    output.push_str(&format!("← {}\n", dep.target_path));
-                }
-            }
-            Err(e) => {
-                output.push_str(&format!("Could not analyze dependents: {}\n", e));
-            }
-        }
-
-        Ok(self.with_indexing_notice(output))
+        Ok(DepsOutput {
+            file_path,
+            imports,
+            imported_by,
+        })
     }
 
-    #[tool(
-        name = "semantiq_explain",
-        description = "Get a detailed explanation of a symbol including its definition, documentation, usage patterns, and related symbols."
-    )]
-    pub async fn semantiq_explain(&self, #[tool(param)] symbol: String) -> Result<String, String> {
-        debug!(symbol = %symbol, "semantiq_explain called");
+    pub async fn impact(&self, params: ImpactParams) -> Result<ImpactOutput, String> {
+        debug!(symbol = %params.symbol, file = ?params.file_path, "semantiq_impact called");
 
-        // Validate symbol input
-        let symbol = symbol.trim().to_string();
-        if symbol.is_empty() {
-            return Err("Symbol name cannot be empty".to_string());
+        let symbol = validate_input(&params.symbol, "Symbol name")?;
+        let file_path = match params.file_path {
+            Some(ref path) => {
+                let path = validate_input(path, "File path")?;
+                if path.contains("..") {
+                    return Err("File path must not contain '..'".to_string());
+                }
+                Some(path)
+            }
+            None => None,
+        };
+        let max_depth = params.max_depth.unwrap_or(DEFAULT_IMPACT_DEPTH);
+        let limit = params.limit.unwrap_or(DEFAULT_IMPACT_SITES);
+
+        let owned_symbol = symbol.clone();
+        let analysis = self
+            .run_blocking(move |engine| {
+                engine.analyze_impact(&owned_symbol, file_path.as_deref(), max_depth, limit)
+            })
+            .await
+            .map_err(|e| {
+                error!("Impact analysis failed: {}", e);
+                "Impact analysis failed: an internal error occurred".to_string()
+            })?;
+
+        // Group sites by file, closest impact first.
+        let mut files: Vec<ImpactedFile> = Vec::new();
+        for site in &analysis.sites {
+            let out = ImpactSiteOut {
+                line: site.line,
+                depth: site.depth,
+                target: site.target.clone(),
+                kind: site.kind.clone(),
+                enclosing: site.enclosing.as_ref().map(|e| e.name.clone()),
+                confidence: site.confidence.as_str().to_string(),
+            };
+            match files.iter_mut().find(|f| f.file_path == site.file_path) {
+                Some(file) => {
+                    file.depth = file.depth.min(site.depth);
+                    file.is_test |= site.is_test;
+                    file.sites.push(out);
+                }
+                None => files.push(ImpactedFile {
+                    file_path: site.file_path.clone(),
+                    is_test: site.is_test,
+                    depth: site.depth,
+                    sites: vec![out],
+                }),
+            }
         }
-        if symbol.len() > 500 {
-            return Err("Symbol name exceeds maximum length of 500 characters".to_string());
+        files.sort_by(|a, b| {
+            a.depth
+                .cmp(&b.depth)
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
+        for file in &mut files {
+            file.sites
+                .sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.depth.cmp(&b.depth)));
         }
+        let test_files = files
+            .iter()
+            .filter(|f| f.is_test)
+            .map(|f| f.file_path.clone())
+            .collect();
+
+        Ok(ImpactOutput {
+            symbol: analysis.symbol,
+            definitions: analysis
+                .definitions
+                .into_iter()
+                .map(|d| ImpactDefinitionOut {
+                    file_path: d.file_path,
+                    line: d.line,
+                    kind: d.kind,
+                })
+                .collect(),
+            site_count: analysis.sites.len(),
+            files,
+            test_files,
+            truncated: analysis.truncated,
+        })
+    }
+
+    pub async fn explain(&self, params: ExplainParams) -> Result<ExplainOutput, String> {
+        debug!(symbol = %params.symbol, "semantiq_explain called");
+
+        let symbol = validate_input(&params.symbol, "Symbol name")?;
 
         let owned_symbol = symbol.clone();
         let explanation = self
             .run_blocking(move |engine| engine.explain_symbol(&owned_symbol))
-            .await;
-        match explanation {
-            Ok(explanation) => {
-                if !explanation.found {
-                    return Ok(format!("Symbol '{}' not found in the index.", symbol));
-                }
-
-                let mut output = format!("# Symbol: {}\n\n", explanation.name);
-
-                output.push_str(&format!(
-                    "Found {} definition(s), {} usage(s)\n\n",
-                    explanation.definitions.len(),
-                    explanation.usage_count
-                ));
-
-                for (i, def) in explanation.definitions.iter().enumerate() {
-                    output.push_str(&format!("## Definition {} ({})\n", i + 1, def.kind));
-                    output.push_str(&format!(
-                        "📄 {}:{}-{}\n\n",
-                        def.file_path, def.start_line, def.end_line
-                    ));
-
-                    if let Some(ref sig) = def.signature {
-                        output.push_str(&format!("```\n{}\n```\n\n", sig));
-                    }
-
-                    if let Some(ref doc) = def.doc_comment {
-                        output.push_str(&format!("**Documentation:**\n{}\n\n", doc));
-                    }
-                }
-
-                if !explanation.related_symbols.is_empty() {
-                    output.push_str("## Related Symbols\n\n");
-                    for related in explanation.related_symbols.iter().take(10) {
-                        output.push_str(&format!("- {}\n", related));
-                    }
-                }
-
-                Ok(self.with_indexing_notice(output))
-            }
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 error!("Explain failed: {}", e);
-                Err("Explain failed: an internal error occurred".to_string())
-            }
+                "Explain failed: an internal error occurred".to_string()
+            })?;
+
+        if !explanation.found {
+            return Ok(ExplainOutput {
+                symbol,
+                found: false,
+                definitions: Vec::new(),
+                usage_count: 0,
+                related_symbols: Vec::new(),
+            });
         }
+
+        // The engine collects related symbols in a HashSet; sort so the
+        // truncated list is stable across calls.
+        let mut related_symbols = explanation.related_symbols;
+        related_symbols.sort();
+        related_symbols.truncate(10);
+
+        Ok(ExplainOutput {
+            symbol: explanation.name,
+            found: true,
+            definitions: explanation
+                .definitions
+                .into_iter()
+                .map(|d| Definition {
+                    file_path: d.file_path,
+                    kind: d.kind,
+                    start_line: d.start_line,
+                    end_line: d.end_line,
+                    signature: d.signature,
+                    doc_comment: d.doc_comment,
+                })
+                .collect(),
+            usage_count: explanation.usage_count,
+            related_symbols,
+        })
     }
 }
 
-#[tool(tool_box)]
-impl ServerHandler for SemantiqServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: Default::default(),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation {
-                name: "semantiq".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            instructions: Some(
-                "Semantiq provides semantic code understanding tools for AI assistants. \
-                Use semantiq_search to find code, semantiq_find_refs to trace symbol usage, \
-                semantiq_deps to analyze dependencies, and semantiq_explain for detailed symbol info."
-                    .to_string(),
-            ),
-        }
+#[tool_router]
+impl SemantiqServer {
+    #[tool(
+        name = "semantiq_search",
+        description = "Search the indexed codebase by meaning, symbol name, or text. Prefer this over grep for natural-language questions (\"where is auth handled?\") and fuzzy symbol lookups. Returns file paths, line ranges, scores and snippets.",
+        output_schema = schema_for_output::<SearchOutput>(),
+        annotations(title = "Search code", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_search(
+        &self,
+        Parameters(params): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.search(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
     }
 
-    async fn initialize(
+    #[tool(
+        name = "semantiq_find_refs",
+        description = "Find the definitions and usages of a symbol across the codebase, from the syntax tree: comments, strings and longer names containing it are never matched (unlike grep). Each usage is tagged call, type, import or reference. Use it before renaming or changing a function, type or method.",
+        output_schema = schema_for_output::<FindRefsOutput>(),
+        annotations(title = "Find references", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_find_refs(
         &self,
-        _request: rmcp::model::InitializeRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> std::result::Result<rmcp::model::InitializeResult, rmcp::Error> {
-        // Now that we have a peer connection, spawn the version check
-        Self::spawn_version_check(context.peer.clone());
+        Parameters(params): Parameters<FindRefsParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.find_refs(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
 
-        Ok(self.get_info())
+    #[tool(
+        name = "semantiq_deps",
+        description = "Show the dependency graph of a file: what it imports and which files import it. Use it to estimate the impact of changing a file.",
+        output_schema = schema_for_output::<DepsOutput>(),
+        annotations(title = "File dependencies", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_deps(
+        &self,
+        Parameters(params): Parameters<DepsParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.deps(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+
+    #[tool(
+        name = "semantiq_explain",
+        description = "Explain a symbol: its definitions with signature and documentation, usage count, and other symbols defined alongside it.",
+        output_schema = schema_for_output::<ExplainOutput>(),
+        annotations(title = "Explain symbol", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_explain(
+        &self,
+        Parameters(params): Parameters<ExplainParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.explain(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+    #[tool(
+        name = "semantiq_impact",
+        description = "Before changing a function, method or type, list what may break: every place that uses it, then the users of those places (up to max_depth), grouped by file, with the test files to run. Each site has a confidence (same_file, imports, unique_name, name_only) since matching is by name.",
+        output_schema = schema_for_output::<ImpactOutput>(),
+        annotations(title = "Change impact", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    pub async fn semantiq_impact(
+        &self,
+        Parameters(params): Parameters<ImpactParams>,
+    ) -> Result<CallToolResult, String> {
+        let output = self.impact(params).await?;
+        structured_result(&output, self.with_indexing_notice(output.render()))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for SemantiqServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("semantiq", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
+                 semantic code understanding. Use semantiq_search for natural-language or fuzzy \
+                 code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
+                 file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
+                 and documentation. Plain grep remains better for exact string matches.",
+            )
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        // Now that we have a peer connection, spawn the version check
+        Self::spawn_version_check(context.peer);
     }
 }
 

@@ -265,3 +265,177 @@ fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
         "prefix match must survive the default min_score: {names:?}"
     );
 }
+
+/// Index `files` (path, Rust source) under a temp root with symbols and AST references.
+fn index_rust_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
+    use semantiq_parser::{Language, LanguageSupport, ReferenceExtractor, SymbolExtractor};
+
+    // Text search skips hidden paths, so avoid the default `.tmpXXXX` name.
+    let root = tempfile::Builder::new()
+        .prefix("semantiq-refs")
+        .tempdir()
+        .unwrap();
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let mut support = LanguageSupport::new().unwrap();
+    for (path, source) in files {
+        std::fs::write(root.path().join(path), source).unwrap();
+        let file_id = store
+            .insert_file(path, Some("rust"), source, source.len() as i64, 0)
+            .unwrap();
+        let tree = support.parse(Language::Rust, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
+        store.insert_symbols(file_id, &symbols).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, Language::Rust);
+        store.insert_references(file_id, &refs).unwrap();
+    }
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+    (engine, root)
+}
+
+#[test]
+fn test_find_references_uses_ast_not_text() {
+    let (engine, _root) = index_rust_project(&[
+        ("lib.rs", "pub fn compute() -> u32 { 1 }\n"),
+        (
+            "main.rs",
+            "// compute is documented here\nfn main() {\n    let s = \"compute\";\n    let compute_all = 2;\n    compute();\n}\n",
+        ),
+    ]);
+
+    let results = engine.find_references("compute", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.file_path.as_str(),
+                r.start_line,
+                r.metadata.match_type.as_deref().unwrap_or(""),
+            )
+        })
+        .collect();
+
+    // Comment (line 1), string (line 3) and `compute_all` (line 4) are excluded.
+    assert_eq!(
+        hits,
+        vec![("lib.rs", 1, "definition"), ("main.rs", 5, "call")],
+        "{hits:?}"
+    );
+    assert_eq!(results.results[1].content, "compute();");
+}
+
+#[test]
+fn test_find_references_falls_back_to_text_for_unknown_names() {
+    // A name that only appears inside a string has no AST reference.
+    let (engine, _root) = index_rust_project(&[(
+        "main.rs",
+        "fn main() {\n    let key = \"only_in_string\";\n}\n",
+    )]);
+
+    let results = engine.find_references("only_in_string", 50).unwrap();
+    assert_eq!(results.results.len(), 1);
+    assert_eq!(
+        results.results[0].metadata.match_type.as_deref(),
+        Some("text")
+    );
+}
+
+#[test]
+fn test_explain_usage_count_from_ast() {
+    let (engine, _root) = index_rust_project(&[(
+        "lib.rs",
+        "fn helper() {}\n// helper helper helper\nfn a() { helper(); }\nfn b() { helper(); }\n",
+    )]);
+
+    let explanation = engine.explain_symbol("helper").unwrap();
+    assert!(explanation.found);
+    assert_eq!(explanation.usage_count, 2);
+}
+
+fn impact_sites(analysis: &super::ImpactAnalysis) -> Vec<(usize, &str, usize, &str)> {
+    analysis
+        .sites
+        .iter()
+        .map(|s| (s.depth, s.file_path.as_str(), s.line, s.confidence.as_str()))
+        .collect()
+}
+
+#[test]
+fn test_impact_follows_callers_and_flags_tests() {
+    let (engine, _root) = index_rust_project(&[
+        (
+            "lib.rs",
+            "pub fn core_op() -> u32 { 1 }\npub fn helper() -> u32 { core_op() }\n",
+        ),
+        (
+            "app.rs",
+            "fn run() { helper(); }\nfn other() { let helper = 2; }\n",
+        ),
+        ("test_app.rs", "fn test_run() { run(); }\n"),
+    ]);
+
+    let analysis = engine.analyze_impact("core_op", None, 3, 100).unwrap();
+    assert_eq!(analysis.definitions.len(), 1);
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![
+            (1, "lib.rs", 2, "same_file"),
+            // `let helper = 2` is a local variable, not a call: not followed.
+            (2, "app.rs", 1, "unique_name"),
+            (3, "test_app.rs", 1, "unique_name"),
+        ]
+    );
+    assert_eq!(
+        analysis.sites[1]
+            .enclosing
+            .as_ref()
+            .map(|e| e.name.as_str()),
+        Some("run")
+    );
+    assert!(analysis.sites[2].is_test);
+    assert!(!analysis.truncated);
+}
+
+#[test]
+fn test_impact_does_not_propagate_through_homonyms() {
+    let (engine, _root) = index_rust_project(&[
+        ("a.rs", "pub fn process() {}\n"),
+        ("b.rs", "pub fn process() {}\n"),
+        ("c.rs", "fn go() { process(); }\n"),
+        ("d.rs", "fn main() { go(); }\n"),
+    ]);
+
+    let analysis = engine
+        .analyze_impact("process", Some("a.rs"), 3, 100)
+        .unwrap();
+    assert_eq!(analysis.definitions.len(), 1);
+    // c.rs might call b.rs's `process`: reported, but `go` is not followed.
+    assert_eq!(impact_sites(&analysis), vec![(1, "c.rs", 1, "name_only")]);
+}
+
+#[test]
+fn test_impact_respects_depth_and_site_limits() {
+    let (engine, _root) = index_rust_project(&[(
+        "lib.rs",
+        "fn base() {}\nfn one() { base(); }\nfn two() { one(); }\nfn three() { two(); }\n",
+    )]);
+
+    let shallow = engine.analyze_impact("base", None, 1, 100).unwrap();
+    assert_eq!(shallow.sites.len(), 1);
+
+    let capped = engine.analyze_impact("base", None, 4, 2).unwrap();
+    assert_eq!(capped.sites.len(), 2);
+    assert!(capped.truncated);
+}
+
+#[test]
+fn test_is_test_location() {
+    use super::is_test_location;
+    assert!(is_test_location("crates/x/tests/it.rs", None));
+    assert!(is_test_location("src/store/tests.rs", None));
+    assert!(is_test_location("web/app.spec.ts", None));
+    assert!(is_test_location("pkg/handler_test.go", None));
+    assert!(is_test_location("src/lib.rs", Some("test_parse")));
+    assert!(!is_test_location("src/lib.rs", Some("parse")));
+    assert!(!is_test_location("src/contest.rs", None));
+}

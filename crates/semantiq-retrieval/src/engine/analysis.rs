@@ -4,6 +4,7 @@ use super::RetrievalEngine;
 use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use anyhow::Result;
+use std::collections::HashMap;
 use std::time::Instant;
 use tracing::info;
 
@@ -38,6 +39,12 @@ pub struct SymbolDefinition {
 
 impl RetrievalEngine {
     /// Find all references to a symbol (definitions + usages).
+    ///
+    /// Definitions come from the symbol table. Usages come from the AST
+    /// `refs` table, so comments, strings and longer names containing the
+    /// symbol are never reported. Names absent from `refs` (e.g. keys in data
+    /// files, which have no AST references) fall back to text search, with
+    /// `match_type = "text"`.
     pub fn find_references(&self, symbol_name: &str, limit: usize) -> Result<SearchResults> {
         info!(symbol = %symbol_name, limit = limit, "Finding references");
         let start = Instant::now();
@@ -45,6 +52,9 @@ impl RetrievalEngine {
 
         // Find symbol definitions
         let symbols = self.store.find_symbol_by_name(symbol_name)?;
+        // (path, start_line, end_line) of each definition, to drop the
+        // definition-site occurrences already covered by the symbol table.
+        let mut definition_spans = Vec::new();
 
         for symbol in &symbols {
             if let Some(file) = self
@@ -57,6 +67,7 @@ impl RetrievalEngine {
                     symbol.end_line as usize,
                 )?;
 
+                definition_spans.push((file.path.clone(), symbol.start_line, symbol.end_line));
                 results.push(
                     SearchResult::new(
                         SearchResultKind::Symbol,
@@ -76,22 +87,51 @@ impl RetrievalEngine {
             }
         }
 
-        // Find usages via text search
-        let usage_results =
-            self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
+        let references = self
+            .store
+            .find_references_by_name(symbol_name, limit.saturating_add(symbols.len()))?;
 
-        // Deduplicate: track seen (file_path, start_line) pairs from symbol definitions
-        let mut seen = std::collections::HashSet::new();
-        for r in &results {
-            seen.insert((r.file_path.clone(), r.start_line));
-        }
+        if references.is_empty() {
+            let usage_results =
+                self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
+            let mut seen = std::collections::HashSet::new();
+            for r in &results {
+                seen.insert((r.file_path.clone(), r.start_line));
+            }
+            for mut result in usage_results {
+                let key = (result.file_path.clone(), result.start_line);
+                if seen.insert(key) {
+                    result.kind = SearchResultKind::Reference;
+                    result.metadata.match_type = Some("text".to_string());
+                    results.push(result);
+                }
+            }
+        } else {
+            let mut file_lines: HashMap<String, Vec<String>> = HashMap::new();
+            for reference in references {
+                let covered = reference.kind == "definition"
+                    && definition_spans.iter().any(|(path, start, end)| {
+                        *path == reference.file_path && (*start..=*end).contains(&reference.line)
+                    });
+                if covered {
+                    continue;
+                }
 
-        for mut result in usage_results {
-            let key = (result.file_path.clone(), result.start_line);
-            if seen.insert(key) {
-                result.kind = SearchResultKind::Reference;
-                result.metadata.match_type = Some("usage".to_string());
-                results.push(result);
+                let line = reference.line as usize;
+                let content = self.line_of(&mut file_lines, &reference.file_path, line);
+                let kind = if reference.kind == "definition" {
+                    SearchResultKind::Symbol
+                } else {
+                    SearchResultKind::Reference
+                };
+                results.push(
+                    SearchResult::new(kind, reference.file_path, line, line, content, 1.0)
+                        .with_metadata(SearchResultMetadata {
+                            symbol_name: Some(symbol_name.to_string()),
+                            match_type: Some(reference.kind),
+                            ..Default::default()
+                        }),
+                );
             }
         }
 
@@ -103,6 +143,25 @@ impl RetrievalEngine {
             results,
             search_time,
         ))
+    }
+
+    /// Text of one line (1-based), reading each file at most once per call.
+    /// Unreadable files yield an empty snippet rather than failing the lookup.
+    fn line_of(
+        &self,
+        cache: &mut HashMap<String, Vec<String>>,
+        file_path: &str,
+        line: usize,
+    ) -> String {
+        let lines = cache.entry(file_path.to_string()).or_insert_with(|| {
+            self.read_file_lines(file_path, 1, usize::MAX)
+                .map(|content| content.lines().map(str::to_string).collect())
+                .unwrap_or_default()
+        });
+        lines
+            .get(line.saturating_sub(1))
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
     }
 
     /// Get dependencies for a file (what it imports).
@@ -190,30 +249,24 @@ impl RetrievalEngine {
             }
         }
 
-        // Count usages via text search.
-        //
-        // `usage_count` is "occurrences of the symbol name in source files,
-        // minus the number of known definitions". We deliberately avoid
-        // arithmetic with `search_symbols` (FTS5) results because FTS5 only
-        // returns *definitions* of the symbol, so subtracting from it would
-        // be meaningless.
-        //
-        // The cap (`USAGE_SEARCH_CAP`) bounds the work performed by
-        // `search_text`, which scans files on disk. It is intentionally
-        // generous; `usage_count` should be read as "at least N usages"
-        // when the cap is reached.
-        const USAGE_SEARCH_CAP: usize = 1000;
-
-        // Total definitions known to the index (NOT capped by `max_definitions`,
-        // which only limits how many definitions we hydrate above).
-        let total_definitions = symbols.len();
-
-        let usage_results = self.search_text(
-            &Query::new(symbol_name),
-            USAGE_SEARCH_CAP,
-            &SearchOptions::default(),
-        )?;
-        let usage_count = usage_results.len().saturating_sub(total_definitions);
+        // Usages come from the AST `refs` table. Names it does not know
+        // (data-file keys) fall back to counting text occurrences, minus the
+        // known definitions; that count is capped and reads as "at least N".
+        let usage_count = if self
+            .store
+            .find_references_by_name(symbol_name, 1)?
+            .is_empty()
+        {
+            const USAGE_SEARCH_CAP: usize = 1000;
+            let usage_results = self.search_text(
+                &Query::new(symbol_name),
+                USAGE_SEARCH_CAP,
+                &SearchOptions::default(),
+            )?;
+            usage_results.len().saturating_sub(symbols.len())
+        } else {
+            self.store.count_usages(symbol_name)?
+        };
 
         Ok(SymbolExplanation {
             name: symbol_name.to_string(),

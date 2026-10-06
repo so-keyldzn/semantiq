@@ -5,8 +5,8 @@ use ignore::WalkBuilder;
 use semantiq_embeddings::create_embedding_model;
 use semantiq_index::{IndexStore, MAX_FILE_SIZE, paths::to_relative_string, should_exclude_entry};
 use semantiq_parser::{
-    ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, SymbolExtractor,
-    resolve_local_import,
+    ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
+    SymbolExtractor, resolve_local_import,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -199,6 +199,10 @@ fn index_one_file(
             // Extract symbols
             let symbols = SymbolExtractor::extract(&tree, &content, language)?;
             store.insert_symbols(file_id, &symbols)?;
+
+            // Extract identifier occurrences for AST-based find_refs
+            let references = ReferenceExtractor::extract(&tree, &content, language);
+            store.insert_references(file_id, &references)?;
             stats.symbols = symbols.len();
 
             // Extract chunks

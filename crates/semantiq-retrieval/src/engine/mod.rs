@@ -4,6 +4,7 @@
 //! strategies (semantic, symbol, text) into a unified search interface.
 
 mod analysis;
+mod impact;
 mod search;
 mod threshold;
 
@@ -17,6 +18,10 @@ use tracing::{debug, warn};
 
 // Re-export types
 pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
+pub use impact::{
+    DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, EnclosingSymbol, ImpactAnalysis, ImpactConfidence,
+    ImpactDefinition, ImpactSite, MAX_IMPACT_DEPTH, MAX_IMPACT_SITES, is_test_location,
+};
 
 /// Cached list of walkable file paths with a TTL to avoid re-walking the
 /// directory tree on every `search_text()` call within the same session.
