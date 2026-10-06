@@ -7,6 +7,11 @@ license.workspace = true
 [features]
 default = []
 onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:ureq", "dep:dirs", "dep:sha2"]
+# Tests only: select the stub model unless SEMANTIQ_EMBEDDINGS=onnx, so the
+# test suite never downloads the ~139 MB model. Enabled through the
+# dev-dependencies of the workspace crates; never enable it in a release build
+# (note that `--all-features` turns it on).
+test-stub = []
 
 [dependencies]
 tokio.workspace = true

@@ -14,22 +14,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        # `onnx` (real embeddings) is a default feature; `cargo_flags` only
+        # opts out where ONNX Runtime has no prebuilt binaries.
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            features: onnx
+            cargo_flags: ""
+          # ort ships no ONNX Runtime for macOS Intel: stub embeddings
+          # (semantic search disabled, reported at startup and in `stats`).
           - target: x86_64-apple-darwin
             os: macos-15
-            features: ""
+            cargo_flags: "--no-default-features"
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            features: onnx
+            cargo_flags: ""
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            features: onnx
+            cargo_flags: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            features: onnx
+            cargo_flags: ""
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -46,7 +50,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc

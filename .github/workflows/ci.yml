@@ -23,8 +23,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
+      # `onnx` is a default feature, but the workspace's tests enable
+      # `test-stub` and SEMANTIQ_EMBEDDINGS=stub makes it explicit: the suite
+      # never downloads the ~139 MB embedding model.
       - name: Run tests
         run: cargo test --workspace --all-features
+        env:
+          SEMANTIQ_EMBEDDINGS: stub
+
+      # Opt-out build used on x86_64-apple-darwin (no ONNX Runtime binaries).
+      - name: Build without default features (stub embeddings)
+        run: cargo build -p semantiq --no-default-features
 
   clippy:
     name: Clippy

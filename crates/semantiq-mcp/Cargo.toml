@@ -24,4 +24,6 @@ dirs = "5.0"
 sha2 = "0.10"
 
 [dev-dependencies]
+# Tests never download the embedding model (see the `test-stub` feature).
+semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
 tempfile = "3"

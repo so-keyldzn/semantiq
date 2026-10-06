@@ -12,7 +12,7 @@
 use rusqlite::{Connection, params};
 use semantiq_embeddings::{CODERANKEMBED_MODEL_ID, STUB_EMBEDDING_MODEL_ID};
 use semantiq_index::IndexStore;
-use semantiq_index::schema::{EMBEDDING_DIMENSION, EMBEDDING_MODEL_ID, SCHEMA_VERSION};
+use semantiq_index::schema::{EMBEDDING_DIMENSION, SCHEMA_VERSION, embedding_model_id};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -206,7 +206,7 @@ fn migrate_v5_to_v6_recreates_chunks_vec_and_forces_reindex() {
     );
     assert_eq!(
         metadata(&conn, "embedding_model").as_deref(),
-        Some(EMBEDDING_MODEL_ID)
+        Some(embedding_model_id())
     );
     assert_eq!(
         metadata(&conn, "embedding_dim"),
@@ -265,7 +265,7 @@ fn embedding_model_change_without_schema_bump_rebuilds_vectors() {
     assert_eq!(count(&conn, "distance_observations"), 0);
     assert_eq!(
         metadata(&conn, "embedding_model").as_deref(),
-        Some(EMBEDDING_MODEL_ID)
+        Some(embedding_model_id())
     );
 }
 
@@ -280,7 +280,7 @@ fn switching_between_stub_and_onnx_builds_resets_index() {
     let dir = TempDir::new().unwrap();
     let db = dir.path().join("index.db");
 
-    let other_id = if EMBEDDING_MODEL_ID == STUB_EMBEDDING_MODEL_ID {
+    let other_id = if embedding_model_id() == STUB_EMBEDDING_MODEL_ID {
         CODERANKEMBED_MODEL_ID
     } else {
         STUB_EMBEDDING_MODEL_ID
@@ -329,6 +329,6 @@ fn switching_between_stub_and_onnx_builds_resets_index() {
     assert_eq!(count(&conn, "chunks_vec"), 0);
     assert_eq!(
         metadata(&conn, "embedding_model").as_deref(),
-        Some(EMBEDDING_MODEL_ID)
+        Some(embedding_model_id())
     );
 }
