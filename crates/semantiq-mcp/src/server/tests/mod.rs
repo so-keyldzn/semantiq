@@ -23,6 +23,7 @@ pub(super) fn create_test_server() -> (SemantiqServer, TempDir) {
         engine,
         store,
         auto_indexer: None,
+        initial_indexing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     (server, temp_dir)

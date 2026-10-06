@@ -38,6 +38,10 @@ This automatically:
 
 Restart Claude Code and you're ready to go!
 
+The indexing step of `init` is optional: `semantiq serve` indexes the project
+in the background on startup (see [Auto-Indexing](#auto-indexing)). Running
+`init` just makes the index ready before the first query.
+
 ### For Cursor / VS Code
 
 ```bash
@@ -324,7 +328,15 @@ Semantiq automatically:
 - Re-indexes modified files incrementally
 - Regenerates embeddings as needed
 
-No manual reindexing required for normal development.
+No manual reindexing required for normal development, and `semantiq index` /
+`semantiq init` are not required before `serve`.
+
+While the initial pass runs, tool responses start with a
+`⏳ Initial indexing in progress` notice (results may be incomplete), and the
+HTTP `GET /stats` endpoint reports `"indexing": true`.
+
+The index lives in `.semantiq.db` at the project root, so each git worktree has
+its own index and is indexed separately.
 
 ### Force Reindex
 

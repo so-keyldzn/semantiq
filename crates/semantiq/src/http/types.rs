@@ -126,6 +126,9 @@ pub(super) struct StatsResponse {
     pub indexed_symbols: usize,
     pub indexed_chunks: usize,
     pub indexed_dependencies: usize,
+    /// True while the initial index pass is running (counts are still growing).
+    #[serde(default)]
+    pub indexing: bool,
 }
 
 // ============================================

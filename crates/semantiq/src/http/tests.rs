@@ -68,6 +68,7 @@ async fn test_stats_returns_ok() {
     let stats: StatsResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(stats.indexed_files, 0);
     assert_eq!(stats.indexed_symbols, 0);
+    assert!(!stats.indexing);
 }
 
 // ============================================

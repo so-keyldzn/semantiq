@@ -12,6 +12,7 @@ use semantiq_index::{AutoIndexer, IndexStore};
 use semantiq_retrieval::{RetrievalEngine, SearchOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -23,6 +24,8 @@ pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
     auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
+    /// True while the initial index pass started by `start_auto_indexer` runs.
+    initial_indexing: Arc<AtomicBool>,
 }
 
 impl SemantiqServer {
@@ -55,6 +58,7 @@ impl SemantiqServer {
             engine,
             store,
             auto_indexer,
+            initial_indexing: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -110,11 +114,30 @@ impl SemantiqServer {
         &self.engine
     }
 
+    /// Whether the initial index pass is still running (results may be incomplete).
+    pub fn is_initial_indexing(&self) -> bool {
+        self.initial_indexing.load(Ordering::Relaxed)
+    }
+
+    /// Prepend a warning to a tool response while the initial index is incomplete.
+    fn with_indexing_notice(&self, output: String) -> String {
+        if self.is_initial_indexing() {
+            format!(
+                "⏳ Initial indexing in progress: results may be incomplete.\n\n{}",
+                output
+            )
+        } else {
+            output
+        }
+    }
+
     /// Start the auto-indexing background task
     /// Performs initial indexing first, then watches for changes
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
+            let initial_indexing = Arc::clone(&self.initial_indexing);
+            initial_indexing.store(true, Ordering::Relaxed);
 
             tokio::spawn(async move {
                 // Perform initial indexing in a blocking task
@@ -124,6 +147,7 @@ impl SemantiqServer {
                     indexer.initial_index()
                 })
                 .await;
+                initial_indexing.store(false, Ordering::Relaxed);
 
                 match initial_result {
                     Ok(Ok(result)) => {
@@ -260,7 +284,7 @@ impl SemantiqServer {
                     output.push_str(&format!("   ```\n   {}\n   ```\n\n", snippet.trim()));
                 }
 
-                Ok(output)
+                Ok(self.with_indexing_notice(output))
             }
             Err(e) => {
                 error!("Search failed: {}", e);
@@ -354,7 +378,7 @@ impl SemantiqServer {
                     }
                 }
 
-                Ok(output)
+                Ok(self.with_indexing_notice(output))
             }
             Err(e) => {
                 error!("Find references failed: {}", e);
@@ -431,7 +455,7 @@ impl SemantiqServer {
             }
         }
 
-        Ok(output)
+        Ok(self.with_indexing_notice(output))
     }
 
     #[tool(
@@ -491,7 +515,7 @@ impl SemantiqServer {
                     }
                 }
 
-                Ok(output)
+                Ok(self.with_indexing_notice(output))
             }
             Err(e) => {
                 error!("Explain failed: {}", e);

@@ -14,6 +14,16 @@ All notable changes to Semantiq will be documented in this file.
   reindex; the active model id is stored in metadata so future model changes
   (including stub -> ONNX builds) trigger the same rebuild.
 - HTTP API binds to `127.0.0.1` by default; use `--http-host` to expose it.
+- README: indexing before `serve` is optional, `serve` indexes on startup (#17).
+
+### Added
+- MCP tool responses start with a `⏳ Initial indexing in progress` notice
+  while the startup index pass runs, and `GET /stats` reports `indexing` (#17).
+
+### Fixed
+- npm: Windows install ran the `/bin/sh` placeholder instead of `semantiq.exe`.
+  The `bin` entry is now a Node launcher, so npm's `.cmd`/`.ps1` shims work in
+  PowerShell, cmd and VS Code (#16).
 
 ## [0.9.0] - 2026-05-29
 

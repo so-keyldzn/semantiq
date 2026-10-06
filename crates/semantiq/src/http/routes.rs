@@ -57,6 +57,7 @@ async fn stats(
             indexed_symbols: stats.symbol_count,
             indexed_chunks: stats.chunk_count,
             indexed_dependencies: stats.dependency_count,
+            indexing: server.is_initial_indexing(),
         })),
         Err(e) => {
             error!("Failed to get stats: {}", e);
