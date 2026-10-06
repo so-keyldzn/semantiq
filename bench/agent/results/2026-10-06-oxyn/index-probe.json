@@ -1,0 +1,128 @@
+{
+  "binary": "semantiq 0.10.1 (release, ONNX, CodeRankEmbed INT8, 8 threads)",
+  "repo": "oxyn @ f2fb2ab",
+  "machine": "Apple M1 Max, 10 cores; light concurrent load (rg exploration) during the full index, none during the stub index",
+  "full_index": {
+    "seconds": 893.5,
+    "user_cpu_seconds": 3541.0,
+    "files": 1012,
+    "symbols": 32446,
+    "chunks": 5221,
+    "dependencies": 10396,
+    "errors": 0,
+    "db_bytes": 96296960
+  },
+  "stub_index": {
+    "seconds": 25.9,
+    "note": "SEMANTIQ_EMBEDDINGS=stub: parsing + extraction + SQLite, no embedding"
+  },
+  "embedding_share": 0.971,
+  "chunks_by_language": [
+    {
+      "language": "rust",
+      "files": 418,
+      "chunks": 3387,
+      "chars": 7359868
+    },
+    {
+      "language": "typescript",
+      "files": 558,
+      "chunks": 1506,
+      "chars": 3435419
+    },
+    {
+      "language": "json",
+      "files": 11,
+      "chunks": 241,
+      "chars": 424773
+    },
+    {
+      "language": "toml",
+      "files": 21,
+      "chunks": 57,
+      "chars": 41885
+    },
+    {
+      "language": "python",
+      "files": 2,
+      "chunks": 25,
+      "chars": 52775
+    },
+    {
+      "language": "javascript",
+      "files": 1,
+      "chunks": 3,
+      "chars": 2356
+    },
+    {
+      "language": "yaml",
+      "files": 1,
+      "chunks": 2,
+      "chars": 660
+    }
+  ],
+  "top_files_by_chunks": [
+    {
+      "path": "crates/oxyn-desktop/gen/schemas/desktop-schema.json",
+      "chunks": 103
+    },
+    {
+      "path": "crates/oxyn-desktop/gen/schemas/macOS-schema.json",
+      "chunks": 103
+    },
+    {
+      "path": "crates/oxyn-ai/src/runtime.rs",
+      "chunks": 50
+    },
+    {
+      "path": "crates/oxyn-exec/src/executor.rs",
+      "chunks": 50
+    },
+    {
+      "path": "crates/oxyn-desktop/src/backend/ai/conversation.rs",
+      "chunks": 37
+    },
+    {
+      "path": "crates/oxyn-desktop/src/backend/ai/conversation/tests.rs",
+      "chunks": 37
+    },
+    {
+      "path": "crates/oxyn-catalog/src/cache.rs",
+      "chunks": 35
+    },
+    {
+      "path": "apps/desktop/src/components/oxyn/assistant-view.stories.tsx",
+      "chunks": 34
+    },
+    {
+      "path": "crates/oxyn-query/src/classify.rs",
+      "chunks": 33
+    },
+    {
+      "path": "drivers/oxyn-driver-postgres/src/integration.rs",
+      "chunks": 33
+    },
+    {
+      "path": "crates/oxyn-desktop/src/backend.rs",
+      "chunks": 31
+    },
+    {
+      "path": "crates/oxyn-ai/src/external/session/tests.rs",
+      "chunks": 30
+    },
+    {
+      "path": "crates/oxyn-plugin/src/manifest.rs",
+      "chunks": 28
+    },
+    {
+      "path": "crates/oxyn-llm/src/anthropic/decode.rs",
+      "chunks": 27
+    },
+    {
+      "path": "crates/oxyn-desktop/src/backend/ai/threads.rs",
+      "chunks": 26
+    }
+  ],
+  "chunks_in_test_or_story_files": 1369,
+  "chunks_in_generated_schemas": 208
+}
