@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow, bail};
 use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use semantiq_parser::CodeChunk;
+use std::collections::HashMap;
 use std::sync::{MutexGuard, PoisonError};
 use tracing::{debug, warn};
 
@@ -20,6 +21,36 @@ fn parse_symbols_json(json: &str) -> Vec<String> {
 }
 
 /// Convert embedding bytes to f32 vector with validation.
+/// A chunk waiting for its embedding.
+#[derive(Debug, Clone)]
+pub struct PendingChunk {
+    pub id: i64,
+    pub file_id: i64,
+    pub content: String,
+}
+
+/// How many chunks have an embedding, out of all indexed chunks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EmbeddingCounts {
+    pub embedded: usize,
+    pub total: usize,
+}
+
+impl EmbeddingCounts {
+    /// Chunks still waiting for an embedding.
+    pub fn pending(&self) -> usize {
+        self.total - self.embedded
+    }
+
+    /// Share of chunks with an embedding, rounded down (100 when there is
+    /// nothing to embed).
+    pub fn percent(&self) -> u8 {
+        (self.embedded * 100)
+            .checked_div(self.total)
+            .map_or(100, |percent| percent as u8)
+    }
+}
+
 fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
     if !bytes.len().is_multiple_of(4) {
         warn!(
@@ -37,6 +68,10 @@ fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
 
 impl IndexStore {
     /// Insert chunks for a file (replaces existing chunks for that file).
+    ///
+    /// A new chunk whose content is identical to one of the file's previous
+    /// chunks keeps that chunk's embedding (and gets its `chunks_vec` row): an
+    /// edit then only leaves the changed chunks waiting for phase 2.
     pub fn insert_chunks(&self, file_id: i64, chunks: &[CodeChunk]) -> Result<()> {
         let conn = self
             .conn
@@ -48,7 +83,25 @@ impl IndexStore {
         // Use a transaction for atomicity
         conn.execute("BEGIN IMMEDIATE", [])?;
 
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<usize> {
+            // Embeddings of the previous chunks, keyed by content.
+            let mut previous: HashMap<String, Vec<u8>> = HashMap::new();
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT content, embedding FROM chunks
+                     WHERE file_id = ?1 AND embedding IS NOT NULL",
+                )?;
+                let rows = stmt.query_map([file_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?;
+                for row in rows {
+                    let (content, embedding) = row?;
+                    if embedding.len() == EMBEDDING_DIMENSION * 4 {
+                        previous.insert(content, embedding);
+                    }
+                }
+            }
+
             // Purge sqlite-vec rows for this file's old chunks. The vec0 virtual
             // table doesn't honor FK / ON DELETE CASCADE, so we have to do it
             // ourselves — must run BEFORE the chunks DELETE, otherwise the
@@ -65,12 +118,16 @@ impl IndexStore {
             conn.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;
 
             let mut stmt = conn.prepare(
-                "INSERT INTO chunks (file_id, content, start_line, end_line, start_byte, end_byte, symbols_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO chunks (file_id, content, start_line, end_line, start_byte, end_byte, symbols_json, embedding)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
+            let mut vec_stmt =
+                conn.prepare("INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)")?;
 
+            let mut reused = 0;
             for chunk in chunks {
                 let symbols_json = serde_json::to_string(&chunk.symbols)?;
+                let embedding = previous.get(&chunk.content);
                 stmt.execute(params![
                     file_id,
                     chunk.content,
@@ -79,15 +136,25 @@ impl IndexStore {
                     chunk.start_byte as i64,
                     chunk.end_byte as i64,
                     symbols_json,
+                    embedding,
                 ])?;
+                if let Some(embedding) = embedding {
+                    vec_stmt.execute(params![conn.last_insert_rowid(), embedding])?;
+                    reused += 1;
+                }
             }
-            Ok(())
+            Ok(reused)
         })();
 
         match result {
-            Ok(()) => {
+            Ok(reused) => {
                 conn.execute("COMMIT", [])?;
-                debug!("Inserted {} chunks for file_id {}", chunks.len(), file_id);
+                debug!(
+                    "Inserted {} chunks for file_id {} ({} embeddings reused)",
+                    chunks.len(),
+                    file_id,
+                    reused
+                );
                 Ok(())
             }
             Err(e) => {
@@ -104,16 +171,30 @@ impl IndexStore {
     /// so a failure on the second write can never leave the chunk with a stored
     /// embedding but no searchable vector (or vice versa).
     pub fn update_chunk_embedding(&self, chunk_id: i64, embedding: &[f32]) -> Result<()> {
+        self.store_chunk_embeddings(&[(chunk_id, embedding)])
+            .map(|_| ())
+    }
+
+    /// Store the embeddings of several chunks in one transaction and return
+    /// how many were written.
+    ///
+    /// A chunk deleted since its content was read (its file was reindexed while
+    /// the vector was computed) is skipped: no `chunks_vec` row is written for
+    /// it, so the vector index never gains an orphan. Chunk ids are never
+    /// reused (`AUTOINCREMENT`), so a vector cannot land on a newer chunk.
+    pub fn store_chunk_embeddings(&self, embeddings: &[(i64, &[f32])]) -> Result<usize> {
         // Reject mis-sized vectors up front with a clear error. The `chunks_vec`
         // vec0 table is declared `float[EMBEDDING_DIMENSION]` and would otherwise
         // fail with an opaque dimension-mismatch error; a wrong length also means
         // the embedding model and schema disagree, which is a bug worth surfacing.
-        if embedding.len() != EMBEDDING_DIMENSION {
-            bail!(
-                "embedding length {} does not match expected dimension {}",
-                embedding.len(),
-                EMBEDDING_DIMENSION
-            );
+        for (_, embedding) in embeddings {
+            if embedding.len() != EMBEDDING_DIMENSION {
+                bail!(
+                    "embedding length {} does not match expected dimension {}",
+                    embedding.len(),
+                    EMBEDDING_DIMENSION
+                );
+            }
         }
 
         let conn = self
@@ -123,37 +204,86 @@ impl IndexStore {
                 anyhow!("Database lock poisoned: {}", e)
             })?;
 
-        // Convert f32 slice to bytes for the chunks table
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-
         conn.execute("BEGIN IMMEDIATE", [])?;
 
-        let result = (|| -> Result<()> {
-            // Update the chunks table (for backward compatibility)
-            conn.execute(
-                "UPDATE chunks SET embedding = ?1 WHERE id = ?2",
-                params![embedding_bytes, chunk_id],
-            )?;
-
-            // Insert/replace into the vec0 virtual table for vector search
-            conn.execute(
+        let result = (|| -> Result<usize> {
+            let mut update = conn.prepare("UPDATE chunks SET embedding = ?1 WHERE id = ?2")?;
+            let mut upsert_vec = conn.prepare(
                 "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
-                params![chunk_id, embedding_bytes],
             )?;
-
-            Ok(())
+            let mut written = 0;
+            for (chunk_id, embedding) in embeddings {
+                // Convert f32 slice to bytes for the chunks table
+                let embedding_bytes: Vec<u8> =
+                    embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+                // The chunks table copy is what marks the chunk as done.
+                if update.execute(params![embedding_bytes, chunk_id])? == 0 {
+                    continue;
+                }
+                // The vec0 virtual table serves vector search.
+                upsert_vec.execute(params![chunk_id, embedding_bytes])?;
+                written += 1;
+            }
+            Ok(written)
         })();
 
         match result {
-            Ok(()) => {
+            Ok(written) => {
                 conn.execute("COMMIT", [])?;
-                Ok(())
+                Ok(written)
             }
             Err(e) => {
                 let _ = conn.execute("ROLLBACK", []);
                 Err(e)
             }
         }
+    }
+
+    /// Chunks still waiting for an embedding (phase 2), by increasing id,
+    /// starting after `after_id`. Walking by id keeps a full pass linear and
+    /// picks up chunks inserted meanwhile (ids only grow).
+    pub fn pending_embedding_chunks(
+        &self,
+        after_id: i64,
+        limit: usize,
+    ) -> Result<Vec<PendingChunk>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, file_id, content FROM chunks
+                 WHERE id > ?1 AND embedding IS NULL
+                 ORDER BY id
+                 LIMIT ?2",
+            )?;
+            let results = stmt
+                .query_map(params![after_id, limit as i64], |row| {
+                    Ok(PendingChunk {
+                        id: row.get(0)?,
+                        file_id: row.get(1)?,
+                        content: row.get(2)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(results)
+        })
+    }
+
+    /// Progress of phase 2: chunks with an embedding, and all chunks.
+    pub fn embedding_counts(&self) -> Result<EmbeddingCounts> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(*) - COUNT(embedding) FROM chunks",
+                [],
+                |row| {
+                    let total = row.get::<_, i64>(0)? as usize;
+                    let pending = row.get::<_, i64>(1)? as usize;
+                    Ok(EmbeddingCounts {
+                        embedded: total - pending,
+                        total,
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
     }
 
     /// Search for similar chunks using vector similarity (sqlite-vec).

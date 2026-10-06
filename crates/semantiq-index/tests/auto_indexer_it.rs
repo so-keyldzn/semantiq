@@ -6,9 +6,9 @@
 //!   1. after a file is (re)indexed, `chunks_vec` has zero orphan rows, and
 //!   2. the stored data reflects the *current* file content.
 //!
-//! Embeddings use the stub model (the `test-stub` feature is on in tests),
-//! which still writes a `chunks_vec` row per chunk — so the orphan invariant is
-//! genuinely exercised on reindex even without a real model.
+//! `AutoIndexer` is phase 1 only: chunks are stored without embeddings (phase
+//! 2, `embed_pending`, is covered by `two_phase.rs`), and the orphan invariant
+//! is checked here on reindex all the same.
 
 use semantiq_index::{AutoIndexer, IndexStore};
 use std::fs;
