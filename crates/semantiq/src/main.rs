@@ -6,6 +6,9 @@ use tracing_subscriber::EnvFilter;
 mod commands;
 mod http;
 
+use commands::InitOptions;
+use commands::query::{self, ImpactArgs, IndexArgs, SearchArgs};
+
 #[derive(Parser)]
 #[command(name = "semantiq")]
 #[command(author, version, about = "Semantic code understanding for AI tools")]
@@ -14,7 +17,8 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Output logs in JSON format (default for 'serve' command)
+    /// JSON output: structured results on stdout for query commands (search,
+    /// refs, deps, explain, impact); JSON logs for the others (default for 'serve')
     #[arg(long, global = true)]
     json: bool,
 
@@ -24,11 +28,32 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize Semantiq for a project (creates .claude/ config and indexes)
+    /// Initialize Semantiq for a project: installs the Claude Code skill,
+    /// registers the MCP server, updates CLAUDE.md, and indexes
     Init {
         /// Path to the project (default: current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+
+        /// Do not register the MCP server in .mcp.json (skill + CLI only)
+        #[arg(long)]
+        no_mcp: bool,
+
+        /// Do not install the Claude Code skill (MCP only)
+        #[arg(long)]
+        no_skill: bool,
+
+        /// Overwrite skill files that differ from the bundled version
+        #[arg(short, long)]
+        force: bool,
+
+        /// Only install the skill for all projects (~/.claude/skills/semantiq/)
+        #[arg(long, conflicts_with_all = ["no_mcp", "no_skill", "no_index"])]
+        global: bool,
+
+        /// Skip the initial indexing
+        #[arg(long)]
+        no_index: bool,
     },
 
     /// Initialize Cursor/VS Code configuration for a project
@@ -88,20 +113,19 @@ enum Commands {
         database: Option<PathBuf>,
     },
 
-    /// Search the index (for testing)
+    /// Search code by meaning, symbol name or text
     Search {
-        /// Search query
+        /// Search query: natural language, symbol name, or text pattern
         query: String,
 
-        /// Path to the database file
-        #[arg(short, long)]
-        database: Option<PathBuf>,
+        #[command(flatten)]
+        index: IndexArgs,
 
         /// Maximum results
         #[arg(short, long, default_value = "10")]
         limit: usize,
 
-        /// Minimum score (0.0-1.0, default: 0.35)
+        /// Minimum score (0.0-1.0, default: 0.3)
         #[arg(long)]
         min_score: Option<f32>,
 
@@ -112,6 +136,58 @@ enum Commands {
         /// Symbol kinds to include (comma-separated, e.g., "function,class")
         #[arg(long)]
         symbol_kind: Option<String>,
+    },
+
+    /// Find the definitions and usages of a symbol (from the syntax tree)
+    Refs {
+        /// Symbol name
+        symbol: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Maximum references
+        #[arg(short, long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// Show what a file imports and which files import it
+    Deps {
+        /// File path (relative to the project root)
+        file: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+    },
+
+    /// Explain a symbol: definitions, signature, docs, usage count
+    Explain {
+        /// Symbol name
+        symbol: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+    },
+
+    /// List what may break if a symbol changes, with the tests to run
+    Impact {
+        /// Symbol about to change
+        symbol: String,
+
+        #[command(flatten)]
+        index: IndexArgs,
+
+        /// Restrict to the definition in this file, when the name is defined in several places
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Levels of callers to follow (default 2, max 4)
+        #[arg(long)]
+        max_depth: Option<usize>,
+
+        /// Maximum impact sites (default 200, max 1000)
+        #[arg(short, long)]
+        limit: Option<usize>,
     },
 
     /// Calibrate semantic search thresholds using ML
@@ -149,15 +225,28 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Query commands print results on stdout, often for an agent to parse:
+    // keep stderr to warnings and errors, and `--json` applies to the results.
+    let is_query = matches!(
+        cli.command,
+        Commands::Search { .. }
+            | Commands::Refs { .. }
+            | Commands::Deps { .. }
+            | Commands::Explain { .. }
+            | Commands::Impact { .. }
+    );
+
     // Setup logging - filter out verbose ONNX Runtime logs
     let filter = if cli.verbose {
         EnvFilter::new("debug")
+    } else if is_query {
+        EnvFilter::new("warn,ort=error")
     } else {
         EnvFilter::new("info,ort=warn")
     };
 
     // Use JSON logging by default for serve command (MCP server)
-    let use_json = cli.json || matches!(cli.command, Commands::Serve { .. });
+    let use_json = !is_query && (cli.json || matches!(cli.command, Commands::Serve { .. }));
 
     if use_json {
         tracing_subscriber::fmt()
@@ -173,7 +262,26 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Init { path } => commands::init(&path).await,
+        Commands::Init {
+            path,
+            no_mcp,
+            no_skill,
+            force,
+            global,
+            no_index,
+        } => {
+            commands::init(
+                &path,
+                InitOptions {
+                    no_mcp,
+                    no_skill,
+                    force,
+                    global,
+                    no_index,
+                },
+            )
+            .await
+        }
         Commands::InitCursor { path } => commands::init_cursor(&path).await,
         Commands::Serve {
             project,
@@ -201,12 +309,45 @@ async fn main() -> Result<()> {
         Commands::Stats { database } => commands::stats(database).await,
         Commands::Search {
             query,
-            database,
+            index,
             limit,
             min_score,
             file_type,
             symbol_kind,
-        } => commands::search(&query, database, limit, min_score, file_type, symbol_kind).await,
+        } => query::search(
+            &index,
+            SearchArgs {
+                query,
+                limit,
+                min_score,
+                file_type,
+                symbol_kind,
+            },
+            cli.json,
+        ),
+        Commands::Refs {
+            symbol,
+            index,
+            limit,
+        } => query::refs(&index, symbol, limit, cli.json),
+        Commands::Deps { file, index } => query::deps(&index, &file, cli.json),
+        Commands::Explain { symbol, index } => query::explain(&index, symbol, cli.json),
+        Commands::Impact {
+            symbol,
+            index,
+            file,
+            max_depth,
+            limit,
+        } => query::impact(
+            &index,
+            ImpactArgs {
+                symbol,
+                file,
+                max_depth,
+                limit,
+            },
+            cli.json,
+        ),
         Commands::Calibrate {
             database,
             language,
