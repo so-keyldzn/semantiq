@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rmcp::{
     ServerHandler,
-    handler::server::{tool::schema_for_output, wrapper::Parameters},
+    handler::server::wrapper::Parameters,
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
     service::{NotificationContext, Peer, RoleServer},
     tool, tool_handler, tool_router,
@@ -19,10 +19,12 @@ use tracing::{error, info};
 use crate::version_check::{VersionCheckConfig, check_for_update};
 
 mod outputs;
+mod schema;
 mod structure;
 mod structure_types;
 mod types;
 pub use outputs::*;
+pub use schema::{input_schema, output_schema};
 pub use structure::*;
 pub use structure_types::*;
 pub use types::*;
@@ -294,9 +296,10 @@ impl SemantiqServer {
 impl SemantiqServer {
     #[tool(
         name = "semantiq_search",
-        description = "Search the indexed codebase by meaning, symbol name, or text. Prefer this over grep for natural-language questions (\"where is auth handled?\") and fuzzy symbol lookups. Returns file paths, line ranges, scores and snippets.",
-        output_schema = schema_for_output::<SearchOutput>(),
-        annotations(title = "Search code", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Find code by meaning or approximate symbol name when there is no exact string to grep (\"where is auth handled?\"). Returns path:lines, symbol and one preview line per hit; snippets=true adds the code.",
+        input_schema = input_schema::<SearchParams>(),
+        output_schema = output_schema::<SearchOutput>(),
+        annotations(title = "Search code", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_search(
         &self,
@@ -308,9 +311,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_repo_map",
-        description = "Get a compact map of the repository: its most important files and, for each, the signatures of its key symbols, ranked by how much the rest of the code uses them (PageRank over references and imports). Call it first when starting a task in an unfamiliar repository, before searching or reading files. Pass focus (files, directories or symbol names) to center the map on the code a task touches, and max_tokens to size it.",
-        output_schema = schema_for_output::<RepoMapOutput>(),
-        annotations(title = "Repository map", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Ranked overview of the repository: key files and symbol signatures, by how much the code uses them. Call it first on an unfamiliar repo; focus centers it on the task's files or symbols.",
+        input_schema = input_schema::<RepoMapParams>(),
+        output_schema = output_schema::<RepoMapOutput>(),
+        annotations(title = "Repository map", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_repo_map(
         &self,
@@ -322,9 +326,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_find_refs",
-        description = "Find the definitions and usages of a symbol across the codebase, from the syntax tree: comments, strings and longer names containing it are never matched (unlike grep). Each usage is tagged call, type, import or reference. Use it before renaming or changing a function, type or method.",
-        output_schema = schema_for_output::<FindRefsOutput>(),
-        annotations(title = "Find references", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Definitions and usages of a symbol from the syntax tree, tagged call/type/import/reference. Unlike grep, never matches comments, strings or longer names.",
+        input_schema = input_schema::<FindRefsParams>(),
+        output_schema = output_schema::<FindRefsOutput>(),
+        annotations(title = "Find references", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_find_refs(
         &self,
@@ -336,9 +341,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_deps",
-        description = "Show the dependency graph of a file: what it imports and which files import it. Use it to estimate the impact of changing a file.",
-        output_schema = schema_for_output::<DepsOutput>(),
-        annotations(title = "File dependencies", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "What a file imports and which files import it.",
+        input_schema = input_schema::<DepsParams>(),
+        output_schema = output_schema::<DepsOutput>(),
+        annotations(title = "File dependencies", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_deps(
         &self,
@@ -350,9 +356,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_explain",
-        description = "Explain a symbol: its definitions with signature and documentation, usage count, and other symbols defined alongside it.",
-        output_schema = schema_for_output::<ExplainOutput>(),
-        annotations(title = "Explain symbol", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Definitions of a symbol with signature and docs, its usage count and the symbols defined next to it.",
+        input_schema = input_schema::<ExplainParams>(),
+        output_schema = output_schema::<ExplainOutput>(),
+        annotations(title = "Explain symbol", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_explain(
         &self,
@@ -363,9 +370,10 @@ impl SemantiqServer {
     }
     #[tool(
         name = "semantiq_impact",
-        description = "Before changing a function, method or type, list what may break: every place that uses it, then the users of those places (up to max_depth), grouped by file, with the test files to run. Each site has a confidence (same_file, imports, unique_name, name_only) since matching is by name.",
-        output_schema = schema_for_output::<ImpactOutput>(),
-        annotations(title = "Change impact", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Before changing a symbol: every place that may break, transitively up to max_depth, grouped by file, with the tests to run.",
+        input_schema = input_schema::<ImpactParams>(),
+        output_schema = output_schema::<ImpactOutput>(),
+        annotations(title = "Change impact", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_impact(
         &self,
@@ -377,9 +385,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_calls",
-        description = "Call graph of a function or method: who calls it (callers) and what it calls (callees), up to max_depth levels. Unlike grep, each edge names the enclosing caller and ignores comments, strings and non-call mentions. Each edge has a confidence (same_file, imports, unique_name, name_only) since matching is by name.",
-        output_schema = schema_for_output::<CallsOutput>(),
-        annotations(title = "Call graph", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Callers and callees of a function, transitively up to max_depth; each edge names the enclosing function, which grep cannot.",
+        input_schema = input_schema::<CallsParams>(),
+        output_schema = output_schema::<CallsOutput>(),
+        annotations(title = "Call graph", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_calls(
         &self,
@@ -391,9 +400,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_hierarchy",
-        description = "Type hierarchy of a class, interface or trait: what it extends / implements and every subtype or implementor, transitively (Rust impl Trait for Type, extends/implements in TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala; not Go's implicit interfaces). Use it instead of grepping for \"implements X\" / \"impl X for\".",
-        output_schema = schema_for_output::<HierarchyOutput>(),
-        annotations(title = "Type hierarchy", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "What a type extends or implements and every subtype or implementor, transitively (not Go interfaces). Replaces grepping for \"impl X for\" / \"extends X\".",
+        input_schema = input_schema::<HierarchyParams>(),
+        output_schema = output_schema::<HierarchyOutput>(),
+        annotations(title = "Type hierarchy", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_hierarchy(
         &self,
@@ -405,9 +415,10 @@ impl SemantiqServer {
 
     #[tool(
         name = "semantiq_dead_code",
-        description = "List functions, methods and types that nothing references outside their own definition, filterable by path prefix and language. Entry points, tests, trait/interface members and (unless include_public) public symbols are excluded; each result has a confidence and the reasons. Grep cannot answer this without checking every name.",
-        output_schema = schema_for_output::<DeadCodeOutput>(),
-        annotations(title = "Dead code", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        description = "Functions, methods and types referenced nowhere, excluding entry points, tests, trait members and public symbols (unless include_public).",
+        input_schema = input_schema::<DeadCodeParams>(),
+        output_schema = output_schema::<DeadCodeOutput>(),
+        annotations(title = "Dead code", read_only_hint = true, open_world_hint = false)
     )]
     pub async fn semantiq_dead_code(
         &self,
@@ -422,16 +433,12 @@ impl SemantiqServer {
 impl ServerHandler for SemantiqServer {
     fn get_info(&self) -> ServerConfig {
         let mut instructions = String::from(
-            "Semantiq indexes this project (symbols, chunks, embeddings, imports) for \
-             semantic code understanding. On an unfamiliar repository, start with \
-             semantiq_repo_map for a ranked overview of its key files and symbols (pass \
-             focus to center it on the files of the task). Use semantiq_search for natural-language or fuzzy \
-             code search, semantiq_find_refs to trace symbol usage, semantiq_deps to see a \
-             file's imports and dependents, semantiq_impact before changing a symbol, and semantiq_explain for a symbol's definition \
-             and documentation. semantiq_calls answers who calls a function and what it calls, \
-             semantiq_hierarchy what a type extends and what implements it, and \
-             semantiq_dead_code which functions and types nothing uses. Plain grep remains \
-             better for exact string matches.",
+            "Semantiq answers structural questions about this project from a syntax-aware \
+             index. Start an unfamiliar repo with semantiq_repo_map. Prefer semantiq_find_refs, \
+             semantiq_calls, semantiq_hierarchy and semantiq_impact over grep for usages, call \
+             graphs, subtypes and change impact; semantiq_search for code you cannot name; \
+             semantiq_deps, semantiq_explain and semantiq_dead_code for imports, symbol docs \
+             and unused code. Grep stays better for exact strings.",
         );
         if let Some(reason) = semantiq_embeddings::semantic_search_unavailable_reason() {
             instructions.push_str(&format!(

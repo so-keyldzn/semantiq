@@ -60,6 +60,7 @@ pub(crate) struct SearchArgs {
     pub min_score: Option<f32>,
     pub file_type: Option<String>,
     pub symbol_kind: Option<String>,
+    pub snippets: bool,
 }
 
 pub(crate) fn search(index: &IndexArgs, args: SearchArgs, json: bool) -> Result<()> {
@@ -72,6 +73,7 @@ pub(crate) fn search(index: &IndexArgs, args: SearchArgs, json: bool) -> Result<
             min_score: args.min_score,
             file_type: args.file_type,
             symbol_kind: args.symbol_kind,
+            snippets: Some(args.snippets),
         },
     )
     .map_err(|e| anyhow!(e))?;

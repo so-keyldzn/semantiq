@@ -4,6 +4,53 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Smaller MCP tool definitions**: `tools/list` drops from ~5.1k to ~3.0k
+  tokens (chars/4, -42 %) for the 9 tools; the part forwarded to the model
+  (names, descriptions, input schemas) from ~1.76k to ~1.04k (-41 %), and the
+  server instructions from ~190 to ~110. Descriptions say in one or two
+  sentences when to use each tool rather than grep; schemas drop generated
+  noise (`format`, `minimum`, `$schema`, titles, `null` unions), output schemas
+  their field descriptions, and definitions used once are inlined. All tools
+  stay read-only (`readOnlyHint`, `openWorldHint: false`; the
+  `destructiveHint` / `idempotentHint` that only apply to writing tools are
+  gone).
+- **Compact tool output by default** (MCP text content and CLI): one line per
+  result, each path written once, no timings. On this repository,
+  `semantiq_search` answers shrink by 49-80 % as text and 88-96 % as
+  `structuredContent`; `explain` by 81 %, `calls` by 64 %, `deps` by 63 %.
+  - `semantiq_search`: each hit is `path:start-end kind name (score)` plus its
+    most relevant line (the declaration, or the line holding most query
+    words, cut to 120 characters) instead of a 200-character snippet. New
+    `snippets` parameter (`--snippets` on the CLI) adds the code back.
+    Default `limit` 20 → 10.
+  - `find_refs`: usages grouped by file; default `limit` 50 → 30 (CLI too).
+  - `impact` / `calls`: sites grouped by file, repeated sites merged into one
+    line (`120,134 call index_file in initial_index`), the queried symbol
+    implied.
+  - `deps`: imports grouped by kind and module (`a::{X, Y}`).
+  - `explain`: import statements listed on one line, without the module docs
+    the index attached to them.
+  - A cut list says so: `(more exist: raise limit)`.
+- **Breaking (`--json` / `structuredContent`)**:
+  - `semantiq_search`: `total_count` and `search_time_ms` removed (use
+    `results.length`); `content` only with `snippets`; new `preview` and
+    `truncated`; `score` rounded to 2 decimals.
+  - `semantiq_find_refs`: `total_count` and `search_time_ms` replaced by
+    `truncated`; `content` is one line (cut to 120 characters), for
+    definitions the declaration line instead of the whole source; a
+    definition's `kind` is the symbol kind (`function`, `struct`…) instead of
+    `definition`.
+  - `semantiq_explain`: `import` entries move from `definitions` to
+    `imported_in` (`path:line` strings).
+  - `semantiq_deps`: `imported_by` lists each file once, sorted;
+    `import_name` is omitted when `target_path` ends with it; both lists are
+    absent rather than `null` when the lookup fails.
+  - `semantiq_dead_code`: `reasons` no longer repeats "no reference outside
+    its own definition" (true of every result) and is omitted when empty.
+  - `semantiq_repo_map`: `rank` values keep 4 significant digits.
+  - Optional fields are never `null`: they are omitted.
+
 ## [0.10.1] - 2026-10-06
 
 ### Fixed

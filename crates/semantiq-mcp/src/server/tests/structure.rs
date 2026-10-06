@@ -44,8 +44,10 @@ async fn test_calls_mutual_recursion_terminates() {
             .await,
     )
     .unwrap();
-    assert!(text.contains("# Calls of 'ping'"), "{text}");
-    assert!(text.contains("start → ping  lib.rs:10"), "{text}");
+    assert!(text.starts_with("Calls of 'ping'\n"), "{text}");
+    // Callers of ping are listed by name: the callee is implied.
+    assert!(text.contains("lib.rs\n  6 pong\n  10 start\n"), "{text}");
+    assert!(text.contains("  2 ping → pong (depth 2)\n"), "{text}");
 }
 
 #[tokio::test]
@@ -57,7 +59,7 @@ async fn test_calls_unknown_symbol_is_empty() {
         .unwrap();
     assert!(output.definitions.is_empty());
     assert!(output.callers.is_empty() && output.callees.is_empty());
-    assert!(output.render().contains("No call site found"));
+    assert!(output.render().contains("Callers: none"));
 }
 
 #[tokio::test]
@@ -115,7 +117,10 @@ async fn test_hierarchy_rust_traits() {
     )
     .unwrap();
     assert!(text.contains("Onnx implements EmbeddingModel"), "{text}");
-    assert!(text.contains("Send not defined in the project"), "{text}");
+    assert!(
+        text.contains("EmbeddingModel extends Send  model.rs:2 (library type)"),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -129,7 +134,7 @@ async fn test_hierarchy_unknown_type_is_empty() {
         .await
         .unwrap();
     assert!(output.supertypes.is_empty() && output.subtypes.is_empty());
-    assert!(output.render().contains("None found"));
+    assert!(output.render().contains("Supertypes: none"));
 }
 
 #[tokio::test]
