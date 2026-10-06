@@ -121,6 +121,46 @@ sorted.
   `call` sites of functions/methods are followed.
 - `truncated`: the site limit (`--limit`, default 200, max 1000) was reached.
 
+## `semantiq map --json`
+
+```jsonc
+{
+  "max_tokens": 256,
+  "estimated_tokens": 251,            // characters / 4
+  "total_files": 107,                 // after --path-prefix
+  "total_symbols": 1513,
+  "shown_symbols": 9,
+  "focus_files": [ "crates/semantiq-index/src/auto_indexer.rs" ],
+  "focus_symbols": [],
+  "unmatched_focus": [ "NoSuchThing" ],
+  "files": [
+    {
+      "file_path": "crates/semantiq-index/src/auto_indexer.rs",
+      "language": "rust",             // optional
+      "rank": 0.175043,
+      "symbols": [
+        { "name": "remove_file", "kind": "method", "line": 432,
+          "parent": "AutoIndexer",                               // optional: enclosing type
+          "signature": "fn remove_file(&self, path: &Path) -> Result<()>",
+          "doc": "Remove a file from the index",                 // optional, first line
+          "rank": 0.044485 }
+      ]
+    }
+  ]
+}
+```
+
+- `files` are listed in directory order; `rank` is the file's PageRank in the
+  graph of references and imports (higher = more used by the rest of the
+  code), personalized toward `--focus` entries when given.
+- A symbol's `rank` is the share of importance it receives through
+  references. The map keeps the best symbols that fit `--max-tokens`
+  (default 1500, 256 to 8000).
+- `focus_files` / `focus_symbols`: how `--focus` entries were resolved
+  (directories expand to their files); `unmatched_focus` matched nothing.
+- Variables, imports, modules and data files (JSON, YAML, TOML, HTML) are
+  left out. The markdown output (without `--json`) is the rendered map.
+
 ## `semantiq calls <symbol> --json`
 
 ```jsonc
