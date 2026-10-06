@@ -94,6 +94,10 @@ crates/
 - **MCP stdout is reserved** for protocol messages. All logs go to stderr (`tracing` with `.with_writer(std::io::stderr)`). JSON log format is automatic in serve mode.
 - **Error handling**: `anyhow::Result` internally. MCP tool handlers return `Result<String, String>` — `Err` strings are deliberately opaque to avoid leaking internals.
 
+### Releasing
+
+Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` together, then `cargo update -w`. The release workflow runs on a `v*` tag. Validate the plugin with `claude plugin validate .` (the CLAUDE.md warning is expected).
+
 ### Versioning That Triggers Reindex
 
 - **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
