@@ -133,10 +133,48 @@ fn human_output_matches_mcp_rendering() {
     assert!(output.status.success());
     let text = stdout(&output);
     assert!(
-        text.starts_with("Found 2 references to 'compute'"),
+        text.starts_with("'compute': 1 definition, 1 usage\n"),
         "{text}"
     );
-    assert!(text.contains("📎 src/main.rs:3 [call]"), "{text}");
+    assert!(
+        text.contains("src/main.rs\n  3 call  let v = compute(1, 2);"),
+        "{text}"
+    );
+}
+
+#[test]
+fn search_prints_a_preview_line_unless_snippets() {
+    let project = indexed_project();
+
+    let compact = query_json(project.path(), &["search", "compute"]);
+    let hit = compact["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["symbol_name"] == "compute")
+        .expect("compute not found");
+    assert_eq!(hit["preview"], "pub fn compute(a: u32, b: u32) -> u32 {");
+    assert!(hit.get("content").is_none(), "{hit}");
+
+    let full = query_json(project.path(), &["search", "compute", "--snippets"]);
+    let hit = full["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["symbol_name"] == "compute")
+        .expect("compute not found");
+    assert!(
+        hit["content"].as_str().unwrap().contains("pub fn compute"),
+        "{hit}"
+    );
+
+    let output = semantiq(project.path(), &["search", "compute"]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("function compute (")
+            && text.contains("\n  pub fn compute(a: u32, b: u32) -> u32 {"),
+        "{text}"
+    );
 }
 
 #[test]

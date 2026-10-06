@@ -137,6 +137,10 @@ enum Commands {
         /// Symbol kinds to include (comma-separated, e.g., "function,class")
         #[arg(long)]
         symbol_kind: Option<String>,
+
+        /// Print each hit's code instead of one preview line
+        #[arg(long)]
+        snippets: bool,
     },
 
     /// Find the definitions and usages of a symbol (from the syntax tree)
@@ -148,7 +152,7 @@ enum Commands {
         index: IndexArgs,
 
         /// Maximum references
-        #[arg(short, long, default_value = "50")]
+        #[arg(short, long, default_value = "30")]
         limit: usize,
     },
 
@@ -402,6 +406,7 @@ async fn main() -> Result<()> {
             min_score,
             file_type,
             symbol_kind,
+            snippets,
         } => query::search(
             &index,
             SearchArgs {
@@ -410,6 +415,7 @@ async fn main() -> Result<()> {
                 min_score,
                 file_type,
                 symbol_kind,
+                snippets,
             },
             cli.json,
         ),

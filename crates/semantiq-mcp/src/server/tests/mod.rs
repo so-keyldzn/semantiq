@@ -103,6 +103,7 @@ impl SemantiqServer {
                 min_score,
                 file_type,
                 symbol_kind,
+                snippets: None,
             }))
             .await,
         )
@@ -135,6 +136,7 @@ mod edge_cases;
 mod explain;
 mod find_refs;
 mod repo_map;
+mod schemas;
 mod search;
 mod server_handler;
 mod structure;

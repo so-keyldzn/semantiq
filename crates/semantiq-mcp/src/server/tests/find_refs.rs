@@ -17,7 +17,7 @@ async fn test_find_refs_returns_formatted_output() {
 
     assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
     let output = result.unwrap();
-    assert!(output.contains("references to 'my_symbol'"));
+    assert!(output.starts_with("'my_symbol': 1 definition"), "{output}");
 }
 
 #[tokio::test]
@@ -36,7 +36,7 @@ async fn test_find_refs_with_definitions() {
 
     assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
     let output = result.unwrap();
-    assert!(output.contains("references to 'calculate'"));
+    assert!(output.starts_with("'calculate': "), "{output}");
 }
 
 #[tokio::test]

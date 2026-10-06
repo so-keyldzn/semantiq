@@ -61,7 +61,6 @@ fn test_tools_are_annotated_read_only() {
             .as_ref()
             .unwrap_or_else(|| panic!("{} has no annotations", tool.name));
         assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
-        assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
         assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
     }
 }

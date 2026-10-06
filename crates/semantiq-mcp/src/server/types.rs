@@ -1,32 +1,128 @@
 //! Input parameters and structured outputs of the MCP tools.
 //!
 //! Each output type is advertised as the tool's `outputSchema` and returned as
-//! `structuredContent`; `render()` produces the markdown sent as text content
-//! for clients that only read text.
+//! `structuredContent`; `render()` produces the compact text sent as text
+//! content (and printed by the CLI): one line per result, paths written once.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
+/// Longest line kept in previews and usage lines, in characters.
+pub(crate) const MAX_LINE_CHARS: usize = 120;
+
+/// Trim a source line and cut it to `MAX_LINE_CHARS` characters.
+pub(crate) fn clip_line(line: &str) -> String {
+    let line = line.trim();
+    if line.chars().count() <= MAX_LINE_CHARS {
+        line.to_string()
+    } else {
+        let mut out: String = line.chars().take(MAX_LINE_CHARS - 1).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// `1 definition`, `3 definitions`.
+pub(crate) fn count(n: usize, noun: &str) -> String {
+    format!("{} {}{}", n, noun, if n == 1 { "" } else { "s" })
+}
+
+/// `path:start-end`, or `path:line` for a single line.
+pub(crate) fn location(file_path: &str, start_line: usize, end_line: usize) -> String {
+    if end_line > start_line {
+        format!("{}:{}-{}", file_path, start_line, end_line)
+    } else {
+        format!("{}:{}", file_path, start_line)
+    }
+}
+
+/// Merge entries with the same description into one `l1,l2,l3 description`
+/// line, in order of first appearance.
+pub(crate) fn merge_lines(
+    entries: impl IntoIterator<Item = (usize, String)>,
+) -> Vec<(String, String)> {
+    let mut merged: Vec<(Vec<String>, String)> = Vec::new();
+    for (line, text) in entries {
+        match merged.iter_mut().find(|(_, t)| *t == text) {
+            Some((lines, _)) => lines.push(line.to_string()),
+            None => merged.push((vec![line.to_string()], text)),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(lines, text)| (lines.join(","), text))
+        .collect()
+}
+
+/// `a::X, a::Y, b` → `a::{X, Y}, b`: Rust-style paths sharing a module are
+/// written once.
+pub(crate) fn join_paths(paths: &[String]) -> String {
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for path in paths {
+        let (prefix, name) = match path.rsplit_once("::") {
+            Some((prefix, name)) if !name.starts_with('{') => (prefix, name),
+            _ => ("", path.as_str()),
+        };
+        match groups
+            .iter_mut()
+            .find(|(p, _)| !p.is_empty() && *p == prefix)
+        {
+            Some((_, names)) => names.push(name),
+            None => groups.push((prefix, vec![name])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(prefix, names)| match (prefix, names.as_slice()) {
+            ("", _) => names.join(", "),
+            (_, [name]) => format!("{}::{}", prefix, name),
+            _ => format!("{}::{{{}}}", prefix, names.join(", ")),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Group items by a key (file path, import kind…), keeping the order of
+/// first appearance.
+pub(crate) fn group_by<'a, T>(
+    items: impl IntoIterator<Item = &'a T>,
+    key: impl Fn(&T) -> &str,
+) -> Vec<(&'a str, Vec<&'a T>)>
+where
+    T: 'a,
+{
+    let mut groups: Vec<(&str, Vec<&T>)> = Vec::new();
+    for item in items {
+        let file = key(item);
+        match groups.iter_mut().find(|(f, _)| *f == file) {
+            Some((_, list)) => list.push(item),
+            None => groups.push((file, vec![item])),
+        }
+    }
+    groups
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct SearchParams {
-    /// Search query: natural language, symbol name, or text pattern
+    /// What the code does, or a symbol name
     pub query: String,
-    /// Maximum number of results (default 20, max 1000)
+    /// Max results (default 10)
     pub limit: Option<usize>,
-    /// Minimum score between 0.0 and 1.0 (default 0.3)
+    /// Min score 0-1 (default 0.3)
     pub min_score: Option<f32>,
-    /// Comma-separated file extensions to keep, e.g. "rs,ts,py"
+    /// File extensions, e.g. "rs,ts"
     pub file_type: Option<String>,
-    /// Comma-separated symbol kinds to keep: function, method, class, struct,
-    /// enum, interface, trait, module, variable, constant, type
+    /// Symbol kinds, e.g. "function,struct"
     pub symbol_kind: Option<String>,
+    /// Include each hit's code
+    pub snippets: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct FindRefsParams {
-    /// Symbol name to look up
+    /// Symbol name
     pub symbol: String,
-    /// Maximum number of references (default 50, max 1000)
+    /// Max references (default 30)
     pub limit: Option<usize>,
 }
 
@@ -38,16 +134,16 @@ pub struct DepsParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ExplainParams {
-    /// Symbol name to explain
+    /// Symbol name
     pub symbol: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SearchOutput {
     pub query: String,
-    pub total_count: usize,
-    pub search_time_ms: u64,
     pub results: Vec<SearchHit>,
+    /// More results exist beyond `limit`
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -55,37 +151,58 @@ pub struct SearchHit {
     pub file_path: String,
     pub start_line: usize,
     pub end_line: usize,
-    pub score: f32,
+    /// Relative to this query, rounded to 2 decimals (f64 so that JSON
+    /// prints 0.95, not the f32 widening 0.949999988)
+    pub score: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol_kind: Option<String>,
-    pub content: String,
+    /// The most relevant line of the hit, trimmed and cut to 120 characters
+    pub preview: String,
+    /// Code of the hit, only with `snippets`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 impl SearchOutput {
     pub fn render(&self) -> String {
+        if self.results.is_empty() {
+            return format!(
+                "No results for '{}'. Rephrase as what the code does, or use grep for exact text.\n",
+                self.query
+            );
+        }
+
         let mut output = format!(
-            "Found {} results for '{}' ({} ms)\n\n",
-            self.total_count, self.query, self.search_time_ms
+            "{} for '{}'",
+            count(self.results.len(), "result"),
+            self.query
         );
+        if self.truncated {
+            output.push_str(" (more exist: raise limit)");
+        }
+        output.push('\n');
 
         for hit in &self.results {
-            output.push_str(&format!(
-                "📄 {}\n   Lines {}-{} | Score: {:.2}\n",
-                hit.file_path, hit.start_line, hit.end_line, hit.score
-            ));
-
-            if let Some(ref symbol_name) = hit.symbol_name {
+            output.push_str(&location(&hit.file_path, hit.start_line, hit.end_line));
+            if let Some(ref name) = hit.symbol_name {
                 output.push_str(&format!(
-                    "   Symbol: {} ({})\n",
-                    symbol_name,
-                    hit.symbol_kind.as_deref().unwrap_or("unknown")
+                    " {} {}",
+                    hit.symbol_kind.as_deref().unwrap_or("symbol"),
+                    name
                 ));
             }
-
-            let snippet: String = hit.content.chars().take(200).collect();
-            output.push_str(&format!("   ```\n   {}\n   ```\n\n", snippet.trim()));
+            output.push_str(&format!(" ({:.2})\n", hit.score));
+            match hit.content {
+                Some(ref content) => {
+                    output.push_str(&format!("```\n{}\n```\n", content.trim_end()));
+                }
+                None if !hit.preview.is_empty() => {
+                    output.push_str(&format!("  {}\n", hit.preview));
+                }
+                None => {}
+            }
         }
 
         output
@@ -94,13 +211,11 @@ impl SearchOutput {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct RepoMapParams {
-    /// Token budget for the map (default 1500, clamped to 256..8000;
-    /// estimated as characters / 4)
+    /// Token budget (default 1500, 256-8000)
     pub max_tokens: Option<usize>,
-    /// Files, directories or symbol names the current task is about: the map
-    /// is then centered on them and on the code they use or are used by
+    /// Files, directories or symbols to center the map on
     pub focus: Option<Vec<String>>,
-    /// Only list files whose path starts with this prefix, e.g. "src/api/"
+    /// Only files under this path prefix, e.g. "src/api/"
     pub path_prefix: Option<String>,
 }
 
@@ -131,7 +246,7 @@ pub struct RepoMapFileOut {
     pub file_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// PageRank of the file in the reference graph
+    /// PageRank of the file in the reference graph (4 significant digits)
     pub rank: f64,
     pub symbols: Vec<RepoMapSymbolOut>,
 }
@@ -169,61 +284,60 @@ impl RepoMapOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FindRefsOutput {
     pub symbol: String,
-    pub total_count: usize,
-    pub search_time_ms: u64,
     pub definitions: Vec<Reference>,
     pub usages: Vec<Reference>,
+    /// The limit was reached: more references exist
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct Reference {
     pub file_path: String,
     pub line: usize,
-    /// definition, call, type, import, reference — or text when the name is
-    /// unknown to the AST index and was found by text search
+    /// Usages: call, type, import, reference, or text (found by text search).
+    /// Definitions: the symbol kind (function, struct…) or definition
     pub kind: String,
+    /// The line, trimmed and cut to 120 characters
     pub content: String,
 }
 
 impl FindRefsOutput {
-    /// Usages listed in the text output; the rest are only counted.
-    const MAX_RENDERED_USAGES: usize = 20;
-
     pub fn render(&self) -> String {
+        if self.definitions.is_empty() && self.usages.is_empty() {
+            return format!("No references to '{}'.\n", self.symbol);
+        }
+
         let mut output = format!(
-            "Found {} references to '{}' ({} ms)\n\n",
-            self.total_count, self.symbol, self.search_time_ms
+            "'{}': {}, {}",
+            self.symbol,
+            count(self.definitions.len(), "definition"),
+            count(self.usages.len(), "usage")
         );
+        if self.truncated {
+            output.push_str(" (limit reached: raise limit)");
+        }
+        output.push('\n');
 
         if !self.definitions.is_empty() {
-            output.push_str("## Definitions\n\n");
+            output.push_str("Definitions:\n");
             for def in &self.definitions {
                 output.push_str(&format!(
-                    "📍 {}:{}\n   {}\n\n",
-                    def.file_path,
-                    def.line,
-                    def.content.lines().next().unwrap_or("")
+                    "  {}:{} {}  {}\n",
+                    def.file_path, def.line, def.kind, def.content
                 ));
             }
         }
 
         if !self.usages.is_empty() {
-            output.push_str(&format!("## Usages ({} found)\n\n", self.usages.len()));
-            for usage in self.usages.iter().take(Self::MAX_RENDERED_USAGES) {
-                output.push_str(&format!(
-                    "📎 {}:{} [{}]\n   {}\n\n",
-                    usage.file_path,
-                    usage.line,
-                    usage.kind,
-                    usage.content.trim()
-                ));
-            }
-
-            if self.usages.len() > Self::MAX_RENDERED_USAGES {
-                output.push_str(&format!(
-                    "... and {} more usages\n",
-                    self.usages.len() - Self::MAX_RENDERED_USAGES
-                ));
+            output.push_str("Usages:\n");
+            for (file, usages) in group_by(&self.usages, |u| &u.file_path) {
+                output.push_str(&format!("{}\n", file));
+                for usage in usages {
+                    output.push_str(&format!(
+                        "  {} {}  {}\n",
+                        usage.line, usage.kind, usage.content
+                    ));
+                }
             }
         }
 
@@ -234,47 +348,54 @@ impl FindRefsOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DepsOutput {
     pub file_path: String,
-    /// What this file imports; `None` if the lookup failed
+    /// What this file imports; absent if the lookup failed
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub imports: Option<Vec<Import>>,
-    /// Files importing this one; `None` if the lookup failed
+    /// Files importing this one, sorted, without duplicates; absent if the
+    /// lookup failed
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub imported_by: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct Import {
     pub target_path: String,
+    /// Imported name, omitted when `target_path` already ends with it
     #[serde(skip_serializing_if = "Option::is_none")]
     pub import_name: Option<String>,
+    /// local, external or std
     pub kind: String,
 }
 
 impl DepsOutput {
     pub fn render(&self) -> String {
-        let mut output = format!("Dependency analysis for '{}'\n\n", self.file_path);
+        let mut output = format!("{}\n", self.file_path);
 
         match &self.imports {
             Some(imports) => {
-                output.push_str(&format!("## Imports ({} dependencies)\n\n", imports.len()));
-                for import in imports {
-                    output.push_str(&format!("→ {}", import.target_path));
-                    if let Some(ref name) = import.import_name {
-                        output.push_str(&format!(" (as {})", name));
-                    }
-                    output.push_str(&format!(" [{}]\n", import.kind));
+                output.push_str(&format!("Imports ({}):\n", imports.len()));
+                for (kind, group) in group_by(imports, |i| &i.kind) {
+                    let targets: Vec<String> = group
+                        .iter()
+                        .map(|i| match i.import_name {
+                            Some(ref name) => format!("{} as {}", i.target_path, name),
+                            None => i.target_path.clone(),
+                        })
+                        .collect();
+                    output.push_str(&format!("  {}: {}\n", kind, join_paths(&targets)));
                 }
-                output.push('\n');
             }
-            None => output.push_str("Could not analyze imports\n\n"),
+            None => output.push_str("Imports: lookup failed\n"),
         }
 
         match &self.imported_by {
-            Some(dependents) => {
-                output.push_str(&format!("## Imported by ({} files)\n\n", dependents.len()));
-                for path in dependents {
-                    output.push_str(&format!("← {}\n", path));
-                }
-            }
-            None => output.push_str("Could not analyze dependents\n"),
+            Some(dependents) if dependents.is_empty() => output.push_str("Imported by: none\n"),
+            Some(dependents) => output.push_str(&format!(
+                "Imported by ({}): {}\n",
+                dependents.len(),
+                dependents.join(", ")
+            )),
+            None => output.push_str("Imported by: lookup failed\n"),
         }
 
         output
@@ -285,7 +406,10 @@ impl DepsOutput {
 pub struct ExplainOutput {
     pub symbol: String,
     pub found: bool,
+    /// Definitions, import statements excluded
     pub definitions: Vec<Definition>,
+    /// Import statements of the name, as `path:line`
+    pub imported_in: Vec<String>,
     pub usage_count: usize,
     pub related_symbols: Vec<String>,
 }
@@ -305,38 +429,46 @@ pub struct Definition {
 impl ExplainOutput {
     pub fn render(&self) -> String {
         if !self.found {
-            return format!("Symbol '{}' not found in the index.", self.symbol);
+            return format!(
+                "Symbol '{}' not found in the index: try semantiq_search.\n",
+                self.symbol
+            );
         }
 
-        let mut output = format!("# Symbol: {}\n\n", self.symbol);
+        let mut output = format!(
+            "{}: {}, {}, {}\n",
+            self.symbol,
+            count(self.definitions.len(), "definition"),
+            count(self.imported_in.len(), "import"),
+            count(self.usage_count, "usage")
+        );
 
-        output.push_str(&format!(
-            "Found {} definition(s), {} usage(s)\n\n",
-            self.definitions.len(),
-            self.usage_count
-        ));
-
-        for (i, def) in self.definitions.iter().enumerate() {
-            output.push_str(&format!("## Definition {} ({})\n", i + 1, def.kind));
+        for def in &self.definitions {
             output.push_str(&format!(
-                "📄 {}:{}-{}\n\n",
-                def.file_path, def.start_line, def.end_line
+                "{} {}\n",
+                def.kind,
+                location(&def.file_path, def.start_line, def.end_line)
             ));
-
-            if let Some(ref sig) = def.signature {
-                output.push_str(&format!("```\n{}\n```\n\n", sig));
-            }
-
             if let Some(ref doc) = def.doc_comment {
-                output.push_str(&format!("**Documentation:**\n{}\n\n", doc));
+                for line in doc.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                    output.push_str(&format!("  {}\n", line));
+                }
             }
+            if let Some(ref sig) = def.signature {
+                output.push_str(&format!("  {}\n", sig.trim()));
+            }
+        }
+
+        if !self.imported_in.is_empty() {
+            output.push_str(&format!(
+                "Imported in ({}): {}\n",
+                self.imported_in.len(),
+                self.imported_in.join(", ")
+            ));
         }
 
         if !self.related_symbols.is_empty() {
-            output.push_str("## Related Symbols\n\n");
-            for related in &self.related_symbols {
-                output.push_str(&format!("- {}\n", related));
-            }
+            output.push_str(&format!("Related: {}\n", self.related_symbols.join(", ")));
         }
 
         output
@@ -345,14 +477,13 @@ impl ExplainOutput {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ImpactParams {
-    /// Symbol about to change (function, method, type, constant…)
+    /// Symbol about to change
     pub symbol: String,
-    /// Restrict to the definition in this file (relative path), when the name
-    /// is defined in several places
+    /// Definition file, when several share the name
     pub file_path: Option<String>,
-    /// How many levels of callers to follow (default 2, max 4)
+    /// Levels of users to follow (default 2, max 4)
     pub max_depth: Option<usize>,
-    /// Maximum number of impact sites (default 200, max 1000)
+    /// Max impact sites (default 200)
     pub limit: Option<usize>,
 }
 
@@ -401,68 +532,68 @@ pub struct ImpactSiteOut {
     pub confidence: String,
 }
 
+/// One line per definition: `kind path:line`.
+pub(crate) fn render_definitions(output: &mut String, definitions: &[ImpactDefinitionOut]) {
+    if definitions.is_empty() {
+        output.push_str("No definition in the index: matched by name only.\n");
+        return;
+    }
+    let defs: Vec<String> = definitions
+        .iter()
+        .map(|d| format!("{} {}:{}", d.kind, d.file_path, d.line))
+        .collect();
+    output.push_str(&format!("Defined: {}\n", defs.join(", ")));
+    if definitions.len() > 1 {
+        output.push_str("Several definitions share this name: pass file_path to pick one.\n");
+    }
+}
+
 impl ImpactOutput {
     pub fn render(&self) -> String {
-        let mut output = format!("# Impact of '{}'\n\n", self.symbol);
-
-        if self.definitions.is_empty() {
-            output
-                .push_str("No definition found in the index; sites below match the name only.\n\n");
-        } else {
-            for def in &self.definitions {
-                output.push_str(&format!(
-                    "Defined at {}:{} ({})\n",
-                    def.file_path, def.line, def.kind
-                ));
-            }
-            if self.definitions.len() > 1 {
-                output.push_str(
-                    "Several definitions share this name: pass file_path to analyse one.\n",
-                );
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!(
-            "{} sites in {} files ({} test files){}\n\n",
-            self.site_count,
-            self.files.len(),
-            self.test_files.len(),
+        let mut output = format!(
+            "Impact of '{}': {} in {} ({}){}\n",
+            self.symbol,
+            count(self.site_count, "site"),
+            count(self.files.len(), "file"),
+            count(self.test_files.len(), "test file"),
             if self.truncated {
-                " — limit reached, results incomplete"
+                " (limit reached: incomplete, raise limit)"
             } else {
                 ""
             }
-        ));
+        );
+        render_definitions(&mut output, &self.definitions);
 
         for file in &self.files {
             output.push_str(&format!(
-                "## {}{} (depth {})\n",
+                "{}{} (depth {})\n",
                 file.file_path,
                 if file.is_test { " [test]" } else { "" },
                 file.depth
             ));
-            for site in &file.sites {
-                output.push_str(&format!("  L{} [{}] {}", site.line, site.kind, site.target));
-                if let Some(ref enclosing) = site.enclosing {
-                    output.push_str(&format!(" in {}", enclosing));
+            let described = file.sites.iter().map(|site| {
+                let mut text = site.kind.clone();
+                if site.target != self.symbol {
+                    text.push_str(&format!(" {}", site.target));
                 }
-                if site.depth > 1 {
-                    output.push_str(&format!(" (depth {})", site.depth));
+                if let Some(ref enclosing) = site.enclosing {
+                    text.push_str(&format!(" in {}", enclosing));
+                }
+                if site.depth > file.depth {
+                    text.push_str(&format!(" (depth {})", site.depth));
                 }
                 if site.confidence == "name_only" {
-                    output.push_str(" (name match only)");
+                    text.push_str(" (name match only)");
                 }
-                output.push('\n');
+                (site.line, text)
+            });
+            for (lines, text) in merge_lines(described) {
+                output.push_str(&format!("  {} {}\n", lines, text));
             }
-            output.push('\n');
         }
 
         if !self.test_files.is_empty() {
-            output.push_str("## Tests to run\n\n");
-            for path in &self.test_files {
-                output.push_str(&format!("- {}\n", path));
-            }
+            output.push_str(&format!("Tests to run: {}\n", self.test_files.join(", ")));
         }
 
         output

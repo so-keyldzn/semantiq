@@ -16,7 +16,10 @@ async fn test_explain_returns_formatted_output() {
 
     assert!(result.is_ok());
     let output = result.unwrap();
-    assert!(output.contains("Symbol: process") || output.contains("not found"));
+    assert!(
+        output.starts_with("process: ") || output.contains("not found"),
+        "{output}"
+    );
 }
 
 #[tokio::test]
