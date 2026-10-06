@@ -415,6 +415,17 @@ fn test_vector_search() {
     let chunk_ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
     let found_chunks = store.get_chunks_by_ids(&chunk_ids).unwrap();
     assert_eq!(found_chunks.len(), 2);
+
+    // Results follow the order of the requested IDs (nearest-first after KNN),
+    // not rowid order.
+    let reversed: Vec<i64> = stored_chunks.iter().rev().map(|c| c.id).collect();
+    let found: Vec<i64> = store
+        .get_chunks_by_ids(&reversed)
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(found, reversed);
 }
 
 #[test]

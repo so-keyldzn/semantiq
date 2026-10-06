@@ -56,7 +56,7 @@ impl FileWatcher {
             match result {
                 Ok(event) => {
                     debug!("File event: {:?}", event);
-                    events.extend(Self::convert_event(event));
+                    events.extend(Self::convert_event(event, &self.watched_paths));
                 }
                 Err(e) => {
                     error!("Watch error: {:?}", e);
@@ -67,7 +67,7 @@ impl FileWatcher {
         events
     }
 
-    fn convert_event(event: Event) -> Vec<FileEvent> {
+    fn convert_event(event: Event, watched_roots: &[PathBuf]) -> Vec<FileEvent> {
         use notify::EventKind;
 
         let mut file_events = Vec::new();
@@ -78,8 +78,15 @@ impl FileWatcher {
                 continue;
             }
 
-            // Skip excluded paths (hidden dirs, node_modules, etc.)
-            if should_exclude_path(&path) {
+            // Skip excluded paths (hidden dirs, node_modules, etc.). Evaluated on
+            // the path relative to the watched root, like `AutoIndexer::index_file`:
+            // a project living under e.g. `~/.config/app` or a `.tmpXXXX` dir
+            // would otherwise have every event dropped.
+            let rel = watched_roots
+                .iter()
+                .find_map(|root| path.strip_prefix(root).ok())
+                .unwrap_or(&path);
+            if should_exclude_path(rel) {
                 debug!("Skipping excluded path event: {:?}", path);
                 continue;
             }
@@ -109,6 +116,25 @@ impl FileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_convert_event_ignores_excluded_ancestors_of_root() {
+        use notify::EventKind;
+        use notify::event::{CreateKind, ModifyKind};
+
+        let root = PathBuf::from("/home/u/.config/app");
+        let roots = vec![root.clone()];
+
+        let event =
+            Event::new(EventKind::Create(CreateKind::File)).add_path(root.join("src/main.rs"));
+        let events = FileWatcher::convert_event(event, &roots);
+        assert!(matches!(events.as_slice(), [FileEvent::Created(_)]));
+
+        // Exclusions inside the project still apply.
+        let event = Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(root.join("node_modules/x/index.js"));
+        assert!(FileWatcher::convert_event(event, &roots).is_empty());
+    }
 
     #[test]
     fn test_watcher_creation() {

@@ -222,3 +222,46 @@ fn test_symbol_explanation_found() {
     assert_eq!(explanation.usage_count, 5);
     assert_eq!(explanation.related_symbols.len(), 2);
 }
+
+#[test]
+fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
+    use semantiq_parser::{Symbol, SymbolKind};
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let file_id = store.insert_file("cfg.rs", Some("rust"), "", 0, 0).unwrap();
+    let mk = |name: &str, line: usize| Symbol {
+        name: name.to_string(),
+        // Variable (not Function): the function kind boost caps both scores
+        // at 1.0, which would hide the min-max collapse.
+        kind: SymbolKind::Variable,
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 0,
+        signature: None,
+        doc_comment: None,
+        parent: None,
+    };
+    store
+        .insert_symbols(
+            file_id,
+            &[mk("parse_config", 1), mk("parse_config_file", 2)],
+        )
+        .unwrap();
+
+    // Empty root: no text-search hits, only the two symbol hits.
+    let root = tempfile::TempDir::new().unwrap();
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+
+    let results = engine.search("parse_config", 10, None).unwrap();
+    let names: Vec<_> = results
+        .results
+        .iter()
+        .filter_map(|r| r.metadata.symbol_name.as_deref())
+        .collect();
+    assert!(names.contains(&"parse_config"), "{names:?}");
+    assert!(
+        names.contains(&"parse_config_file"),
+        "prefix match must survive the default min_score: {names:?}"
+    );
+}

@@ -73,7 +73,7 @@ impl SemantiqServer {
                 && info.update_available
             {
                 let message = format!(
-                    "Update available: {} -> {} | Run: npm install -g semantiq-mcp | Or: https://github.com/so-keyldzn/semantiq/releases",
+                    "Update available: {} -> {} | Run: semantiq update | Or: https://github.com/so-keyldzn/semantiq/releases",
                     info.current_version, info.latest_version
                 );
                 let _ = peer
@@ -85,6 +85,21 @@ impl SemantiqServer {
                     .await;
             }
         });
+    }
+
+    /// Run a retrieval call on the blocking pool. Engine calls do SQLite I/O
+    /// behind a std mutex (held for long stretches during reindexing), ONNX
+    /// inference and filesystem walks; running them inline on an async worker
+    /// would let a few concurrent requests park the whole runtime.
+    pub async fn run_blocking<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&RetrievalEngine) -> Result<T> + Send + 'static,
+    {
+        let engine = Arc::clone(&self.engine);
+        tokio::task::spawn_blocking(move || f(&engine))
+            .await
+            .map_err(|e| anyhow::anyhow!("blocking task failed: {}", e))?
     }
 
     pub fn store(&self) -> &Arc<IndexStore> {
@@ -166,7 +181,7 @@ impl SemantiqServer {
 impl SemantiqServer {
     #[tool(
         name = "semantiq_search",
-        description = "Search for code patterns, symbols, or text in the codebase. Returns relevant matches with file paths and line numbers. Supports filtering: min_score (0.0-1.0, default 0.35), file_type (comma-separated extensions like 'rs,ts,py'), symbol_kind (function,method,class,struct,enum,interface,trait,module,variable,constant,type)."
+        description = "Search for code patterns, symbols, or text in the codebase. Returns relevant matches with file paths and line numbers. Supports filtering: min_score (0.0-1.0, default 0.3), file_type (comma-separated extensions like 'rs,ts,py'), symbol_kind (function,method,class,struct,enum,interface,trait,module,variable,constant,type)."
     )]
     pub async fn semantiq_search(
         &self,
@@ -216,7 +231,11 @@ impl SemantiqServer {
             }
         }
 
-        match self.engine.search(query, limit, Some(options)) {
+        let owned_query = query.to_string();
+        let search = self
+            .run_blocking(move |engine| engine.search(&owned_query, limit, Some(options)))
+            .await;
+        match search {
             Ok(results) => {
                 let mut output = format!(
                     "Found {} results for '{}' ({} ms)\n\n",
@@ -272,7 +291,11 @@ impl SemantiqServer {
 
         let limit = limit.unwrap_or(50).min(1000);
 
-        match self.engine.find_references(&symbol, limit) {
+        let owned_symbol = symbol.clone();
+        let refs = self
+            .run_blocking(move |engine| engine.find_references(&owned_symbol, limit))
+            .await;
+        match refs {
             Ok(results) => {
                 let mut output = format!(
                     "Found {} references to '{}' ({} ms)\n\n",
@@ -362,7 +385,24 @@ impl SemantiqServer {
 
         let mut output = format!("Dependency analysis for '{}'\n\n", file_path);
 
-        match self.engine.get_dependencies(&file_path) {
+        let owned_path = file_path.clone();
+        let (dependencies, dependents) = match self
+            .run_blocking(move |engine| {
+                Ok((
+                    engine.get_dependencies(&owned_path),
+                    engine.get_dependents(&owned_path),
+                ))
+            })
+            .await
+        {
+            Ok(both) => both,
+            Err(e) => {
+                error!("Dependency analysis failed: {}", e);
+                return Err("Dependency analysis failed: an internal error occurred".to_string());
+            }
+        };
+
+        match dependencies {
             Ok(deps) => {
                 output.push_str(&format!("## Imports ({} dependencies)\n\n", deps.len()));
                 for dep in &deps {
@@ -379,7 +419,7 @@ impl SemantiqServer {
             }
         }
 
-        match self.engine.get_dependents(&file_path) {
+        match dependents {
             Ok(deps) => {
                 output.push_str(&format!("## Imported by ({} files)\n\n", deps.len()));
                 for dep in &deps {
@@ -410,7 +450,11 @@ impl SemantiqServer {
             return Err("Symbol name exceeds maximum length of 500 characters".to_string());
         }
 
-        match self.engine.explain_symbol(&symbol) {
+        let owned_symbol = symbol.clone();
+        let explanation = self
+            .run_blocking(move |engine| engine.explain_symbol(&owned_symbol))
+            .await;
+        match explanation {
             Ok(explanation) => {
                 if !explanation.found {
                     return Ok(format!("Symbol '{}' not found in the index.", symbol));

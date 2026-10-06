@@ -31,7 +31,8 @@ const META_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct UpdateOptions {
     /// Only report whether an update is available; do not download or install.
     pub check_only: bool,
-    /// Reinstall the latest release even if it matches the current version.
+    /// Reinstall the latest release even if it matches the current version
+    /// (never downgrades a newer running build).
     pub force: bool,
 }
 
@@ -171,7 +172,18 @@ fn replace_current_exe(new_bin: &Path) -> Result<()> {
             let _ = std::fs::remove_file(&backup);
             std::fs::rename(&current, &backup)
                 .context("failed to move running executable aside")?;
-            std::fs::rename(&staged, &current).context("failed to install new binary")?;
+            if let Err(e) = std::fs::rename(&staged, &current) {
+                // Put the original binary back, otherwise nothing is left at
+                // `current` and the next `semantiq` invocation fails.
+                if let Err(restore) = std::fs::rename(&backup, &current) {
+                    return Err(anyhow!(
+                        "failed to install new binary ({e}) and to restore the previous one \
+                         ({restore}); it is at {}",
+                        backup.display()
+                    ));
+                }
+                return Err(e).context("failed to install new binary");
+            }
             // Best-effort cleanup; the old image may still be locked while running.
             let _ = std::fs::remove_file(&backup);
             Ok(())
@@ -203,7 +215,18 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
     let newer = version_check::is_version_newer(&latest, current_version);
     debug!(current = current_version, latest = %latest, newer, "update check");
 
-    if !newer && !opts.force {
+    // `--force` only reinstalls the same version; it must never downgrade a
+    // build that is newer than the latest published release.
+    if version_check::is_version_newer(current_version, &latest) {
+        println!(
+            "Running v{current_version}, newer than the latest release v{latest}; nothing to do."
+        );
+        return Ok(UpdateOutcome::AlreadyLatest {
+            version: current_version.to_string(),
+        });
+    }
+
+    if !newer && (!opts.force || opts.check_only) {
         println!("Already up to date (v{current_version}).");
         return Ok(UpdateOutcome::AlreadyLatest {
             version: current_version.to_string(),

@@ -191,9 +191,22 @@ impl IndexStore {
 
     /// Get chunk records by IDs (useful after vector search).
     ///
+    /// Results come back in the order of `chunk_ids` (missing IDs are skipped),
+    /// so callers can pass a KNN result list and keep its nearest-first order.
+    pub fn get_chunks_by_ids(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
+        let mut by_id: std::collections::HashMap<i64, ChunkRecord> = self
+            .get_chunks_by_ids_unordered(chunk_ids)?
+            .into_iter()
+            .map(|c| (c.id, c))
+            .collect();
+        Ok(chunk_ids.iter().filter_map(|id| by_id.remove(id)).collect())
+    }
+
+    /// Fetch chunk records by IDs in rowid order.
+    ///
     /// If more than 900 IDs are provided, the query is split into batches
     /// to stay within SQLite's `SQLITE_MAX_VARIABLE_NUMBER` limit (default 999).
-    pub fn get_chunks_by_ids(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
+    fn get_chunks_by_ids_unordered(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
         if chunk_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -204,7 +217,7 @@ impl IndexStore {
         if chunk_ids.len() > BATCH_SIZE {
             let mut all_results = Vec::new();
             for batch in chunk_ids.chunks(BATCH_SIZE) {
-                all_results.extend(self.get_chunks_by_ids(batch)?);
+                all_results.extend(self.get_chunks_by_ids_unordered(batch)?);
             }
             return Ok(all_results);
         }

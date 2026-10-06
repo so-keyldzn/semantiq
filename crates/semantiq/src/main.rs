@@ -59,6 +59,11 @@ enum Commands {
         /// CORS allowed origin for HTTP API (e.g., "https://example.com")
         #[arg(long)]
         cors_origin: Option<String>,
+
+        /// Address the HTTP API binds to. Defaults to loopback so the indexed
+        /// code is not exposed to the network; use "0.0.0.0" to opt in.
+        #[arg(long, default_value = "127.0.0.1")]
+        http_host: std::net::IpAddr,
     },
 
     /// Index a project directory
@@ -176,7 +181,18 @@ async fn main() -> Result<()> {
             no_update_check,
             http_port,
             cors_origin,
-        } => commands::serve(project, database, no_update_check, http_port, cors_origin).await,
+            http_host,
+        } => {
+            commands::serve(
+                project,
+                database,
+                no_update_check,
+                http_port,
+                http_host,
+                cors_origin,
+            )
+            .await
+        }
         Commands::Index {
             path,
             database,

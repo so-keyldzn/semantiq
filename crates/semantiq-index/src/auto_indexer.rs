@@ -56,6 +56,7 @@ impl AutoIndexer {
         info!("Starting initial index of {:?}", self.project_root);
 
         let mut result = InitialIndexResult::default();
+        let mut seen_paths = std::collections::HashSet::new();
 
         // Use ignore crate to walk directory respecting .gitignore
         let walker = WalkBuilder::new(&self.project_root)
@@ -89,6 +90,7 @@ impl AutoIndexer {
 
             // Get relative path (warns if `path` falls outside project_root).
             let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+            seen_paths.insert(rel_path.clone());
 
             // Read file content to check if needs reindex
             let content = match fs::read_to_string(path) {
@@ -127,9 +129,24 @@ impl AutoIndexer {
             }
         }
 
+        // Prune files that vanished (deleted, renamed, branch switch) while the
+        // server was not running: the walk above only ever adds or updates rows.
+        for stale in self.store.list_file_paths()? {
+            if seen_paths.contains(&stale) {
+                continue;
+            }
+            match self.store.delete_file(&stale) {
+                Ok(()) => result.removed += 1,
+                Err(e) => {
+                    error!("Failed to remove stale {}: {}", stale, e);
+                    result.errors += 1;
+                }
+            }
+        }
+
         info!(
-            "Initial index complete: {} scanned, {} indexed, {} skipped, {} errors",
-            result.scanned, result.indexed, result.skipped, result.errors
+            "Initial index complete: {} scanned, {} indexed, {} skipped, {} removed, {} errors",
+            result.scanned, result.indexed, result.skipped, result.removed, result.errors
         );
 
         Ok(result)
@@ -154,11 +171,25 @@ impl AutoIndexer {
         for event in events {
             match event {
                 FileEvent::Created(path) | FileEvent::Modified(path) => {
-                    if let Err(e) = self.index_file(&path) {
-                        error!("Failed to index {:?}: {}", path, e);
-                        result.errors += 1;
-                    } else {
-                        result.indexed += 1;
+                    // A rename is reported as Modify(Name) on the OLD path too
+                    // (macOS FSEvents, editors' atomic saves): a path that no
+                    // longer exists is a removal, not a modification.
+                    if !path.exists() {
+                        if let Err(e) = self.remove_file(&path) {
+                            error!("Failed to remove {:?}: {}", path, e);
+                            result.errors += 1;
+                        } else {
+                            result.removed += 1;
+                        }
+                        continue;
+                    }
+                    match self.index_file(&path) {
+                        Ok(true) => result.indexed += 1,
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Failed to index {:?}: {}", path, e);
+                            result.errors += 1;
+                        }
                     }
                 }
                 FileEvent::Deleted(path) => {
@@ -182,8 +213,9 @@ impl AutoIndexer {
         Ok(result)
     }
 
-    /// Index a single file
-    fn index_file(&self, path: &Path) -> Result<()> {
+    /// Index a single file. Returns `Ok(false)` when the file was skipped
+    /// (excluded, unsupported, unreadable or content unchanged since last index).
+    fn index_file(&self, path: &Path) -> Result<bool> {
         // Get relative path (warns if `path` falls outside the project root).
         let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
@@ -198,7 +230,7 @@ impl AutoIndexer {
         // absolute `path` since it needs the on-disk metadata.
         if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
             debug!("Skipping excluded path: {}", rel_path);
-            return Ok(());
+            return Ok(false);
         }
 
         // Check if this is a supported language
@@ -206,7 +238,7 @@ impl AutoIndexer {
             Some(lang) => lang,
             None => {
                 debug!("Skipping unsupported file: {:?}", path);
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -215,9 +247,21 @@ impl AutoIndexer {
             Ok(c) => c,
             Err(e) => {
                 debug!("Skipping {}: {}", rel_path, e);
-                return Ok(());
+                return Ok(false);
             }
         };
+
+        // Skip files whose content is unchanged since the last index: watchers
+        // fire on touch, metadata changes and duplicate events, and re-running
+        // the parser + embedding model for those is pure waste.
+        if !self
+            .store
+            .needs_reindex(&rel_path, &content)
+            .unwrap_or(true)
+        {
+            debug!("Unchanged, skipping: {}", rel_path);
+            return Ok(false);
+        }
 
         // Get file metadata
         let metadata = fs::metadata(path)?;
@@ -372,7 +416,7 @@ impl AutoIndexer {
             last_modified,
         )?;
 
-        Ok(())
+        Ok(true)
     }
 
     /// Remove a file from the index
@@ -398,5 +442,6 @@ pub struct InitialIndexResult {
     pub scanned: usize,
     pub indexed: usize,
     pub skipped: usize,
+    pub removed: usize,
     pub errors: usize,
 }

@@ -151,27 +151,35 @@ fn fetch_latest_version(timeout: Duration) -> Option<String> {
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
-    let parse_version = |v: &str| -> Vec<u32> {
-        v.trim_start_matches('v')
-            .split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect()
+    // Semver-style: compare the numeric core, then a release outranks any
+    // pre-release of the same core (`1.0.1` > `1.0.1-beta`), and two
+    // pre-releases compare lexically. Build metadata (`+...`) is ignored.
+    let parse_version = |v: &str| -> ([u32; 3], Option<String>) {
+        let v = v.trim_start_matches('v');
+        let v = v.split('+').next().unwrap_or(v);
+        let (core, pre) = match v.split_once('-') {
+            Some((core, pre)) => (core, Some(pre.to_string())),
+            None => (v, None),
+        };
+        let mut parts = [0u32; 3];
+        for (slot, s) in parts.iter_mut().zip(core.split('.')) {
+            *slot = s.parse().unwrap_or(0);
+        }
+        (parts, pre)
     };
 
-    let latest_parts = parse_version(latest);
-    let current_parts = parse_version(current);
+    let (latest_core, latest_pre) = parse_version(latest);
+    let (current_core, current_pre) = parse_version(current);
 
-    for i in 0..3 {
-        let l = latest_parts.get(i).copied().unwrap_or(0);
-        let c = current_parts.get(i).copied().unwrap_or(0);
-        if l > c {
-            return true;
-        }
-        if l < c {
-            return false;
-        }
+    match latest_core.cmp(&current_core) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => match (latest_pre, current_pre) {
+            (None, Some(_)) => true,
+            (Some(l), Some(c)) => l > c,
+            _ => false,
+        },
     }
-    false
 }
 
 /// Check for updates, using cache when available.
@@ -240,6 +248,15 @@ mod tests {
         assert!(!is_newer("0.2.6", "0.2.6"));
         assert!(!is_newer("0.2.5", "0.2.6"));
         assert!(!is_newer("0.1.0", "0.2.0"));
+    }
+
+    #[test]
+    fn test_is_newer_prerelease() {
+        assert!(is_newer("1.0.1", "1.0.1-beta"));
+        assert!(!is_newer("1.0.1-beta", "1.0.1"));
+        assert!(is_newer("1.0.1-beta", "1.0.0"));
+        assert!(is_newer("1.0.1-rc.1", "1.0.1-beta.2"));
+        assert!(!is_newer("1.0.1-beta", "1.0.1-beta"));
     }
 
     #[test]

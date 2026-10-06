@@ -119,6 +119,17 @@ impl IndexStore {
         })
     }
 
+    /// List the relative paths of every indexed file.
+    pub fn list_file_paths(&self) -> Result<Vec<String>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT path FROM files")?;
+            let paths = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            Ok(paths)
+        })
+    }
+
     /// Get a file path by its ID.
     pub fn get_file_path_by_id(&self, file_id: i64) -> Result<Option<String>> {
         self.with_conn(|conn| {

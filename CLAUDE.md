@@ -92,7 +92,7 @@ crates/
 
 ### HTTP API (`--http-port`)
 
-Alternative to MCP stdio. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /find-refs`, `POST /deps`, `POST /explain`. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /find-refs`, `POST /deps`, `POST /explain`. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
 
 ### Environment Variables
 

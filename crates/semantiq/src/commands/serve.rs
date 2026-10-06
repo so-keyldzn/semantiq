@@ -13,6 +13,7 @@ pub(crate) async fn serve(
     database: Option<PathBuf>,
     no_update_check: bool,
     http_port: Option<u16>,
+    http_host: std::net::IpAddr,
     cors_origin: Option<String>,
 ) -> Result<()> {
     // Disable update check if flag is set (thread-safe, no unsafe needed)
@@ -41,7 +42,7 @@ pub(crate) async fn serve(
         info!("Project root: {:?}", project_root);
         info!("Database: {:?}", db_path);
 
-        crate::http::serve_http(server, port, cors_origin).await
+        crate::http::serve_http(server, http_host, port, cors_origin).await
     } else {
         // MCP stdio mode
         info!("Starting Semantiq MCP server");

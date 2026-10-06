@@ -86,6 +86,15 @@ impl RetrievalEngine {
 
         let mut all_results = Vec::new();
 
+        // `min_score` is an absolute floor on each strategy's RAW score. It must
+        // be applied before `normalize_and_weight`: min-max maps every
+        // strategy's weakest hit to 0.0, so filtering afterwards would always
+        // drop it (and would let a lone weak hit through at 1.0).
+        let min_score = opts.effective_min_score();
+        let above_floor = |results: &mut Vec<SearchResult>| {
+            results.retain(|r| r.score >= min_score);
+        };
+
         // 1. Semantic search (vector similarity) - highest priority.
         //
         // Skip entirely when the embedding model is a stub: a stub returns a
@@ -100,12 +109,14 @@ impl RetrievalEngine {
             .unwrap_or(false);
         if semantic_enabled {
             let mut semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
+            above_floor(&mut semantic_results);
             normalize_and_weight(&mut semantic_results, WEIGHT_SEMANTIC);
             all_results.extend(semantic_results);
         }
 
         // 2. Symbol search (FTS) - prioritize symbol matches
         let mut symbol_results = self.search_symbols(&query, safe_limit, &opts)?;
+        above_floor(&mut symbol_results);
         normalize_and_weight(&mut symbol_results, WEIGHT_SYMBOL);
         all_results.extend(symbol_results);
 
@@ -113,6 +124,7 @@ impl RetrievalEngine {
         if all_results.len() < safe_limit {
             let mut text_results =
                 self.search_text(&query, safe_limit - all_results.len(), &opts)?;
+            above_floor(&mut text_results);
             normalize_and_weight(&mut text_results, WEIGHT_TEXT);
             all_results.extend(text_results);
         }
@@ -134,10 +146,6 @@ impl RetrievalEngine {
             let key = format!("{}:{}:{}", r.file_path, r.start_line, r.end_line);
             seen.insert(key)
         });
-
-        // Filter by minimum score
-        let min_score = opts.effective_min_score();
-        all_results.retain(|r| r.score >= min_score);
 
         // Limit results
         all_results.truncate(safe_limit);

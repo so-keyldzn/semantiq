@@ -46,9 +46,12 @@ async fn health() -> Json<HealthResponse> {
 async fn stats(
     State(server): State<AppState>,
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let store = server.store();
+    let store = Arc::clone(server.store());
+    let stats = tokio::task::spawn_blocking(move || store.get_stats())
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("blocking task failed: {}", e)));
 
-    match store.get_stats() {
+    match stats {
         Ok(stats) => Ok(Json(StatsResponse {
             indexed_files: stats.file_count,
             indexed_symbols: stats.symbol_count,
@@ -124,7 +127,11 @@ async fn search(
 
     debug!(query = %query, limit = %limit, "HTTP search request");
 
-    match server.engine().search(query, limit, Some(options)) {
+    let owned_query = query.to_string();
+    let search = server
+        .run_blocking(move |engine| engine.search(&owned_query, limit, Some(options)))
+        .await;
+    match search {
         Ok(results) => {
             let search_time_ms = start.elapsed().as_millis() as u64;
 
@@ -198,7 +205,11 @@ async fn find_refs(
 
     debug!(symbol = %symbol, limit = %limit, "HTTP find_refs request");
 
-    match server.engine().find_references(symbol, limit) {
+    let owned_symbol = symbol.to_string();
+    let refs = server
+        .run_blocking(move |engine| engine.find_references(&owned_symbol, limit))
+        .await;
+    match refs {
         Ok(results) => {
             let search_time_ms = start.elapsed().as_millis() as u64;
 
@@ -294,7 +305,27 @@ async fn deps(
 
     debug!(file_path = %file_path, "HTTP deps request");
 
-    let imports = match server.engine().get_dependencies(file_path) {
+    let owned_path = file_path.to_string();
+    let (dependencies, dependents) = server
+        .run_blocking(move |engine| {
+            Ok((
+                engine.get_dependencies(&owned_path),
+                engine.get_dependents(&owned_path),
+            ))
+        })
+        .await
+        .map_err(|e| {
+            error!("Dependency analysis failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Dependency analysis failed".to_string(),
+                    code: "DEPS_ERROR".to_string(),
+                }),
+            )
+        })?;
+
+    let imports = match dependencies {
         Ok(deps) => deps
             .into_iter()
             .map(|d| Dependency {
@@ -309,7 +340,7 @@ async fn deps(
         }
     };
 
-    let imported_by = match server.engine().get_dependents(file_path) {
+    let imported_by = match dependents {
         Ok(deps) => deps
             .into_iter()
             .map(|d| Dependency {
@@ -367,7 +398,11 @@ async fn explain(
 
     debug!(symbol = %symbol, "HTTP explain request");
 
-    match server.engine().explain_symbol(symbol) {
+    let owned_symbol = symbol.to_string();
+    let explanation = server
+        .run_blocking(move |engine| engine.explain_symbol(&owned_symbol))
+        .await;
+    match explanation {
         Ok(explanation) => {
             let search_time_ms = start.elapsed().as_millis() as u64;
 

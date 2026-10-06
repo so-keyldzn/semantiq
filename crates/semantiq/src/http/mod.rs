@@ -13,7 +13,7 @@ use anyhow::Result;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use semantiq_mcp::SemantiqServer;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -29,6 +29,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 50;
 /// Start the HTTP API server
 pub(crate) async fn serve_http(
     server: SemantiqServer,
+    host: IpAddr,
     port: u16,
     cors_origin: Option<String>,
 ) -> Result<()> {
@@ -60,7 +61,16 @@ pub(crate) async fn serve_http(
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    // The API has no authentication, so binding beyond loopback exposes the
+    // indexed source code to anyone who can reach this host.
+    let addr = SocketAddr::new(host, port);
+    if !host.is_loopback() {
+        warn!(
+            "HTTP API bound to non-loopback address {}; it is unauthenticated and \
+             reachable from the network",
+            addr
+        );
+    }
     info!("Starting HTTP API server on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

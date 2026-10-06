@@ -190,3 +190,24 @@ fn process_events_with_no_pending_events_is_empty_and_clean() {
     assert_eq!(result.errors, 0);
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
+
+#[test]
+fn initial_index_prunes_files_deleted_while_offline() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::new(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+
+    // Simulate a rename that happened while the server was down.
+    fs::rename(root.join("src/util.rs"), root.join("src/helpers.rs")).unwrap();
+
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.removed, 1);
+    assert_eq!(result.errors, 0);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert!(store.get_file_by_path("src/helpers.rs").unwrap().is_some());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
