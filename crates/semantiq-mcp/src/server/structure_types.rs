@@ -44,6 +44,9 @@ pub struct CallEdgeOut {
     pub callee: String,
     pub file_path: String,
     pub line: usize,
+    /// Calls on this line, when more than one (`f(f(x))`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
     /// same_file, imports, unique_name, or name_only (possibly a homonym)
     pub confidence: String,
 }
@@ -187,6 +190,9 @@ impl CallsOutput {
                 } else {
                     format!("{} → {}", caller, edge.callee)
                 };
+                if let Some(count) = edge.count {
+                    text.push_str(&format!(" ×{}", count));
+                }
                 if edge.depth > 1 {
                     text.push_str(&format!(" (depth {})", edge.depth));
                 }

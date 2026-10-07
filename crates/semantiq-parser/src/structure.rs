@@ -27,6 +27,9 @@ pub struct CallEdge {
     /// Start line of the caller's definition (0 for top-level code).
     pub caller_line: usize,
     pub callee: String,
+    /// Calls of `callee` on this line (≥ 1): `f(f(x))` → 2. Plain
+    /// references of the same name on the line are not counted.
+    pub count: usize,
     /// Line of the call (1-based).
     pub line: usize,
 }
@@ -116,6 +119,7 @@ impl StructureExtractor {
                     caller_line: caller.map(|s| s.start_line).unwrap_or(0),
                     callee: r.name.clone(),
                     line: r.line,
+                    count: r.count,
                 }
             })
             .collect()

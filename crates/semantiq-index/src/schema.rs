@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
@@ -174,8 +174,38 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
     // by `init_schema()` (IF NOT EXISTS) and filled by the full reindex that
     // the PARSER_VERSION 11 bump triggers.
 
+    // v8 -> v9: reshape the tables to what is actually read.
+    // - `dependencies.line` / `end_line`: where the import statement is;
+    // - `refs.count` / `call_edges.count`: occurrences of the name on the line
+    //   (rows stay one per name/file/line);
+    // - `symbols.start_byte` / `end_byte`, `chunks.start_byte` / `end_byte`
+    //   and `files.size` were written but never read: dropped.
+    // The new columns are filled by the full reindex that the PARSER_VERSION
+    // 12 bump triggers. `refs` / `call_edges` only exist from v7 / v8 on; on
+    // an older database `init_schema()` creates them in their final shape.
+    if stored < 9 && target >= 9 {
+        tracing::info!("Migrating schema v{} -> v9: reshaping tables", stored);
+        conn.execute_batch(
+            "ALTER TABLE dependencies ADD COLUMN line INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE dependencies ADD COLUMN end_line INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE symbols DROP COLUMN start_byte;
+             ALTER TABLE symbols DROP COLUMN end_byte;
+             ALTER TABLE chunks DROP COLUMN start_byte;
+             ALTER TABLE chunks DROP COLUMN end_byte;
+             ALTER TABLE files DROP COLUMN size;",
+        )?;
+        for table in ["refs", "call_edges"] {
+            if table_exists(conn, table)? {
+                conn.execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN count INTEGER NOT NULL DEFAULT 1"),
+                    [],
+                )?;
+            }
+        }
+    }
+
     // Future migrations go here:
-    // if stored < 9 && target >= 9 { ... }
+    // if stored < 10 && target >= 10 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
@@ -211,12 +241,7 @@ fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
         "type_relations",
         "files",
     ] {
-        let exists: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-            params![table],
-            |row| row.get::<_, i64>(0),
-        )? > 0;
-        if exists {
+        if table_exists(conn, table)? {
             conn.execute(&format!("DELETE FROM {table}"), [])?;
         }
     }
@@ -226,6 +251,15 @@ fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> SqliteResult<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        params![table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
 }
 
 fn get_metadata(conn: &Connection, key: &str) -> SqliteResult<Option<String>> {
@@ -300,7 +334,6 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             path TEXT NOT NULL UNIQUE,
             language TEXT,
             hash TEXT NOT NULL,
-            size INTEGER NOT NULL,
             last_modified INTEGER NOT NULL,
             indexed_at INTEGER NOT NULL
         );
@@ -313,8 +346,6 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             kind TEXT NOT NULL,
             start_line INTEGER NOT NULL,
             end_line INTEGER NOT NULL,
-            start_byte INTEGER NOT NULL,
-            end_byte INTEGER NOT NULL,
             signature TEXT,
             doc_comment TEXT,
             parent TEXT,
@@ -328,14 +359,12 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             content TEXT NOT NULL,
             start_line INTEGER NOT NULL,
             end_line INTEGER NOT NULL,
-            start_byte INTEGER NOT NULL,
-            end_byte INTEGER NOT NULL,
             symbols_json TEXT,
             embedding BLOB,
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         );
 
-        -- Dependencies table
+        -- Dependencies table. line..end_line: the import statement (1-based).
         CREATE TABLE IF NOT EXISTS dependencies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_file_id INTEGER NOT NULL,
@@ -343,28 +372,34 @@ pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
             import_name TEXT,
             kind TEXT NOT NULL,
             resolved_path TEXT,
+            line INTEGER NOT NULL DEFAULT 0,
+            end_line INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (source_file_id) REFERENCES files(id) ON DELETE CASCADE
         );
 
         -- Identifier occurrences extracted from the AST (find_refs).
-        -- One row per (name, file, line); kind = definition|import|call|type|reference.
+        -- One row per (name, file, line); kind = definition|import|call|type|reference;
+        -- count = occurrences of the name on that line.
         CREATE TABLE IF NOT EXISTS refs (
             name TEXT NOT NULL,
             file_id INTEGER NOT NULL,
             line INTEGER NOT NULL,
             kind TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (name, file_id, line),
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         ) WITHOUT ROWID;
 
         -- Call graph: each call site attached to its enclosing function/method.
-        -- caller = '' / caller_line = 0 for top-level code.
+        -- caller = '' / caller_line = 0 for top-level code; count = calls of
+        -- callee on that line.
         CREATE TABLE IF NOT EXISTS call_edges (
             file_id INTEGER NOT NULL,
             line INTEGER NOT NULL,
             callee TEXT NOT NULL,
             caller TEXT NOT NULL,
             caller_line INTEGER NOT NULL,
+            count INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (file_id, line, callee),
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         ) WITHOUT ROWID;
@@ -489,7 +524,6 @@ pub struct FileRecord {
     pub path: String,
     pub language: Option<String>,
     pub hash: String,
-    pub size: i64,
     pub last_modified: i64,
     pub indexed_at: i64,
 }
@@ -502,8 +536,6 @@ pub struct SymbolRecord {
     pub kind: String,
     pub start_line: i64,
     pub end_line: i64,
-    pub start_byte: i64,
-    pub end_byte: i64,
     pub signature: Option<String>,
     pub doc_comment: Option<String>,
     pub parent: Option<String>,
@@ -516,8 +548,6 @@ pub struct ChunkRecord {
     pub content: String,
     pub start_line: i64,
     pub end_line: i64,
-    pub start_byte: i64,
-    pub end_byte: i64,
     pub symbols: Vec<String>,
     pub embedding: Option<Vec<f32>>,
 }
@@ -530,6 +560,9 @@ pub struct DependencyRecord {
     pub import_name: Option<String>,
     pub kind: String,
     pub resolved_path: Option<String>,
+    /// First and last line of the import statement (1-based).
+    pub line: i64,
+    pub end_line: i64,
 }
 
 /// One identifier occurrence from the `refs` table, with its file path resolved.
@@ -551,6 +584,8 @@ pub struct CallEdgeRecord {
     /// Empty for top-level code.
     pub caller: String,
     pub caller_line: i64,
+    /// Calls of `callee` on this line (≥ 1).
+    pub count: usize,
 }
 
 /// One "extends / implements" declaration from the `type_relations` table.
@@ -717,6 +752,113 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_v8_to_v9_reshapes_tables() {
+        crate::store::init_sqlite_vec();
+        let conn = Connection::open_in_memory().unwrap();
+
+        // A v8 database: byte offsets and file size still present, no import
+        // lines, no occurrence counts.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '8');
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL UNIQUE,
+                language TEXT,
+                hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                last_modified INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL
+            );
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL,
+                signature TEXT,
+                doc_comment TEXT,
+                parent TEXT
+            );
+            CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL,
+                symbols_json TEXT,
+                embedding BLOB
+            );
+            CREATE TABLE dependencies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file_id INTEGER NOT NULL,
+                target_path TEXT NOT NULL,
+                import_name TEXT,
+                kind TEXT NOT NULL,
+                resolved_path TEXT
+            );
+            CREATE TABLE refs (
+                name TEXT NOT NULL, file_id INTEGER NOT NULL, line INTEGER NOT NULL,
+                kind TEXT NOT NULL, PRIMARY KEY (name, file_id, line)
+            ) WITHOUT ROWID;
+            CREATE TABLE call_edges (
+                file_id INTEGER NOT NULL, line INTEGER NOT NULL, callee TEXT NOT NULL,
+                caller TEXT NOT NULL, caller_line INTEGER NOT NULL,
+                PRIMARY KEY (file_id, line, callee)
+            ) WITHOUT ROWID;
+            INSERT INTO files (path, language, hash, size, last_modified, indexed_at)
+             VALUES ('a.rs', 'rust', 'h', 10, 1, 2);
+            INSERT INTO symbols (file_id, name, kind, start_line, end_line, start_byte, end_byte)
+             VALUES (1, 'f', 'function', 1, 2, 0, 9);
+            INSERT INTO refs (name, file_id, line, kind) VALUES ('f', 1, 5, 'call');
+            "#,
+        )
+        .unwrap();
+
+        migrate_schema_to(&conn, 9).unwrap();
+        init_schema(&conn).unwrap();
+
+        let columns = |table: &str| -> Vec<String> {
+            conn.prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(!columns("files").contains(&"size".to_string()));
+        assert!(!columns("symbols").contains(&"start_byte".to_string()));
+        assert!(!columns("chunks").contains(&"end_byte".to_string()));
+        assert!(columns("dependencies").contains(&"line".to_string()));
+        assert!(columns("dependencies").contains(&"end_line".to_string()));
+        assert!(columns("refs").contains(&"count".to_string()));
+        assert!(columns("call_edges").contains(&"count".to_string()));
+
+        // Existing rows survive with the defaults (the PARSER_VERSION bump
+        // then refills them with real values).
+        let (name, count): (String, i64) = conn
+            .query_row("SELECT name, count FROM refs", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((name.as_str(), count), ("f", 1));
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
     fn test_migrate_fresh_db_is_noop() {
         crate::store::init_sqlite_vec();
         let conn = Connection::open_in_memory().unwrap();
@@ -743,7 +885,7 @@ mod tests {
 
         // Insert a dependency with resolved_path
         let file_id = store
-            .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+            .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
             .unwrap();
         store
             .insert_dependency(
@@ -752,6 +894,7 @@ mod tests {
                 Some("utils"),
                 "local",
                 Some("src/utils.rs"),
+                (1, 1),
             )
             .unwrap();
 

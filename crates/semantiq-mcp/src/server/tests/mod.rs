@@ -41,7 +41,7 @@ pub(super) fn index_test_file(
     language: &str,
 ) -> i64 {
     let file_id = store
-        .insert_file(path, Some(language), content, content.len() as i64, 1000)
+        .insert_file(path, Some(language), content, 1000)
         .expect("Failed to insert file");
 
     let lang = semantiq_parser::Language::from_extension(

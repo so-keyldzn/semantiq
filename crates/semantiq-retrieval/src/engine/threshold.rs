@@ -96,6 +96,18 @@ impl RetrievalEngine {
         let inserted = self.store.insert_distance_observations_batch(&batch)?;
         info!("Flushed {} distance observations to database", inserted);
 
+        // Keep the table bounded: observations older than the collector's
+        // retention window are dropped, but never below the bootstrap
+        // threshold, so a calibration sample stays available. Calibrated
+        // thresholds are stored separately and survive.
+        let pruned = self
+            .store
+            .cleanup_old_observations(collector.max_age_secs(), collector.bootstrap_threshold())?;
+        if pruned > 0 {
+            collector.forget(pruned);
+            debug!("Pruned {} distance observations past retention", pruned);
+        }
+
         Ok(inserted)
     }
 

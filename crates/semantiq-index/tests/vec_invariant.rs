@@ -41,7 +41,7 @@ fn fresh_store_has_no_orphans() {
 fn reindex_same_file_does_not_leak_vectors() {
     let store = IndexStore::open_in_memory().unwrap();
     let file_id = store
-        .insert_file("foo.rs", Some("rust"), "fn old() {}", 11, 1000)
+        .insert_file("foo.rs", Some("rust"), "fn old() {}", 1000)
         .unwrap();
 
     // First indexing pass: 3 chunks, each with an embedding.
@@ -78,7 +78,7 @@ fn reindex_same_file_does_not_leak_vectors() {
 fn delete_file_purges_vectors() {
     let store = IndexStore::open_in_memory().unwrap();
     let file_id = store
-        .insert_file("bar.rs", Some("rust"), "fn b() {}", 9, 1000)
+        .insert_file("bar.rs", Some("rust"), "fn b() {}", 1000)
         .unwrap();
     let chunks = vec![make_chunk("fn a() {}", 1, 1), make_chunk("fn b() {}", 2, 2)];
     store.insert_chunks(file_id, &chunks).unwrap();
@@ -98,7 +98,7 @@ fn delete_file_purges_vectors() {
 fn clear_all_data_purges_vectors() {
     let store = IndexStore::open_in_memory().unwrap();
     let file_id = store
-        .insert_file("baz.rs", Some("rust"), "fn b() {}", 9, 1000)
+        .insert_file("baz.rs", Some("rust"), "fn b() {}", 1000)
         .unwrap();
     let chunks = vec![make_chunk("fn a() {}", 1, 1)];
     store.insert_chunks(file_id, &chunks).unwrap();
@@ -135,13 +135,7 @@ fn prod_reindex_path_does_not_leak_vectors() {
 
     // --- Pass 1: index "app.rs" with content V1 (hash V1). ---
     let id_v1 = store
-        .insert_file(
-            "app.rs",
-            Some("rust"),
-            "fn v1_a() {} fn v1_b() {}",
-            24,
-            1000,
-        )
+        .insert_file("app.rs", Some("rust"), "fn v1_a() {} fn v1_b() {}", 1000)
         .unwrap();
 
     let chunks_v1 = vec![
@@ -161,7 +155,7 @@ fn prod_reindex_path_does_not_leak_vectors() {
     // order AutoIndexer uses on a reindex: insert_file -> insert_chunks ->
     // update_chunk_embedding. ---
     let id_v2 = store
-        .insert_file("app.rs", Some("rust"), "fn v2_x() {}", 12, 2000)
+        .insert_file("app.rs", Some("rust"), "fn v2_x() {}", 2000)
         .unwrap();
 
     // Stable-id contract (HIGH-1): re-inserting the same path must reuse the
@@ -196,7 +190,7 @@ fn prod_reindex_path_does_not_leak_vectors() {
 fn many_reindexes_keep_invariant() {
     let store = IndexStore::open_in_memory().unwrap();
     let file_id = store
-        .insert_file("hot.rs", Some("rust"), "v0", 2, 1000)
+        .insert_file("hot.rs", Some("rust"), "v0", 1000)
         .unwrap();
 
     for i in 0..50 {

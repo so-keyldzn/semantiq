@@ -48,6 +48,7 @@ fn call_edge_out(site: CallSite) -> CallEdgeOut {
         callee: site.callee,
         file_path: site.file_path,
         line: site.line,
+        count: (site.count > 1).then_some(site.count),
         confidence: site.confidence.as_str().to_string(),
     }
 }

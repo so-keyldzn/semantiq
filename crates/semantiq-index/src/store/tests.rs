@@ -8,7 +8,7 @@ fn test_insert_and_get_file() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let file = store.get_file_by_path("test.rs").unwrap().unwrap();
@@ -22,7 +22,7 @@ fn test_insert_and_search_symbols() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn hello() {}", 13, 1000)
+        .insert_file("test.rs", Some("rust"), "fn hello() {}", 1000)
         .unwrap();
 
     let symbols = vec![Symbol {
@@ -92,7 +92,7 @@ fn test_clear_all_data() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let symbols = vec![Symbol {
@@ -124,7 +124,7 @@ fn test_check_and_prepare_for_reindex() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
@@ -142,13 +142,7 @@ fn test_insert_and_get_chunks() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file(
-            "test.rs",
-            Some("rust"),
-            "fn main() {}\nfn foo() {}",
-            25,
-            1000,
-        )
+        .insert_file("test.rs", Some("rust"), "fn main() {}\nfn foo() {}", 1000)
         .unwrap();
 
     let chunks = vec![
@@ -179,34 +173,11 @@ fn test_insert_and_get_chunks() {
 }
 
 #[test]
-fn test_chunks_without_embeddings() {
-    let store = IndexStore::open_in_memory().unwrap();
-
-    let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
-        .unwrap();
-
-    let chunks = vec![CodeChunk {
-        content: "fn main() {}".to_string(),
-        start_line: 1,
-        end_line: 1,
-        start_byte: 0,
-        end_byte: 12,
-        symbols: vec!["main".to_string()],
-    }];
-
-    store.insert_chunks(file_id, &chunks).unwrap();
-
-    let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
-    assert_eq!(without_embeddings.len(), 1);
-}
-
-#[test]
 fn test_update_chunk_embedding() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let chunks = vec![CodeChunk {
@@ -228,8 +199,7 @@ fn test_update_chunk_embedding() {
         .collect();
     store.update_chunk_embedding(chunk_id, &embedding).unwrap();
 
-    let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
-    assert!(without_embeddings.is_empty());
+    assert_eq!(store.embedding_counts().unwrap().pending(), 0);
 }
 
 #[test]
@@ -237,7 +207,7 @@ fn test_update_chunk_embedding_rejects_wrong_dimension() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let chunks = vec![CodeChunk {
@@ -267,8 +237,7 @@ fn test_update_chunk_embedding_rejects_wrong_dimension() {
     assert!(store.update_chunk_embedding(chunk_id, &too_long).is_err());
 
     // The rejected writes must not have stored anything.
-    let without_embeddings = store.get_chunks_without_embeddings(10).unwrap();
-    assert_eq!(without_embeddings.len(), 1);
+    assert_eq!(store.embedding_counts().unwrap().pending(), 1);
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
@@ -277,7 +246,7 @@ fn test_update_chunk_embedding_writes_both_tables_atomically() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
     let chunks = vec![CodeChunk {
         content: "fn main() {}".to_string(),
@@ -296,7 +265,7 @@ fn test_update_chunk_embedding_writes_both_tables_atomically() {
     store.update_chunk_embedding(chunk_id, &embedding).unwrap();
 
     // chunks.embedding populated (no longer "without embedding")
-    assert!(store.get_chunks_without_embeddings(10).unwrap().is_empty());
+    assert_eq!(store.embedding_counts().unwrap().pending(), 0);
     // chunks_vec populated and searchable
     let results = store.search_similar_chunks(&embedding, 1).unwrap();
     assert_eq!(results.len(), 1);
@@ -312,7 +281,7 @@ fn test_insert_file_keeps_stable_id_and_no_orphans() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let chunks = vec![CodeChunk {
@@ -330,7 +299,7 @@ fn test_insert_file_keeps_stable_id_and_no_orphans() {
 
     // Re-index: same path, different content/size/hash.
     let file_id2 = store
-        .insert_file("test.rs", Some("rust"), "fn main() { foo(); }", 20, 2000)
+        .insert_file("test.rs", Some("rust"), "fn main() { foo(); }", 2000)
         .unwrap();
     assert_eq!(
         file_id, file_id2,
@@ -339,7 +308,6 @@ fn test_insert_file_keeps_stable_id_and_no_orphans() {
 
     // Updated metadata is reflected.
     let file = store.get_file_by_path("test.rs").unwrap().unwrap();
-    assert_eq!(file.size, 20);
     assert_eq!(file.last_modified, 2000);
 
     // Re-insert chunks for the (stable) file id — the in-transaction purge keeps
@@ -361,7 +329,7 @@ fn test_vector_search() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("src/main.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("src/main.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let chunks = vec![
@@ -443,14 +411,21 @@ fn test_insert_and_get_dependencies() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 1000)
         .unwrap();
 
     store
-        .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
+        .insert_dependency(
+            file_id,
+            "crate::utils",
+            Some("utils"),
+            "local",
+            None,
+            (1, 1),
+        )
         .unwrap();
     store
-        .insert_dependency(file_id, "std::io", Some("io"), "std", None)
+        .insert_dependency(file_id, "std::io", Some("io"), "std", None, (1, 1))
         .unwrap();
 
     let deps = store.get_dependencies(file_id).unwrap();
@@ -464,11 +439,18 @@ fn test_get_dependents() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 1000)
         .unwrap();
 
     store
-        .insert_dependency(file_id, "src/utils.rs", Some("utils"), "local", None)
+        .insert_dependency(
+            file_id,
+            "src/utils.rs",
+            Some("utils"),
+            "local",
+            None,
+            (1, 1),
+        )
         .unwrap();
 
     let dependents = store.get_dependents("utils.rs").unwrap();
@@ -481,12 +463,12 @@ fn test_get_dependents_deduplicates() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/app.rs", Some("rust"), "use crate::lib;", 15, 1000)
+        .insert_file("src/app.rs", Some("rust"), "use crate::lib;", 1000)
         .unwrap();
 
     // Insert a dependency that would match multiple LIKE patterns
     store
-        .insert_dependency(file_a, "./lib", Some("lib"), "local", None)
+        .insert_dependency(file_a, "./lib", Some("lib"), "local", None, (1, 1))
         .unwrap();
 
     // Should return exactly one result even though "./lib" matches
@@ -504,17 +486,24 @@ fn test_get_dependents_multiple_importers() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 1000)
         .unwrap();
     let file_b = store
-        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 1000)
         .unwrap();
 
     store
-        .insert_dependency(file_a, "crate::shared", Some("shared"), "local", None)
+        .insert_dependency(
+            file_a,
+            "crate::shared",
+            Some("shared"),
+            "local",
+            None,
+            (1, 1),
+        )
         .unwrap();
     store
-        .insert_dependency(file_b, "./shared", Some("shared"), "local", None)
+        .insert_dependency(file_b, "./shared", Some("shared"), "local", None, (1, 1))
         .unwrap();
 
     let dependents = store.get_dependents("src/shared.rs").unwrap();
@@ -531,13 +520,7 @@ fn test_get_dependents_no_false_positives() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file(
-            "src/main.rs",
-            Some("rust"),
-            "use crate::something;",
-            21,
-            1000,
-        )
+        .insert_file("src/main.rs", Some("rust"), "use crate::something;", 1000)
         .unwrap();
 
     store
@@ -547,6 +530,7 @@ fn test_get_dependents_no_false_positives() {
             Some("something_else"),
             "local",
             None,
+            (1, 1),
         )
         .unwrap();
 
@@ -560,11 +544,18 @@ fn test_delete_dependencies() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 1000)
         .unwrap();
 
     store
-        .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
+        .insert_dependency(
+            file_id,
+            "crate::utils",
+            Some("utils"),
+            "local",
+            None,
+            (1, 1),
+        )
         .unwrap();
 
     let deps = store.get_dependencies(file_id).unwrap();
@@ -581,7 +572,7 @@ fn test_delete_file() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     assert!(store.get_file_by_path("test.rs").unwrap().is_some());
@@ -597,7 +588,7 @@ fn test_needs_reindex_same_content() {
     let content = "fn main() {}";
 
     store
-        .insert_file("test.rs", Some("rust"), content, 12, 1000)
+        .insert_file("test.rs", Some("rust"), content, 1000)
         .unwrap();
 
     assert!(!store.needs_reindex("test.rs", content).unwrap());
@@ -608,7 +599,7 @@ fn test_needs_reindex_different_content() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     assert!(
@@ -633,7 +624,6 @@ fn test_get_symbols_by_file() {
             "test.rs",
             Some("rust"),
             "fn hello() {}\nfn world() {}",
-            27,
             1000,
         )
         .unwrap();
@@ -676,7 +666,7 @@ fn test_search_symbols_fts() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn calculate_total() {}", 23, 1000)
+        .insert_file("test.rs", Some("rust"), "fn calculate_total() {}", 1000)
         .unwrap();
 
     let symbols = vec![Symbol {
@@ -709,7 +699,7 @@ fn test_get_stats() {
     assert_eq!(stats.dependency_count, 0);
 
     let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
+        .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
         .unwrap();
 
     let symbols = vec![Symbol {
@@ -739,28 +729,6 @@ fn test_db_path() {
 // Distance observations and calibration tests
 
 #[test]
-fn test_insert_distance_observation() {
-    let store = IndexStore::open_in_memory().unwrap();
-
-    let inserted = store
-        .insert_distance_observation("rust", 0.5, 12345, 1000000)
-        .unwrap();
-    assert!(inserted);
-
-    // Duplicate should be ignored (UNIQUE constraint)
-    let inserted = store
-        .insert_distance_observation("rust", 0.6, 12345, 1000001)
-        .unwrap();
-    assert!(!inserted);
-
-    // Same query hash, different language should work
-    let inserted = store
-        .insert_distance_observation("python", 0.7, 12345, 1000002)
-        .unwrap();
-    assert!(inserted);
-}
-
-#[test]
 fn test_insert_distance_observations_batch() {
     let store = IndexStore::open_in_memory().unwrap();
 
@@ -774,6 +742,23 @@ fn test_insert_distance_observations_batch() {
         .insert_distance_observations_batch(&observations)
         .unwrap();
     assert_eq!(inserted, 3);
+
+    // Same (query_hash, language) is ignored; same hash in another language
+    // is a new row.
+    let inserted = store
+        .insert_distance_observations_batch(&[
+            ("rust".to_string(), 0.9, 1, 1000003),
+            ("python".to_string(), 0.9, 1, 1000004),
+        ])
+        .unwrap();
+    assert_eq!(inserted, 1);
+    let rust_obs = store.get_distance_observations("rust").unwrap();
+    assert_eq!(rust_obs.len(), 2);
+    assert!(
+        rust_obs.contains(&0.5),
+        "duplicate must not replace the first value"
+    );
+    assert_eq!(store.get_distance_observations("python").unwrap().len(), 2);
 }
 
 #[test]
@@ -781,13 +766,13 @@ fn test_get_distance_observations() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_distance_observation("rust", 0.5, 1, 1000000)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.5, 1, 1000000)])
         .unwrap();
     store
-        .insert_distance_observation("rust", 0.6, 2, 1000001)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.6, 2, 1000001)])
         .unwrap();
     store
-        .insert_distance_observation("python", 0.7, 3, 1000002)
+        .insert_distance_observations_batch(&[("python".to_string(), 0.7, 3, 1000002)])
         .unwrap();
 
     let rust_obs = store.get_distance_observations("rust").unwrap();
@@ -804,13 +789,13 @@ fn test_get_all_distance_observations() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_distance_observation("rust", 0.5, 1, 1000000)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.5, 1, 1000000)])
         .unwrap();
     store
-        .insert_distance_observation("rust", 0.6, 2, 1000001)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.6, 2, 1000001)])
         .unwrap();
     store
-        .insert_distance_observation("python", 0.7, 3, 1000002)
+        .insert_distance_observations_batch(&[("python".to_string(), 0.7, 3, 1000002)])
         .unwrap();
 
     let all_obs = store.get_all_distance_observations().unwrap();
@@ -824,13 +809,13 @@ fn test_get_observation_counts() {
     let store = IndexStore::open_in_memory().unwrap();
 
     store
-        .insert_distance_observation("rust", 0.5, 1, 1000000)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.5, 1, 1000000)])
         .unwrap();
     store
-        .insert_distance_observation("rust", 0.6, 2, 1000001)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.6, 2, 1000001)])
         .unwrap();
     store
-        .insert_distance_observation("python", 0.7, 3, 1000002)
+        .insert_distance_observations_batch(&[("python".to_string(), 0.7, 3, 1000002)])
         .unwrap();
 
     let counts = store.get_observation_counts().unwrap();
@@ -848,13 +833,17 @@ fn test_cleanup_old_observations() {
         .as_secs() as i64;
 
     store
-        .insert_distance_observation("rust", 0.5, 1, now - 100000)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.5, 1, now - 100000)])
         .unwrap();
     store
-        .insert_distance_observation("rust", 0.6, 2, now - 10)
+        .insert_distance_observations_batch(&[("rust".to_string(), 0.6, 2, now - 10)])
         .unwrap();
 
-    let deleted = store.cleanup_old_observations(86400).unwrap();
+    // The floor keeps the newest rows even past retention.
+    assert_eq!(store.cleanup_old_observations(86400, 2).unwrap(), 0);
+    assert_eq!(store.get_distance_observations("rust").unwrap().len(), 2);
+
+    let deleted = store.cleanup_old_observations(86400, 1).unwrap();
     assert_eq!(deleted, 1);
 
     let remaining = store.get_distance_observations("rust").unwrap();
@@ -881,7 +870,8 @@ fn test_save_and_load_calibration() {
         })
         .unwrap();
 
-    let calibration = store.load_calibration("rust").unwrap().unwrap();
+    let calibrations = store.load_all_calibrations().unwrap();
+    let calibration = calibrations.iter().find(|c| c.language == "rust").unwrap();
     assert_eq!(calibration.language, "rust");
     assert!((calibration.max_distance - 1.0).abs() < 0.001);
     assert!((calibration.min_similarity - 0.4).abs() < 0.001);
@@ -928,54 +918,11 @@ fn test_load_all_calibrations() {
 }
 
 #[test]
-fn test_clear_calibrations() {
-    let store = IndexStore::open_in_memory().unwrap();
-
-    store
-        .save_calibration(&CalibrationData {
-            language: "rust".to_string(),
-            max_distance: 1.0,
-            min_similarity: 0.4,
-            confidence: "medium".to_string(),
-            sample_count: 1000,
-            p50_distance: None,
-            p90_distance: None,
-            p95_distance: None,
-            mean_distance: None,
-            std_distance: None,
-        })
-        .unwrap();
-
-    let before = store.load_all_calibrations().unwrap();
-    assert_eq!(before.len(), 1);
-
-    store.clear_calibrations().unwrap();
-
-    let after = store.load_all_calibrations().unwrap();
-    assert_eq!(after.len(), 0);
-}
-
-#[test]
-fn test_get_file_language() {
-    let store = IndexStore::open_in_memory().unwrap();
-
-    let file_id = store
-        .insert_file("test.rs", Some("rust"), "fn main() {}", 12, 1000)
-        .unwrap();
-
-    let language = store.get_file_language(file_id).unwrap();
-    assert_eq!(language, Some("rust".to_string()));
-
-    let no_lang = store.get_file_language(999).unwrap();
-    assert!(no_lang.is_none());
-}
-
-#[test]
 fn test_get_chunk_language() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
-        .insert_file("test.py", Some("python"), "def main(): pass", 16, 1000)
+        .insert_file("test.py", Some("python"), "def main(): pass", 1000)
         .unwrap();
 
     let chunks = vec![CodeChunk {
@@ -1005,7 +952,6 @@ fn test_get_dependents_via_resolved_path() {
             "src/app.ts",
             Some("typescript"),
             "import { helper } from './utils';",
-            32,
             1000,
         )
         .unwrap();
@@ -1018,6 +964,7 @@ fn test_get_dependents_via_resolved_path() {
             Some("helper"),
             "local",
             Some("src/utils.ts"),
+            (1, 1),
         )
         .unwrap();
 
@@ -1041,7 +988,6 @@ fn test_get_dependents_with_source_path_resolved() {
             "src/app.ts",
             Some("typescript"),
             "import { helper } from './utils';",
-            32,
             1000,
         )
         .unwrap();
@@ -1053,6 +999,7 @@ fn test_get_dependents_with_source_path_resolved() {
             Some("helper"),
             "local",
             Some("src/utils.ts"),
+            (1, 1),
         )
         .unwrap();
 
@@ -1071,12 +1018,12 @@ fn test_get_dependents_with_source_path_fallback() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 17, 1000)
+        .insert_file("src/main.rs", Some("rust"), "use crate::utils;", 1000)
         .unwrap();
 
     // No resolved_path => exercises the LIKE fallback branch.
     store
-        .insert_dependency(file_a, "src/utils.rs", Some("utils"), "local", None)
+        .insert_dependency(file_a, "src/utils.rs", Some("utils"), "local", None, (1, 1))
         .unwrap();
 
     let dependents = store.get_dependents_with_source_path("utils.rs").unwrap();
@@ -1091,17 +1038,24 @@ fn test_get_dependents_with_source_path_multiple_importers() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .insert_file("src/a.rs", Some("rust"), "use crate::shared;", 1000)
         .unwrap();
     let file_b = store
-        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 18, 1000)
+        .insert_file("src/b.rs", Some("rust"), "use crate::shared;", 1000)
         .unwrap();
 
     store
-        .insert_dependency(file_a, "crate::shared", Some("shared"), "local", None)
+        .insert_dependency(
+            file_a,
+            "crate::shared",
+            Some("shared"),
+            "local",
+            None,
+            (1, 1),
+        )
         .unwrap();
     store
-        .insert_dependency(file_b, "./shared", Some("shared"), "local", None)
+        .insert_dependency(file_b, "./shared", Some("shared"), "local", None, (1, 1))
         .unwrap();
 
     let dependents = store
@@ -1121,10 +1075,10 @@ fn test_get_dependents_with_source_path_consistent_with_get_dependents() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/app.ts", Some("typescript"), "import stuff", 12, 1000)
+        .insert_file("src/app.ts", Some("typescript"), "import stuff", 1000)
         .unwrap();
     let file_b = store
-        .insert_file("src/main.ts", Some("typescript"), "import stuff", 12, 1000)
+        .insert_file("src/main.ts", Some("typescript"), "import stuff", 1000)
         .unwrap();
 
     store
@@ -1134,10 +1088,11 @@ fn test_get_dependents_with_source_path_consistent_with_get_dependents() {
             Some("utils"),
             "local",
             Some("src/utils.ts"),
+            (1, 1),
         )
         .unwrap();
     store
-        .insert_dependency(file_b, "./utils", Some("utils"), "local", None)
+        .insert_dependency(file_b, "./utils", Some("utils"), "local", None, (1, 1))
         .unwrap();
 
     let plain = store.get_dependents("src/utils.ts").unwrap();
@@ -1156,10 +1111,10 @@ fn test_get_dependents_mixed_resolved_and_unresolved() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_a = store
-        .insert_file("src/app.ts", Some("typescript"), "import stuff", 12, 1000)
+        .insert_file("src/app.ts", Some("typescript"), "import stuff", 1000)
         .unwrap();
     let file_b = store
-        .insert_file("src/main.ts", Some("typescript"), "import stuff", 12, 1000)
+        .insert_file("src/main.ts", Some("typescript"), "import stuff", 1000)
         .unwrap();
 
     // file_a has resolved_path
@@ -1170,12 +1125,13 @@ fn test_get_dependents_mixed_resolved_and_unresolved() {
             Some("utils"),
             "local",
             Some("src/utils.ts"),
+            (1, 1),
         )
         .unwrap();
 
     // file_b has no resolved_path (falls back to LIKE matching)
     store
-        .insert_dependency(file_b, "./utils", Some("utils"), "local", None)
+        .insert_dependency(file_b, "./utils", Some("utils"), "local", None, (1, 1))
         .unwrap();
 
     let dependents = store.get_dependents("src/utils.ts").unwrap();
@@ -1192,12 +1148,13 @@ fn test_references_insert_find_count_and_cascade() {
     use semantiq_parser::{Reference, ReferenceKind};
 
     let store = IndexStore::open_in_memory().unwrap();
-    let a = store.insert_file("a.rs", Some("rust"), "x", 1, 0).unwrap();
-    let b = store.insert_file("b.rs", Some("rust"), "y", 1, 0).unwrap();
+    let a = store.insert_file("a.rs", Some("rust"), "x", 0).unwrap();
+    let b = store.insert_file("b.rs", Some("rust"), "y", 0).unwrap();
     let r = |name: &str, line: usize, kind| Reference {
         name: name.to_string(),
         line,
         kind,
+        count: 1,
     };
 
     store

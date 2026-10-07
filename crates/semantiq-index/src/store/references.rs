@@ -20,7 +20,8 @@ impl IndexStore {
                 conn.execute("DELETE FROM refs WHERE file_id = ?1", [file_id])?;
 
                 let mut stmt = conn.prepare(
-                    "INSERT OR IGNORE INTO refs (name, file_id, line, kind) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT OR IGNORE INTO refs (name, file_id, line, kind, count)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
                 for reference in references {
                     stmt.execute(params![
@@ -28,6 +29,7 @@ impl IndexStore {
                         file_id,
                         reference.line as i64,
                         reference.kind.as_str(),
+                        reference.count.max(1) as i64,
                     ])?;
                 }
                 Ok(())
@@ -83,10 +85,12 @@ impl IndexStore {
     }
 
     /// Number of non-definition occurrences of an exact identifier name.
+    /// Non-definition occurrences of `name`, counting every occurrence on a
+    /// line (`refs.count`), not just the lines.
     pub fn count_usages(&self, name: &str) -> Result<usize> {
         self.with_conn(|conn| {
             let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM refs WHERE name = ?1 AND kind != 'definition'",
+                "SELECT COALESCE(SUM(count), 0) FROM refs WHERE name = ?1 AND kind != 'definition'",
                 [name],
                 |row| row.get(0),
             )?;

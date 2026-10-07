@@ -9,7 +9,14 @@ async fn test_deps_returns_formatted_output() {
 
     server
         .store
-        .insert_dependency(file_id, "crate::utils", Some("utils"), "local", None)
+        .insert_dependency(
+            file_id,
+            "crate::utils",
+            Some("utils"),
+            "local",
+            None,
+            (1, 1),
+        )
         .expect("Failed to insert dependency");
 
     let result = server.call_deps("main.rs".to_string()).await;
@@ -28,7 +35,7 @@ async fn test_deps_shows_imports_section() {
 
     server
         .store
-        .insert_dependency(file_id, "std::io", Some("io"), "std", None)
+        .insert_dependency(file_id, "std::io", Some("io"), "std", None, (1, 1))
         .expect("Failed to insert dependency");
 
     let result = server.call_deps("app.rs".to_string()).await;
@@ -59,7 +66,14 @@ async fn test_deps_shows_reverse_dependencies() {
 
     server
         .store
-        .insert_dependency(main_id, "crate::utils", Some("utils"), "local", None)
+        .insert_dependency(
+            main_id,
+            "crate::utils",
+            Some("utils"),
+            "local",
+            None,
+            (1, 1),
+        )
         .expect("Failed to insert dependency");
 
     let result = server.call_deps("utils.rs".to_string()).await;

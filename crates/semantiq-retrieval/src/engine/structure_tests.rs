@@ -19,7 +19,7 @@ fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir)
         std::fs::write(&full, source).unwrap();
         let language = Language::from_path(std::path::Path::new(path)).unwrap();
         let file_id = store
-            .insert_file(path, Some(language.name()), source, source.len() as i64, 0)
+            .insert_file(path, Some(language.name()), source, 0)
             .unwrap();
         let tree = support.parse(language, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, language).unwrap();
@@ -93,7 +93,14 @@ fn test_callers_across_files_confidence() {
     let b = engine.store.get_file_by_path("b.rs").unwrap().unwrap().id;
     engine
         .store
-        .insert_dependency(b, "crate::a::shared", Some("shared"), "local", Some("a.rs"))
+        .insert_dependency(
+            b,
+            "crate::a::shared",
+            Some("shared"),
+            "local",
+            Some("a.rs"),
+            (1, 1),
+        )
         .unwrap();
     let graph = engine
         .call_graph("shared", None, CallDirection::Callers, 1, 100)

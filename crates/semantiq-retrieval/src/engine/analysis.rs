@@ -14,6 +14,10 @@ pub struct DependencyInfo {
     pub target_path: String,
     pub import_name: Option<String>,
     pub kind: String,
+    /// First and last line of the import statement (1-based) in the file
+    /// that does the importing.
+    pub line: usize,
+    pub end_line: usize,
 }
 
 /// Explanation of a symbol including definitions and usages.
@@ -176,6 +180,8 @@ impl RetrievalEngine {
                     target_path: record.target_path,
                     import_name: record.import_name,
                     kind: record.kind,
+                    line: record.line.max(0) as usize,
+                    end_line: record.end_line.max(0) as usize,
                 });
             }
         }
@@ -197,6 +203,8 @@ impl RetrievalEngine {
                 target_path: source_path,
                 import_name: record.import_name,
                 kind: record.kind,
+                line: record.line.max(0) as usize,
+                end_line: record.end_line.max(0) as usize,
             })
             .collect();
 

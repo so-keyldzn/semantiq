@@ -80,6 +80,8 @@ pub(super) struct Dependency {
     pub path: String,
     pub symbols: Option<Vec<String>>,
     pub kind: String,
+    /// Line of the import statement (1-based) in the importing file.
+    pub line: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

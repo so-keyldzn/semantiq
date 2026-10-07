@@ -81,7 +81,7 @@ fn build_index() -> Option<Arc<IndexStore>> {
         }
 
         let file_id = store
-            .insert_file(&rel_path, Some(language.name()), &content, size, 0)
+            .insert_file(&rel_path, Some(language.name()), &content, 0)
             .expect("insert_file");
 
         if let Ok(tree) = language_support.parse(language, &content) {

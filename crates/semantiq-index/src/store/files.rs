@@ -17,7 +17,6 @@ impl IndexStore {
         path: &str,
         language: Option<&str>,
         content: &str,
-        size: i64,
         last_modified: i64,
     ) -> Result<i64> {
         let hash = Self::hash_content(content);
@@ -36,15 +35,14 @@ impl IndexStore {
             // the file_id no longer changes on re-index, so the in-transaction
             // purge in `insert_chunks(file_id)` is sufficient to avoid orphans.
             conn.execute(
-                "INSERT INTO files (path, language, hash, size, last_modified, indexed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO files (path, language, hash, last_modified, indexed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(path) DO UPDATE SET
                      language = excluded.language,
                      hash = excluded.hash,
-                     size = excluded.size,
                      last_modified = excluded.last_modified,
                      indexed_at = excluded.indexed_at",
-                params![path, language, hash, size, last_modified, indexed_at],
+                params![path, language, hash, last_modified, indexed_at],
             )?;
 
             // last_insert_rowid() is only meaningful for the INSERT branch; on the
@@ -63,7 +61,7 @@ impl IndexStore {
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, path, language, hash, size, last_modified, indexed_at
+                "SELECT id, path, language, hash, last_modified, indexed_at
                  FROM files WHERE path = ?1",
             )?;
 
@@ -74,9 +72,8 @@ impl IndexStore {
                         path: row.get(1)?,
                         language: row.get(2)?,
                         hash: row.get(3)?,
-                        size: row.get(4)?,
-                        last_modified: row.get(5)?,
-                        indexed_at: row.get(6)?,
+                        last_modified: row.get(4)?,
+                        indexed_at: row.get(5)?,
                     })
                 })
                 .optional()?;
@@ -137,20 +134,6 @@ impl IndexStore {
                 .query_row("SELECT path FROM files WHERE id = ?1", [file_id], |row| {
                     row.get(0)
                 })
-                .optional()?;
-            Ok(result)
-        })
-    }
-
-    /// Get the language associated with a file by its ID.
-    pub fn get_file_language(&self, file_id: i64) -> Result<Option<String>> {
-        self.with_conn(|conn| {
-            let result = conn
-                .query_row(
-                    "SELECT language FROM files WHERE id = ?1",
-                    [file_id],
-                    |row| row.get(0),
-                )
                 .optional()?;
             Ok(result)
         })

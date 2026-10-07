@@ -64,9 +64,9 @@ project root.
 {
   "file_path": "crates/semantiq-index/src/watcher.rs",
   "imports": [
-    { "target_path": "crate::exclusions::should_exclude_path", "kind": "local" },
-    { "target_path": "./util", "import_name": "helper", "kind": "local" },
-    { "target_path": "anyhow::Result", "kind": "external" }
+    { "target_path": "crate::exclusions::should_exclude_path", "kind": "local", "line": 3, "end_line": 3 },
+    { "target_path": "./util", "import_name": "helper", "kind": "local", "line": 4, "end_line": 4 },
+    { "target_path": "anyhow::Result", "kind": "external", "line": 1, "end_line": 1 }
   ],
   "imported_by": [ "crates/semantiq-index/src/auto_indexer.rs", "crates/semantiq-index/src/lib.rs" ]
 }
@@ -74,7 +74,8 @@ project root.
 
 `target_path` is the import as written (module path, relative file…), not
 always a project file; `import_name` is omitted when `target_path` already
-ends with it. `imported_by` lists each importing file once, sorted. Both are
+ends with it; `line`..`end_line` is the import statement's span in the file
+(shown as `(L3)` or `(L3-5)` in the markdown output). `imported_by` lists each importing file once, sorted. Both are
 absent if the lookup failed (not merely empty); a file absent from the index
 gives two empty lists.
 
@@ -97,7 +98,8 @@ gives two empty lists.
 ```
 
 `definitions` leaves out import statements, listed as `path:line` in
-`imported_in`. `related_symbols`: up to 10 other symbols from the files of
+`imported_in`. `usage_count` counts every non-definition occurrence (a line
+using the name twice counts 2). `related_symbols`: up to 10 other symbols from the files of
 those definitions, sorted.
 
 ## `semantiq impact <symbol> --json`
@@ -194,7 +196,9 @@ those definitions, sorted.
 ```
 
 - Each edge is one call site: `caller` (the enclosing function or method;
-  omitted for top-level code) calls `callee` at `file_path:line`.
+  omitted for top-level code) calls `callee` at `file_path:line`. `count`
+  is present when the line calls it more than once (`f(f(x))` → 2, shown as
+  `×2` in the markdown output).
 - `depth`: 1 = calls the symbol / made by the symbol; n = one hop further
   (callers of callers, callees of callees), up to `--max-depth` (max 3).
 - `confidence`: how the edge was resolved to the definition, `same_file` >

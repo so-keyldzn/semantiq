@@ -294,9 +294,7 @@ impl AutoIndexer {
         }
 
         // Get file metadata
-        let metadata = fs::metadata(path)?;
-        let size = metadata.len() as i64;
-        let last_modified = metadata
+        let last_modified = fs::metadata(path)?
             .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -327,7 +325,6 @@ impl AutoIndexer {
                     &rel_path,
                     Some(language.name()),
                     INDEXING_SENTINEL,
-                    size,
                     last_modified,
                 )?
             }
@@ -374,6 +371,7 @@ impl AutoIndexer {
                         import.name.as_deref(),
                         import.kind.as_str(),
                         resolved.as_deref(),
+                        (import.start_line, import.end_line),
                     )?;
                 }
 
@@ -404,13 +402,8 @@ impl AutoIndexer {
         // This runs on the parse-failure path too: stamping the current hash
         // there is intentional and matches the prior behaviour, preventing an
         // unparseable file from being re-parsed on every cycle.
-        self.store.insert_file(
-            &rel_path,
-            Some(language.name()),
-            &content,
-            size,
-            last_modified,
-        )?;
+        self.store
+            .insert_file(&rel_path, Some(language.name()), &content, last_modified)?;
 
         Ok(true)
     }

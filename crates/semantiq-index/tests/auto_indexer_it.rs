@@ -232,7 +232,7 @@ fn oversized_data_files_are_skipped_and_stale_rows_removed() {
 
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
     store
-        .insert_file("data/big.json", Some("json"), &big, big.len() as i64, 0)
+        .insert_file("data/big.json", Some("json"), &big, 0)
         .unwrap();
 
     let indexer = AutoIndexer::new(Arc::clone(&store), root.clone()).unwrap();

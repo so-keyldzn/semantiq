@@ -55,6 +55,8 @@ pub struct CallSite {
     pub callee: String,
     pub file_path: String,
     pub line: usize,
+    /// Calls on this line (`f(f(x))` → 2).
+    pub count: usize,
     /// How sure we are that the call resolves to the definition followed.
     pub confidence: ImpactConfidence,
 }
@@ -194,6 +196,7 @@ impl RetrievalEngine {
                     callee: node.name.clone(),
                     file_path: edge.file_path.clone(),
                     line: edge.line as usize,
+                    count: edge.count,
                     confidence,
                 });
 
@@ -274,6 +277,7 @@ impl RetrievalEngine {
                     callee: edge.callee.clone(),
                     file_path: edge.file_path.clone(),
                     line: edge.line as usize,
+                    count: edge.count,
                     confidence,
                 });
 

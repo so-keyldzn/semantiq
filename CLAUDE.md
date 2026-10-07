@@ -11,9 +11,25 @@ cargo build --no-default-features    # Stub embeddings, no ONNX Runtime (macOS I
 cargo test                           # Run all tests (stub embeddings, never downloads the model)
 cargo test -p semantiq-parser        # Tests for one crate
 cargo test -p semantiq-parser test_language_from_extension  # Single test
+cargo test -p semantiq --test cli    # CLI integration tests (spawn the built binary on a temp project)
 cargo check                          # Type-check without building
-cargo fmt                            # Format
-cargo clippy                         # Lint
+cargo fmt --all --check              # Format check, as CI runs it
+cargo clippy --workspace --all-targets --all-features -- -D warnings  # Lint, as CI runs it (warnings fail)
+cargo test --workspace --all-features  # Test job of CI (--all-features also enables test-stub)
+cargo audit; cargo deny check        # Security workflow (cargo-audit with pinned ignores in security.yml, deny.toml)
+SEMANTIQ_EMBEDDINGS=onnx cargo run --release -p semantiq-index --features semantiq-embeddings/onnx --example embed_throughput -- <db>  # Embedding batching benchmark
+```
+
+The build downloads a prebuilt ONNX Runtime (`ort` feature `download-binaries`, outside Cargo.lock, not covered by `cargo audit`); `ORT_LIB_LOCATION` points at a vendored one (see the comment in `crates/semantiq-embeddings/Cargo.toml`).
+
+## Agent Benchmark (`bench/agent/`)
+
+Python 3 stdlib harness that runs headless `claude -p` on read-only code-navigation tasks (`tasks/<repo>.json`, pinned commits of semantiq, ripgrep and oxyn) with and without Semantiq, and scores `FINAL: [...]` answers by precision/recall (`scoring.py`). Configs: `baseline`, `semantiq` (MCP), `semantiq-guided`, `cli-skill`. Runs use `--permission-mode dontAsk` with a read-only allowlist, never `--dangerously-skip-permissions`, in throw-away checkouts under `--work-dir` (refused inside the repository). Results go to `results/<date>/` (`runs.jsonl` for `--resume`, `results.json`, `report.md`); re-score after editing tasks with `--rebuild --out <dir>`. Method and conclusions: `bench/agent/README.md`, summary in the README's Benchmark section.
+
+```bash
+python3 bench/agent/run.py --dry-run             # planned runs + cost estimate
+python3 bench/agent/run.py --build --jobs 4       # build semantiq (onnx) and run baseline vs semantiq
+python3 bench/agent/run.py --task sq-concept-rename --configs cli-skill --reps 1
 ```
 
 ## CLI Usage
@@ -62,18 +78,18 @@ crates/
 ### Data Flow
 
 1. **Indexing** runs in two phases.
-   **Phase 1 (structure)**, `AutoIndexer`: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` / `StructureExtractor` → `IndexStore` (SQLite with FTS5 triggers). Chunks are stored without embeddings (`insert_chunks` carries over the embedding of a chunk whose content did not change), and the file hash is stamped last: the commit point no longer depends on embeddings.
+   **Phase 1 (structure)**, `AutoIndexer`: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` / `StructureExtractor` → `IndexStore` (SQLite with FTS5 triggers). Every extracted field is stored and read back by some query: `dependencies` keeps the import statement's `line`/`end_line` (shown by `deps` as `(L12)`); byte offsets and file sizes are not stored. Chunks are stored without embeddings (`insert_chunks` carries over the embedding of a chunk whose content did not change), and the file hash is stamped last: the commit point no longer depends on embeddings.
    **Phase 2 (embeddings)**, `semantiq-index/src/embedder.rs`: `embed_pending()` walks the chunks with `embedding IS NULL` by id (`pending_embedding_chunks`), `embed_batch` 32 texts at a time across files (same CPU time as per-file batches within ±3% on oxyn, 4x fewer forward passes; sorting by length measured no gain, `examples/embed_throughput.rs`), computed outside the DB lock and written per batch by `store_chunk_embeddings` (skips chunks deleted meanwhile: no `chunks_vec` orphan). A NULL embedding = still to do, so phase 2 is resumable. `serve` runs it on the `BackgroundEmbedder` thread (woken after the initial phase 1 and after each watcher reindex, model loaded on first pass); `semantiq index` runs both phases in the foreground (`--no-embeddings`, `--embeddings-only`); the query refresh is phase 1 only, `search` embeds up to 64 pending chunks itself, else notes on stderr how much of the semantic index is ready.
 
 2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
 
-   **References**: `find_references()` takes definitions from `symbols` and usages from the `refs` table (AST identifier leaves, one row per name/file/line, classified definition/import/call/type/reference by `ReferenceExtractor` in `semantiq-parser/src/references.rs`). Comments, strings and substrings never match. Names absent from `refs` (data-file keys) fall back to text search (`match_type = "text"`). Resolution is by name only: homonyms share references.
+   **References**: `find_references()` takes definitions from `symbols` and usages from the `refs` table (AST identifier leaves, one row per name/file/line with a `count` of occurrences of the retained kind on that line (`f(f(x))` → call ×2; a plain reference next to a call is not counted), classified definition/import/call/type/reference by `ReferenceExtractor` in `semantiq-parser/src/references.rs`; `count_usages` and the repo map weights sum `count`). Comments, strings and substrings never match. Names absent from `refs` (data-file keys) fall back to text search (`match_type = "text"`). Resolution is by name only: homonyms share references.
 
    **Repo map**: `semantiq-retrieval/src/repo_map.rs`. `IndexStore::load_repo_graph()` (`store/graph.rs`, read-only bulk load) → file graph: edges from non-definition `refs` to files defining the name (weighted by `sqrt(count)`, reference-kind fit, Aider's name weighting, `COMMON_NAMES` damped, no edge from production code to test files) plus `dependencies.resolved_path` imports → weighted PageRank with a teleport leak (`OUT_LEAK`) and a teleport vector personalized by `focus` → symbol scores = rank handed down through edges + a share of the file rank → binary search on the number of symbols that fit `max_tokens` (`estimate_tokens` = chars/4). Variables, imports, modules and data-language files (JSON/YAML/TOML/HTML) are left out. `RetrievalEngine::repo_map()` caches the unfocused ranking keyed by `IndexStore::graph_fingerprint()`; `build_repo_map()` works on a bare store (CLI, no embedding model). Only 8% of imports carry a `resolved_path` (cross-crate/package imports are `external`), so the ranking leans on `refs`.
 
    **Impact**: `analyze_impact()` (`engine/impact.rs`) runs a BFS from a symbol's references to their enclosing symbols, up to `max_depth`. Each site gets a confidence (`same_file` > `imports` > `unique_name` > `name_only`); only non-`name_only` sites propagate, and beyond depth 1 functions/methods are followed through `call` sites only (avoids local-variable homonyms). Not exposed on the REST API, only via MCP and `semantiq impact`.
 
-   **Calls**: `call_graph()` (`engine/calls.rs`) walks the `call_edges` table (each AST `call` reference attached at index time to its innermost enclosing function/method by `StructureExtractor`, `semantiq-parser/src/structure.rs`; caller `''` = top-level code). Callers and callees are resolved by name with the same confidence scale as impact; only non-`name_only` edges are followed beyond depth 1 (max 3), visited definitions are never re-walked (recursion-safe). Callees with no definition in the index are listed in `external_callees`.
+   **Calls**: `call_graph()` (`engine/calls.rs`) walks the `call_edges` table (each AST `call` reference attached at index time to its innermost enclosing function/method by `StructureExtractor`, `semantiq-parser/src/structure.rs`; caller `''` = top-level code; `count` = calls of the callee on that line, shown as `×N` when > 1). Callers and callees are resolved by name with the same confidence scale as impact; only non-`name_only` edges are followed beyond depth 1 (max 3), visited definitions are never re-walked (recursion-safe). Callees with no definition in the index are listed in `external_callees`.
 
    **Hierarchy**: `type_hierarchy()` (`engine/hierarchy.rs`) walks the `type_relations` table (`type_name` extends/implements `super_name`, declared over `line..end_line`): Rust `impl Trait for Type` + supertraits, TS/JS, Python, Java, Kotlin, C#, C++, PHP, Ruby, Scala. Go is out of scope (implicit interfaces). C# extends vs implements is a heuristic (first base, `I`-prefixed names).
 
@@ -83,9 +99,9 @@ crates/
 
 ### Languages
 
-19 total via tree-sitter (`semantiq-parser/src/language.rs`). Tous ont une `tags.scm` chargée par `QuerySymbolExtractor` (`semantiq-parser/src/query_extractor.rs`) :
+19 total via tree-sitter (`semantiq-parser/src/language.rs`). Each has a `tags.scm` in `semantiq-parser/queries/<lang>/`, loaded by `QuerySymbolExtractor` (`semantiq-parser/src/query_extractor.rs`), and a sample under `semantiq-parser/tests/fixtures/<lang>/`:
 - **Code** (symbols + chunks + imports): Rust, TypeScript, JavaScript, Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
-- **Data** (clés/sections indexées comme Variable/Struct, en plus des chunks + embeddings): HTML, JSON, YAML, TOML.
+- **Data** (keys/sections indexed as Variable/Struct, plus chunks + embeddings): HTML, JSON, YAML, TOML.
 
 ### Key Internal Conventions
 
@@ -95,6 +111,8 @@ crates/
 - **File paths in DB**: Always stored as relative paths from project root (via `strip_prefix`).
 - **MCP stdout is reserved** for protocol messages. All logs go to stderr (`tracing` with `.with_writer(std::io::stderr)`). JSON log format is automatic in serve mode.
 - **Error handling**: `anyhow::Result` internally. MCP tool handlers return `Result<String, String>` — `Err` strings are deliberately opaque to avoid leaking internals.
+- **Output contract**: the `--json` output of a CLI command is the `structuredContent` of the matching MCP tool. Any change to those shapes is documented in three places: `skills/semantiq/REFERENCE.md` (the examples agents read), `CHANGELOG.md` under `[Unreleased]` (a **Breaking** entry when a field is removed or renamed) and the README's MCP Tools section.
+- **`semantiq init` block in CLAUDE.md**: written between `<!-- semantiq:start -->` / `<!-- semantiq:end -->` markers and refreshed in place; `init_legacy_claude.md` is the pre-skill block that `init` recognizes and replaces.
 
 ### Releasing
 
@@ -102,8 +120,8 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 
 ### Versioning That Triggers Reindex
 
-- **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import extraction logic changes. Triggers full data clear + reindex on next startup.
-- **Schema version** (`semantiq-index/src/schema.rs`): For DB schema changes. Incremental steps in `migrate_schema()` (run before `init_schema()`), version stored in `metadata` table.
+- **`PARSER_VERSION`** (`semantiq-parser/src/lib.rs`): Bump when symbol/chunk/import/reference extraction logic changes; the comment on the constant logs what each version changed. Triggers full data clear + reindex on next startup.
+- **`SCHEMA_VERSION`** (`semantiq-index/src/schema.rs`): For DB schema changes. Incremental steps in `migrate_schema()` (run before `init_schema()`, which uses `CREATE TABLE IF NOT EXISTS` in the final shape), version stored in `metadata` table. A migration that adds a column feeding a query (`DEFAULT` value) is paired with a `PARSER_VERSION` bump so the full reindex fills it; a migration never backfills from source. Tables created by a later version may be missing on an old DB: guard with `table_exists()`. Each migration gets a test that builds the previous schema by hand in SQL (unit tests in `schema.rs`, `tests/migration_v*.rs`) and runs `migrate_schema_to()`.
 - **Embedding model** (`embedding_model_id()` / `EMBEDDING_DIMENSION` in `semantiq-embeddings/src/lib.rs`; the id is resolved at runtime, `"stub"` whenever the stub is selected): stored as `embedding_model` / `embedding_dim` in `metadata`. On mismatch, `init_schema()` drops + recreates `chunks_vec`, clears `distance_observations` / `threshold_calibration` and indexed data, and forces a full reindex. Change `CODERANKEMBED_MODEL_ID` whenever the model or its export changes.
 
 ### Embedding Model
@@ -117,7 +135,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 - Pooling: CLS (first token) + L2 normalization, configurable per model via `EmbeddingConfig::pooling` (`Pooling::Cls` | `Pooling::Mean`). Truncation (512 tokens) is done by the tokenizer so `[SEP]` is preserved. `token_type_ids` is only sent if the graph declares it.
 - `embed_batch` runs forward passes of at most `batch_size` (32) texts. The INT8 export quantizes activations per batch, so a chunk's vector varies slightly with its batch neighbours (cos ≈ 0.97); accepted for ~1.7x faster indexing.
 - ONNX session wrapped in `Mutex<Session>` (not `Send`). Thread count: `SEMANTIQ_ONNX_THREADS` env var (default: `min(cpu_count, 8)`).
-- Adaptive thresholds: After 500+ search observations, `semantiq calibrate` computes per-language distance thresholds. Fallback cascade: language-specific → global → hardcoded defaults (`max_distance=1.2`, `min_similarity=0.3`).
+- Adaptive thresholds: After 500+ search observations, `semantiq calibrate` computes per-language distance thresholds. Fallback cascade: language-specific → global → hardcoded defaults (`max_distance=1.2`, `min_similarity=0.3`). `distance_observations` is pruned at each flush to the collector's `max_age_days` (30); calibrated thresholds live in `threshold_calibration` and survive the pruning.
 
 ### Thread Safety
 
@@ -146,12 +164,14 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 - **In-memory DB**: `IndexStore::open_in_memory()` is the standard test fixture — no temp files needed for DB tests.
 - **MCP server tests**: `create_test_server()` in `server.rs` builds a server without background tasks. Uses `TempDir` for tests needing physical files.
 - **Async tests**: MCP tool handlers use `#[tokio::test]`.
-- **Parser tests**: `LanguageSupport::new()` + `support.parse(Language::X, source)`.
+- **Parser tests**: `LanguageSupport::new()` + `support.parse(Language::X, source)`. `tests/expanded_coverage.rs` audits one construct per language (`audit_*`), `tests/bug_probes.rs` pins regressions (`b1_...` numbered probes); add a probe when fixing an extraction bug.
+- **CLI tests** (`crates/semantiq/tests/cli.rs`): run the built binary (`CARGO_BIN_EXE_semantiq`) against a small Rust project written into a `TempDir` and indexed once; assert on `--json` output and exit codes (1 = no index, 2 = usage).
+- **Two-phase / embedding tests** (`semantiq-index/tests/two_phase.rs`, `vec_invariant.rs`): use `StubEmbeddingModel`. `chunks_vec` is a sqlite-vec virtual table that ignores `ON DELETE CASCADE`, so every code path deleting from `chunks` must purge `chunks_vec` in the same transaction; `vec_invariant.rs` pins that.
 
 ### Key Types
 
 - `Language` / `LanguageSupport` — Multi-language tree-sitter parsing (`semantiq-parser/src/language.rs`)
-- `IndexStore` — SQLite wrapper with FTS5 + sqlite-vec (`semantiq-index/src/store.rs`)
+- `IndexStore` — SQLite wrapper with FTS5 + sqlite-vec (`semantiq-index/src/store/mod.rs`, one submodule per table family: `files`, `symbols`, `chunks`, `dependencies`, `references`, `structure`, `graph`, `observations`, `calibrations`)
 - `RetrievalEngine` — Query execution and 3-strategy ranking (`semantiq-retrieval/src/engine/mod.rs`; submodules `search.rs`, `analysis.rs`, `threshold.rs`)
 - `SemantiqServer` — MCP server with tool handlers (`semantiq-mcp/src/server.rs`)
 - `AutoIndexer` — File watcher + incremental reindexing (`semantiq-index/src/auto_indexer.rs`)

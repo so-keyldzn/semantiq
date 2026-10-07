@@ -58,7 +58,7 @@ impl IndexStore {
             let symbols = conn
                 .prepare(
                     "SELECT id, file_id, name, kind, start_line, end_line,
-                            start_byte, end_byte, signature, doc_comment, parent
+                            signature, doc_comment, parent
                      FROM symbols
                      WHERE kind != 'import'
                      ORDER BY file_id, start_line, id",
@@ -71,11 +71,9 @@ impl IndexStore {
                         kind: row.get(3)?,
                         start_line: row.get(4)?,
                         end_line: row.get(5)?,
-                        start_byte: row.get(6)?,
-                        end_byte: row.get(7)?,
-                        signature: row.get(8)?,
-                        doc_comment: row.get(9)?,
-                        parent: row.get(10)?,
+                        signature: row.get(6)?,
+                        doc_comment: row.get(7)?,
+                        parent: row.get(8)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -92,7 +90,7 @@ impl IndexStore {
 
             let ref_counts = conn
                 .prepare(
-                    "SELECT r.name, r.file_id, r.kind, COUNT(*)
+                    "SELECT r.name, r.file_id, r.kind, SUM(r.count)
                      FROM refs r
                      WHERE r.kind != 'definition'
                        AND r.name IN (SELECT name FROM symbols WHERE kind != 'import')

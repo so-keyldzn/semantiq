@@ -123,6 +123,30 @@ impl DistanceCollector {
         }
     }
 
+    /// Retention of stored observations, in seconds (`max_age_days`).
+    pub fn max_age_secs(&self) -> i64 {
+        self.config.max_age_days.saturating_mul(86_400)
+    }
+
+    /// Observations needed before leaving bootstrap mode.
+    pub fn bootstrap_threshold(&self) -> usize {
+        self.config.bootstrap_threshold
+    }
+
+    /// Account for `pruned` stored observations deleted from the database, so
+    /// the progress reported here keeps matching the table.
+    pub fn forget(&self, pruned: usize) {
+        let mut total = self.total_observations.load(Ordering::Relaxed);
+        while let Err(current) = self.total_observations.compare_exchange(
+            total,
+            total.saturating_sub(pruned),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            total = current;
+        }
+    }
+
     /// Initialize the collector with existing observation count from database.
     pub fn with_existing_count(mut self, count: usize) -> Self {
         self.total_observations = AtomicUsize::new(count);

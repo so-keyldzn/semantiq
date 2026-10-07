@@ -30,8 +30,8 @@ impl IndexStore {
             conn.execute("DELETE FROM symbols WHERE file_id = ?1", [file_id])?;
 
             let mut stmt = conn.prepare(
-                "INSERT INTO symbols (file_id, name, kind, start_line, end_line, start_byte, end_byte, signature, doc_comment, parent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO symbols (file_id, name, kind, start_line, end_line, signature, doc_comment, parent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
 
             for symbol in symbols {
@@ -41,8 +41,6 @@ impl IndexStore {
                     symbol.kind.as_str(),
                     symbol.start_line as i64,
                     symbol.end_line as i64,
-                    symbol.start_byte as i64,
-                    symbol.end_byte as i64,
                     symbol.signature,
                     symbol.doc_comment,
                     symbol.parent,
@@ -72,7 +70,7 @@ impl IndexStore {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT s.id, s.file_id, s.name, s.kind, s.start_line, s.end_line,
-                        s.start_byte, s.end_byte, s.signature, s.doc_comment, s.parent
+                        s.signature, s.doc_comment, s.parent
                  FROM symbols s
                  JOIN symbols_fts ON s.id = symbols_fts.rowid
                  WHERE symbols_fts MATCH ?1
@@ -90,11 +88,9 @@ impl IndexStore {
                         kind: row.get(3)?,
                         start_line: row.get(4)?,
                         end_line: row.get(5)?,
-                        start_byte: row.get(6)?,
-                        end_byte: row.get(7)?,
-                        signature: row.get(8)?,
-                        doc_comment: row.get(9)?,
-                        parent: row.get(10)?,
+                        signature: row.get(6)?,
+                        doc_comment: row.get(7)?,
+                        parent: row.get(8)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -108,7 +104,7 @@ impl IndexStore {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, file_id, name, kind, start_line, end_line,
-                        start_byte, end_byte, signature, doc_comment, parent
+                        signature, doc_comment, parent
                  FROM symbols WHERE name = ?1",
             )?;
 
@@ -121,11 +117,9 @@ impl IndexStore {
                         kind: row.get(3)?,
                         start_line: row.get(4)?,
                         end_line: row.get(5)?,
-                        start_byte: row.get(6)?,
-                        end_byte: row.get(7)?,
-                        signature: row.get(8)?,
-                        doc_comment: row.get(9)?,
-                        parent: row.get(10)?,
+                        signature: row.get(6)?,
+                        doc_comment: row.get(7)?,
+                        parent: row.get(8)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -139,7 +133,7 @@ impl IndexStore {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, file_id, name, kind, start_line, end_line,
-                        start_byte, end_byte, signature, doc_comment, parent
+                        signature, doc_comment, parent
                  FROM symbols WHERE file_id = ?1
                  ORDER BY start_line",
             )?;
@@ -153,11 +147,9 @@ impl IndexStore {
                         kind: row.get(3)?,
                         start_line: row.get(4)?,
                         end_line: row.get(5)?,
-                        start_byte: row.get(6)?,
-                        end_byte: row.get(7)?,
-                        signature: row.get(8)?,
-                        doc_comment: row.get(9)?,
-                        parent: row.get(10)?,
+                        signature: row.get(6)?,
+                        doc_comment: row.get(7)?,
+                        parent: row.get(8)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;

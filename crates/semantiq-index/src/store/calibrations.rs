@@ -2,7 +2,7 @@
 
 use super::IndexStore;
 use anyhow::Result;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use tracing::debug;
 
 /// Record of calibrated thresholds loaded from the database.
@@ -102,45 +102,6 @@ impl IndexStore {
                 .collect::<Result<Vec<_>, _>>()?;
 
             Ok(results)
-        })
-    }
-
-    /// Load calibration for a specific language.
-    pub fn load_calibration(&self, language: &str) -> Result<Option<CalibrationRecord>> {
-        self.with_conn(|conn| {
-            let result = conn
-                .query_row(
-                    "SELECT language, max_distance, min_similarity, confidence, sample_count,
-                            p50_distance, p90_distance, p95_distance, mean_distance, std_distance, calibrated_at
-                     FROM threshold_calibration WHERE language = ?1",
-                    [language],
-                    |row| {
-                        Ok(CalibrationRecord {
-                            language: row.get(0)?,
-                            max_distance: row.get(1)?,
-                            min_similarity: row.get(2)?,
-                            confidence: row.get(3)?,
-                            sample_count: row.get::<_, i64>(4)? as usize,
-                            p50_distance: row.get(5)?,
-                            p90_distance: row.get(6)?,
-                            p95_distance: row.get(7)?,
-                            mean_distance: row.get(8)?,
-                            std_distance: row.get(9)?,
-                            calibrated_at: row.get(10)?,
-                        })
-                    },
-                )
-                .optional()?;
-
-            Ok(result)
-        })
-    }
-
-    /// Delete all calibration data.
-    pub fn clear_calibrations(&self) -> Result<()> {
-        self.with_conn(|conn| {
-            conn.execute("DELETE FROM threshold_calibration", [])?;
-            Ok(())
         })
     }
 }

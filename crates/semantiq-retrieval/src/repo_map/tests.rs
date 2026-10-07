@@ -14,9 +14,7 @@ fn index_project(files: &[(String, String)]) -> Arc<IndexStore> {
 }
 
 fn add_file(store: &IndexStore, support: &mut LanguageSupport, path: &str, source: &str) {
-    let file_id = store
-        .insert_file(path, Some("rust"), source, source.len() as i64, 0)
-        .unwrap();
+    let file_id = store.insert_file(path, Some("rust"), source, 0).unwrap();
     let tree = support.parse(Language::Rust, source).unwrap();
     let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
     store.insert_symbols(file_id, &symbols).unwrap();
@@ -268,7 +266,7 @@ fn test_skips_data_files_and_imports() {
         "use std::fmt;\npub struct Widget;\n".to_string(),
     )]);
     store
-        .insert_file("Cargo.toml", Some("toml"), "[package]", 9, 0)
+        .insert_file("Cargo.toml", Some("toml"), "[package]", 0)
         .unwrap();
 
     let map = build_repo_map(&store, &options(1000)).unwrap();

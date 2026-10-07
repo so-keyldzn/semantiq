@@ -6,6 +6,7 @@
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Longest line kept in previews and usage lines, in characters.
 pub(crate) const MAX_LINE_CHARS: usize = 120;
@@ -365,6 +366,9 @@ pub struct Import {
     pub import_name: Option<String>,
     /// local, external or std
     pub kind: String,
+    /// First and last line of the import statement (1-based)
+    pub line: usize,
+    pub end_line: usize,
 }
 
 impl DepsOutput {
@@ -374,15 +378,33 @@ impl DepsOutput {
         match &self.imports {
             Some(imports) => {
                 output.push_str(&format!("Imports ({}):\n", imports.len()));
+                // One line per kind; within it, the imports of each statement
+                // line are grouped, tagged with that line and separated by
+                // `;` so the tag reads for the whole group:
+                // `local: a, b (L3); c (L5)`.
                 for (kind, group) in group_by(imports, |i| &i.kind) {
-                    let targets: Vec<String> = group
-                        .iter()
-                        .map(|i| match i.import_name {
+                    let mut by_line: BTreeMap<(usize, usize), Vec<String>> = BTreeMap::new();
+                    for i in group {
+                        let target = match i.import_name {
                             Some(ref name) => format!("{} as {}", i.target_path, name),
                             None => i.target_path.clone(),
+                        };
+                        by_line
+                            .entry((i.line, i.end_line.max(i.line)))
+                            .or_default()
+                            .push(target);
+                    }
+                    let described: Vec<String> = by_line
+                        .iter()
+                        .map(|((line, end_line), targets)| {
+                            if end_line > line {
+                                format!("{} (L{}-{})", join_paths(targets), line, end_line)
+                            } else {
+                                format!("{} (L{})", join_paths(targets), line)
+                            }
                         })
                         .collect();
-                    output.push_str(&format!("  {}: {}\n", kind, join_paths(&targets)));
+                    output.push_str(&format!("  {}: {}\n", kind, described.join("; ")));
                 }
             }
             None => output.push_str("Imports: lookup failed\n"),
@@ -410,6 +432,7 @@ pub struct ExplainOutput {
     pub definitions: Vec<Definition>,
     /// Import statements of the name, as `path:line`
     pub imported_in: Vec<String>,
+    /// Non-definition occurrences of the name (a line using it twice counts 2)
     pub usage_count: usize,
     pub related_symbols: Vec<String>,
 }

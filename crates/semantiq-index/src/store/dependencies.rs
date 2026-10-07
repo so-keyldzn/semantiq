@@ -7,7 +7,8 @@ use rusqlite::params;
 use std::collections::HashSet;
 
 impl IndexStore {
-    /// Insert a dependency record.
+    /// Insert a dependency record. `lines` is the import statement's first
+    /// and last line (1-based).
     pub fn insert_dependency(
         &self,
         source_file_id: i64,
@@ -15,12 +16,22 @@ impl IndexStore {
         import_name: Option<&str>,
         kind: &str,
         resolved_path: Option<&str>,
+        lines: (usize, usize),
     ) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO dependencies (source_file_id, target_path, import_name, kind, resolved_path)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![source_file_id, target_path, import_name, kind, resolved_path],
+                "INSERT INTO dependencies
+                    (source_file_id, target_path, import_name, kind, resolved_path, line, end_line)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    source_file_id,
+                    target_path,
+                    import_name,
+                    kind,
+                    resolved_path,
+                    lines.0 as i64,
+                    lines.1 as i64
+                ],
             )?;
 
             Ok(())
@@ -42,7 +53,7 @@ impl IndexStore {
     pub fn get_dependencies(&self, file_id: i64) -> Result<Vec<DependencyRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, source_file_id, target_path, import_name, kind, resolved_path
+                "SELECT id, source_file_id, target_path, import_name, kind, resolved_path, line, end_line
                  FROM dependencies WHERE source_file_id = ?1",
             )?;
 
@@ -55,6 +66,8 @@ impl IndexStore {
                         import_name: row.get(3)?,
                         kind: row.get(4)?,
                         resolved_path: row.get(5)?,
+                        line: row.get(6)?,
+                        end_line: row.get(7)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -87,7 +100,7 @@ impl IndexStore {
             // Phase 1: Exact match via resolved_path (fast, precise)
             {
                 let mut stmt = conn.prepare(
-                    "SELECT id, source_file_id, target_path, import_name, kind, resolved_path
+                    "SELECT id, source_file_id, target_path, import_name, kind, resolved_path, line, end_line
                      FROM dependencies WHERE resolved_path = ?1",
                 )?;
 
@@ -100,6 +113,8 @@ impl IndexStore {
                             import_name: row.get(3)?,
                             kind: row.get(4)?,
                             resolved_path: row.get(5)?,
+                            line: row.get(6)?,
+                            end_line: row.get(7)?,
                         })
                     })?
                     .filter_map(|r| r.ok())
@@ -118,7 +133,7 @@ impl IndexStore {
                     .map(|i| format!("target_path LIKE ?{} ESCAPE '\\'", i))
                     .collect();
                 let query = format!(
-                    "SELECT id, source_file_id, target_path, import_name, kind, resolved_path
+                    "SELECT id, source_file_id, target_path, import_name, kind, resolved_path, line, end_line
                      FROM dependencies WHERE resolved_path IS NULL AND ({})",
                     conditions.join(" OR ")
                 );
@@ -148,6 +163,8 @@ impl IndexStore {
                             import_name: row.get(3)?,
                             kind: row.get(4)?,
                             resolved_path: row.get(5)?,
+                            line: row.get(6)?,
+                            end_line: row.get(7)?,
                         })
                     })?
                     .filter_map(|r| r.ok())
@@ -201,7 +218,7 @@ impl IndexStore {
             // Phase 1: Exact match via resolved_path (fast, precise)
             {
                 let mut stmt = conn.prepare(
-                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, f.path
+                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, d.line, d.end_line, f.path
                      FROM dependencies d
                      JOIN files f ON d.source_file_id = f.id
                      WHERE d.resolved_path = ?1",
@@ -217,8 +234,10 @@ impl IndexStore {
                                 import_name: row.get(3)?,
                                 kind: row.get(4)?,
                                 resolved_path: row.get(5)?,
+                                line: row.get(6)?,
+                                end_line: row.get(7)?,
                             },
-                            row.get::<_, String>(6)?,
+                            row.get::<_, String>(8)?,
                         ))
                     })?
                     .filter_map(|r| r.ok())
@@ -237,7 +256,7 @@ impl IndexStore {
                     .map(|i| format!("d.target_path LIKE ?{} ESCAPE '\\'", i))
                     .collect();
                 let query = format!(
-                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, f.path
+                    "SELECT d.id, d.source_file_id, d.target_path, d.import_name, d.kind, d.resolved_path, d.line, d.end_line, f.path
                      FROM dependencies d
                      JOIN files f ON d.source_file_id = f.id
                      WHERE d.resolved_path IS NULL AND ({})",
@@ -270,8 +289,10 @@ impl IndexStore {
                                 import_name: row.get(3)?,
                                 kind: row.get(4)?,
                                 resolved_path: row.get(5)?,
+                                line: row.get(6)?,
+                                end_line: row.get(7)?,
                             },
-                            row.get::<_, String>(6)?,
+                            row.get::<_, String>(8)?,
                         ))
                     })?
                     .filter_map(|r| r.ok())

@@ -161,9 +161,12 @@ fn test_dependency_info_struct() {
         target_path: "src/utils.rs".to_string(),
         import_name: Some("utils".to_string()),
         kind: "local".to_string(),
+        line: 3,
+        end_line: 3,
     };
 
     assert_eq!(dep.target_path, "src/utils.rs");
+    assert_eq!(dep.line, 3);
     assert_eq!(dep.import_name, Some("utils".to_string()));
     assert_eq!(dep.kind, "local");
 }
@@ -228,7 +231,7 @@ fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
     use semantiq_parser::{Symbol, SymbolKind};
 
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
-    let file_id = store.insert_file("cfg.rs", Some("rust"), "", 0, 0).unwrap();
+    let file_id = store.insert_file("cfg.rs", Some("rust"), "", 0).unwrap();
     let mk = |name: &str, line: usize| Symbol {
         name: name.to_string(),
         // Variable (not Function): the function kind boost caps both scores
@@ -286,9 +289,7 @@ fn index_rust_project_with(
     let mut support = LanguageSupport::new().unwrap();
     for (path, source) in files {
         std::fs::write(root.path().join(path), source).unwrap();
-        let file_id = store
-            .insert_file(path, Some("rust"), source, source.len() as i64, 0)
-            .unwrap();
+        let file_id = store.insert_file(path, Some("rust"), source, 0).unwrap();
         let tree = support.parse(Language::Rust, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
         store.insert_symbols(file_id, &symbols).unwrap();

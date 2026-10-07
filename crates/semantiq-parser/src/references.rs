@@ -54,13 +54,17 @@ impl std::str::FromStr for ReferenceKind {
 
 /// Une occurrence d'identifiant. Dédupliquée par `(name, line)` : plusieurs
 /// occurrences du même nom sur une ligne n'en font qu'une, avec le type le
-/// plus prioritaire.
+/// plus prioritaire ; `count` est le nombre d'occurrences de ce type-là sur
+/// la ligne (`f(f(x))` → call ×2 ; `retry(retry)` → call ×1, la référence
+/// simple n'est pas comptée).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reference {
     pub name: String,
     /// Ligne 1-based.
     pub line: usize,
     pub kind: ReferenceKind,
+    /// Occurrences de `kind` sur cette ligne (≥ 1).
+    pub count: usize,
 }
 
 /// Noms plus courts ignorés : `i`, `x`, `_`… ne sont jamais recherchés et
@@ -78,7 +82,7 @@ impl ReferenceExtractor {
             return Vec::new();
         }
 
-        let mut by_line: HashMap<(String, usize), ReferenceKind> = HashMap::new();
+        let mut by_line: HashMap<(String, usize), (ReferenceKind, usize)> = HashMap::new();
         let mut cursor = tree.walk();
         let mut stack = vec![tree.root_node()];
 
@@ -93,8 +97,12 @@ impl ReferenceExtractor {
                         if name.chars().count() >= MIN_NAME_LEN {
                             by_line
                                 .entry((name.to_string(), line))
-                                .and_modify(|k| *k = (*k).max(kind))
-                                .or_insert(kind);
+                                .and_modify(|(k, n)| match kind.cmp(k) {
+                                    std::cmp::Ordering::Greater => (*k, *n) = (kind, 1),
+                                    std::cmp::Ordering::Equal => *n += 1,
+                                    std::cmp::Ordering::Less => {}
+                                })
+                                .or_insert((kind, 1));
                         }
                     }
                 }
@@ -105,7 +113,12 @@ impl ReferenceExtractor {
 
         let mut refs: Vec<Reference> = by_line
             .into_iter()
-            .map(|((name, line), kind)| Reference { name, line, kind })
+            .map(|((name, line), (kind, count))| Reference {
+                name,
+                line,
+                kind,
+                count,
+            })
             .collect();
         refs.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.name.cmp(&b.name)));
         refs
@@ -419,6 +432,31 @@ mod tests {
     fn test_same_line_keeps_highest_priority() {
         let r = refs(Language::Rust, "fn rec() { rec() }");
         assert_eq!(kinds_of(&r, "rec"), vec![(1, ReferenceKind::Definition)]);
+        // The call folded into the definition row is not counted.
+        assert_eq!(r.iter().find(|x| x.name == "rec").unwrap().count, 1);
+    }
+
+    #[test]
+    fn test_same_line_counts_occurrences() {
+        let r = refs(
+            Language::Rust,
+            "fn run() {\n    wrap(wrap(1));\n    once();\n}",
+        );
+        let count = |name: &str| r.iter().find(|x| x.name == name).unwrap().count;
+        assert_eq!(count("wrap"), 2);
+        assert_eq!(count("once"), 1);
+    }
+
+    #[test]
+    fn test_same_line_counts_only_the_kept_kind() {
+        // One call plus one plain reference of the same name: one call.
+        let r = refs(
+            Language::Rust,
+            "fn run(retry: fn(u32)) { retry(retry as u32) }",
+        );
+        let retry = r.iter().find(|x| x.name == "retry" && x.line == 1).unwrap();
+        assert_eq!(retry.kind, ReferenceKind::Call);
+        assert_eq!(retry.count, 1);
     }
 
     #[test]

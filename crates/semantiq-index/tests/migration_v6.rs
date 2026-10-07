@@ -167,7 +167,7 @@ fn migrate_v5_to_v6_recreates_chunks_vec_and_forces_reindex() {
 
     // A 768-d vector is accepted by the recreated table.
     let file_id = store
-        .insert_file("src/new.rs", Some("rust"), "fn new() {}", 11, 1000)
+        .insert_file("src/new.rs", Some("rust"), "fn new() {}", 1000)
         .unwrap();
     store
         .insert_chunks(
@@ -223,7 +223,7 @@ fn reopening_with_same_model_keeps_data() {
     let store = IndexStore::open(&db).unwrap();
     store.set_parser_version().unwrap();
     store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 9, 1000)
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
         .unwrap();
     drop(store);
 
@@ -241,7 +241,7 @@ fn embedding_model_change_without_schema_bump_rebuilds_vectors() {
     let store = IndexStore::open(&db).unwrap();
     store.set_parser_version().unwrap();
     store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 9, 1000)
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
         .unwrap();
     drop(store);
 
@@ -289,7 +289,7 @@ fn switching_between_stub_and_onnx_builds_resets_index() {
     let store = IndexStore::open(&db).unwrap();
     store.set_parser_version().unwrap();
     let file_id = store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 9, 1000)
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
         .unwrap();
     store
         .insert_chunks(

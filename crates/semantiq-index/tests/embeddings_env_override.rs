@@ -35,7 +35,7 @@ fn stub_env_override_resets_coderankembed_index() {
     let store = IndexStore::open(&db).unwrap();
     store.set_parser_version().unwrap();
     let file_id = store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 9, 1000)
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
         .unwrap();
     store
         .insert_chunks(

@@ -25,8 +25,9 @@ impl IndexStore {
                 conn.execute("DELETE FROM type_relations WHERE file_id = ?1", [file_id])?;
 
                 let mut stmt = conn.prepare(
-                    "INSERT OR IGNORE INTO call_edges (file_id, line, callee, caller, caller_line)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT OR IGNORE INTO call_edges
+                        (file_id, line, callee, caller, caller_line, count)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 )?;
                 for edge in &structure.calls {
                     stmt.execute(params![
@@ -35,6 +36,7 @@ impl IndexStore {
                         edge.callee,
                         edge.caller,
                         edge.caller_line as i64,
+                        edge.count.max(1) as i64,
                     ])?;
                 }
 
@@ -94,7 +96,7 @@ impl IndexStore {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&format!(
-                "SELECT e.file_id, f.path, e.line, e.callee, e.caller, e.caller_line
+                "SELECT e.file_id, f.path, e.line, e.callee, e.caller, e.caller_line, e.count
                  FROM call_edges e
                  JOIN files f ON f.id = e.file_id
                  WHERE {filter}
@@ -110,6 +112,7 @@ impl IndexStore {
                         callee: row.get(3)?,
                         caller: row.get(4)?,
                         caller_line: row.get(5)?,
+                        count: row.get::<_, i64>(6)?.max(1) as usize,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -187,7 +190,7 @@ impl IndexStore {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&format!(
                 "SELECT s.id, s.file_id, s.name, s.kind, s.start_line, s.end_line,
-                        s.start_byte, s.end_byte, s.signature, s.doc_comment, s.parent,
+                        s.signature, s.doc_comment, s.parent,
                         f.path, f.language
                  FROM symbols s
                  JOIN files f ON f.id = s.file_id
@@ -209,8 +212,8 @@ impl IndexStore {
                 .query_map(params![path_prefix, language, safe_limit as i64], |row| {
                     Ok(UnreferencedSymbol {
                         symbol: symbol_from_row(row)?,
-                        file_path: row.get(11)?,
-                        language: row.get(12)?,
+                        file_path: row.get(9)?,
+                        language: row.get(10)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -239,11 +242,9 @@ fn symbol_from_row(row: &Row) -> rusqlite::Result<SymbolRecord> {
         kind: row.get(3)?,
         start_line: row.get(4)?,
         end_line: row.get(5)?,
-        start_byte: row.get(6)?,
-        end_byte: row.get(7)?,
-        signature: row.get(8)?,
-        doc_comment: row.get(9)?,
-        parent: row.get(10)?,
+        signature: row.get(6)?,
+        doc_comment: row.get(7)?,
+        parent: row.get(8)?,
     })
 }
 
@@ -273,21 +274,21 @@ mod tests {
             name: name.to_string(),
             line,
             kind,
+            count: 1,
         }
     }
 
     #[test]
     fn test_insert_and_query_structure() {
         let store = IndexStore::open_in_memory().unwrap();
-        let file_id = store
-            .insert_file("src/a.rs", Some("rust"), "x", 1, 0)
-            .unwrap();
+        let file_id = store.insert_file("src/a.rs", Some("rust"), "x", 0).unwrap();
         let structure = FileStructure {
             calls: vec![CallEdge {
                 caller: "run".into(),
                 caller_line: 1,
                 callee: "helper".into(),
                 line: 2,
+                count: 2,
             }],
             relations: vec![TypeRelation {
                 type_name: "Foo".into(),
@@ -305,6 +306,7 @@ mod tests {
         assert_eq!(callers.len(), 1);
         assert_eq!(callers[0].caller, "run");
         assert_eq!(callers[0].file_path, "src/a.rs");
+        assert_eq!(callers[0].count, 2);
         assert_eq!(store.find_callees("run", 10).unwrap().len(), 1);
 
         let supers = store.find_supertypes("Foo", 10).unwrap();
@@ -322,14 +324,10 @@ mod tests {
     #[test]
     fn test_find_unreferenced_symbols() {
         let store = IndexStore::open_in_memory().unwrap();
-        let a = store
-            .insert_file("src/a.rs", Some("rust"), "a", 1, 0)
-            .unwrap();
-        let b = store
-            .insert_file("lib/b.rs", Some("rust"), "b", 1, 0)
-            .unwrap();
+        let a = store.insert_file("src/a.rs", Some("rust"), "a", 0).unwrap();
+        let b = store.insert_file("lib/b.rs", Some("rust"), "b", 0).unwrap();
         let data = store
-            .insert_file("conf.yaml", Some("yaml"), "c", 1, 0)
+            .insert_file("conf.yaml", Some("yaml"), "c", 0)
             .unwrap();
         store
             .insert_symbols(

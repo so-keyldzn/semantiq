@@ -271,6 +271,8 @@ pub fn deps_output(engine: &RetrievalEngine, params: DepsParams) -> Result<DepsO
                         .filter(|name| !d.target_path.ends_with(name.as_str())),
                     target_path: d.target_path,
                     kind: d.kind,
+                    line: d.line,
+                    end_line: d.end_line,
                 })
                 .collect()
         });

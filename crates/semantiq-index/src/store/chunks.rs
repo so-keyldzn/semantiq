@@ -118,8 +118,8 @@ impl IndexStore {
             conn.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;
 
             let mut stmt = conn.prepare(
-                "INSERT INTO chunks (file_id, content, start_line, end_line, start_byte, end_byte, symbols_json, embedding)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO chunks (file_id, content, start_line, end_line, symbols_json, embedding)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             let mut vec_stmt =
                 conn.prepare("INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)")?;
@@ -133,8 +133,6 @@ impl IndexStore {
                     chunk.content,
                     chunk.start_line as i64,
                     chunk.end_line as i64,
-                    chunk.start_byte as i64,
-                    chunk.end_byte as i64,
                     symbols_json,
                     embedding,
                 ])?;
@@ -353,19 +351,22 @@ impl IndexStore {
         self.with_conn(|conn| {
             let placeholders: String = chunk_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let query = format!(
-                "SELECT id, file_id, content, start_line, end_line, start_byte, end_byte, symbols_json, embedding
+                "SELECT id, file_id, content, start_line, end_line, symbols_json, embedding
                  FROM chunks WHERE id IN ({})",
                 placeholders
             );
 
             let mut stmt = conn.prepare(&query)?;
-            let params: Vec<&dyn rusqlite::ToSql> = chunk_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+            let params: Vec<&dyn rusqlite::ToSql> = chunk_ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::ToSql)
+                .collect();
 
             let results = stmt
                 .query_map(params.as_slice(), |row| {
-                    let symbols_json: String = row.get(7)?;
+                    let symbols_json: String = row.get(5)?;
                     let symbols = parse_symbols_json(&symbols_json);
-                    let embedding_bytes: Option<Vec<u8>> = row.get(8)?;
+                    let embedding_bytes: Option<Vec<u8>> = row.get(6)?;
                     let embedding = embedding_bytes.map(|b| parse_embedding_bytes(&b));
 
                     Ok(ChunkRecord {
@@ -374,42 +375,8 @@ impl IndexStore {
                         content: row.get(2)?,
                         start_line: row.get(3)?,
                         end_line: row.get(4)?,
-                        start_byte: row.get(5)?,
-                        end_byte: row.get(6)?,
                         symbols,
                         embedding,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-
-            Ok(results)
-        })
-    }
-
-    /// Get chunks that don't have embeddings yet.
-    pub fn get_chunks_without_embeddings(&self, limit: usize) -> Result<Vec<ChunkRecord>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, file_id, content, start_line, end_line, start_byte, end_byte, symbols_json
-                 FROM chunks WHERE embedding IS NULL
-                 LIMIT ?1",
-            )?;
-
-            let results = stmt
-                .query_map([limit as i64], |row| {
-                    let symbols_json: String = row.get(7)?;
-                    let symbols = parse_symbols_json(&symbols_json);
-
-                    Ok(ChunkRecord {
-                        id: row.get(0)?,
-                        file_id: row.get(1)?,
-                        content: row.get(2)?,
-                        start_line: row.get(3)?,
-                        end_line: row.get(4)?,
-                        start_byte: row.get(5)?,
-                        end_byte: row.get(6)?,
-                        symbols,
-                        embedding: None,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -422,13 +389,13 @@ impl IndexStore {
     pub fn get_chunks_by_file(&self, file_id: i64) -> Result<Vec<ChunkRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, file_id, content, start_line, end_line, start_byte, end_byte, symbols_json
+                "SELECT id, file_id, content, start_line, end_line, symbols_json
                  FROM chunks WHERE file_id = ?1",
             )?;
 
             let results = stmt
                 .query_map([file_id], |row| {
-                    let symbols_json: String = row.get(7)?;
+                    let symbols_json: String = row.get(5)?;
                     let symbols = parse_symbols_json(&symbols_json);
 
                     Ok(ChunkRecord {
@@ -437,8 +404,6 @@ impl IndexStore {
                         content: row.get(2)?,
                         start_line: row.get(3)?,
                         end_line: row.get(4)?,
-                        start_byte: row.get(5)?,
-                        end_byte: row.get(6)?,
                         symbols,
                         embedding: None,
                     })

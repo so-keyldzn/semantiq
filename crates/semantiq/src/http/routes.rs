@@ -407,6 +407,7 @@ async fn deps(
                 path: d.target_path,
                 symbols: d.import_name.map(|n| vec![n]),
                 kind: d.kind,
+                line: d.line,
             })
             .collect(),
         Err(e) => {
@@ -422,6 +423,7 @@ async fn deps(
                 path: d.target_path,
                 symbols: None,
                 kind: "import".to_string(),
+                line: d.line,
             })
             .collect(),
         Err(e) => {

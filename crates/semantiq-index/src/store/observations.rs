@@ -9,27 +9,9 @@ use std::sync::{MutexGuard, PoisonError};
 use tracing::{debug, info};
 
 impl IndexStore {
-    /// Insert a distance observation for threshold calibration.
+    /// Insert distance observations for threshold calibration.
     ///
     /// Uses INSERT OR IGNORE to handle the UNIQUE constraint on (query_hash, language).
-    pub fn insert_distance_observation(
-        &self,
-        language: &str,
-        distance: f32,
-        query_hash: u64,
-        timestamp: i64,
-    ) -> Result<bool> {
-        self.with_conn(|conn| {
-            let rows = conn.execute(
-                "INSERT OR IGNORE INTO distance_observations (language, distance, query_hash, timestamp)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![language, distance, query_hash as i64, timestamp],
-            )?;
-            Ok(rows > 0)
-        })
-    }
-
-    /// Insert multiple distance observations in a batch.
     pub fn insert_distance_observations_batch(
         &self,
         observations: &[(String, f32, u64, i64)],
@@ -131,7 +113,10 @@ impl IndexStore {
     /// Delete old distance observations.
     ///
     /// Returns the number of observations deleted.
-    pub fn cleanup_old_observations(&self, max_age_secs: i64) -> Result<usize> {
+    /// Delete observations older than `max_age_secs`, always keeping the
+    /// `keep_newest` most recent ones so a calibration sample never shrinks
+    /// below what a calibration needs. Returns how many rows were deleted.
+    pub fn cleanup_old_observations(&self, max_age_secs: i64, keep_newest: usize) -> Result<usize> {
         self.with_conn(|conn| {
             let cutoff = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -140,8 +125,11 @@ impl IndexStore {
                 - max_age_secs;
 
             let rows = conn.execute(
-                "DELETE FROM distance_observations WHERE timestamp < ?1",
-                [cutoff],
+                "DELETE FROM distance_observations
+                 WHERE timestamp < ?1
+                   AND id NOT IN (SELECT id FROM distance_observations
+                                  ORDER BY timestamp DESC, id DESC LIMIT ?2)",
+                params![cutoff, keep_newest as i64],
             )?;
 
             if rows > 0 {
