@@ -15,9 +15,9 @@
     "claude_version": "2.1.291 (Claude Code)",
     "semantiq_version": "semantiq 0.9.0",
     "cli_skill": {
-      "cli_bin": "/private/tmp/claude-502/-Users-nicolas-orca-workspaces-semantiq-agent-benchmark/f0bc8903-f157-4fdc-a8ce-351859216c27/scratchpad/cli-target/release/semantiq",
+      "cli_bin": "<scratch>/cli-target/release/semantiq",
       "cli_version": "semantiq 0.9.0",
-      "skill_path": "/private/tmp/claude-502/-Users-nicolas-orca-workspaces-semantiq-agent-benchmark/f0bc8903-f157-4fdc-a8ce-351859216c27/scratchpad/cli-skill-snapshot/semantiq",
+      "skill_path": "<scratch>/cli-skill-snapshot/semantiq",
       "skill_sha256": "d3bd9273307594af79464f97a77a91d854896c7288a6e1a67267a25474013d0d"
     },
     "repos": {
@@ -35,25 +35,25 @@
         "seconds": 141.8,
         "reused": false,
         "db_bytes": 13500416,
-        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/index/ripgrep.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"$TMPDIR/semantiq-agent-bench/index/ripgrep.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
       },
       "semantiq": {
         "seconds": 62.9,
         "reused": false,
         "db_bytes": 8409088,
-        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/index/semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"$TMPDIR/semantiq-agent-bench/index/semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
       },
       "ripgrep (cli-skill)": {
         "seconds": 171.5,
         "reused": false,
         "db_bytes": 13500416,
-        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 113\n  Symbols: 4127\n  Chunks: 922\n  Dependencies: 978\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
       },
       "semantiq (cli-skill)": {
         "seconds": 72.5,
         "reused": false,
         "db_bytes": 8409088,
-        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
+        "stats": "Semantiq Index Statistics\n=========================\nDatabase: \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/.semantiq.db\"\n\nIndex:\n  Files indexed: 107\n  Symbols: 2118\n  Chunks: 440\n  Dependencies: 771\n\nML Calibration:\n  Bootstrap: 0% (0/500 observations)\n    Mode: BOOTSTRAP (collecting 100% of observations)\n\n  Observations by language:\n    (none yet)\n\n  Calibrated thresholds: 0\n    (will auto-calibrate after bootstrap)"
       }
     }
   },
@@ -122,7 +122,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__1.jsonl",
       "first_context_tokens": 6862
     },
     {
@@ -192,7 +192,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/baseline/3",
@@ -261,7 +261,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/cli-skill/1",
@@ -324,7 +324,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/cli-skill/2",
@@ -389,7 +389,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/cli-skill/3",
@@ -455,7 +455,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/semantiq-guided/1",
@@ -525,7 +525,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__1.jsonl",
       "first_context_tokens": 9053
     },
     {
@@ -596,7 +596,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/semantiq-guided/3",
@@ -667,7 +667,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/semantiq/1",
@@ -737,7 +737,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__1.jsonl",
       "first_context_tokens": 8436
     },
     {
@@ -809,7 +809,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-binary/semantiq/3",
@@ -881,7 +881,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-binary__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/baseline/1",
@@ -939,7 +939,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/baseline/2",
@@ -964,7 +964,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"colorspec|ColorSpecs\", \"output_mode\": \"files_with_matches\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep\"}"
+          "input": "{\"pattern\": \"colorspec|ColorSpecs\", \"output_mode\": \"files_with_matches\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep\"}"
         }
       ],
       "tool_errors": 0,
@@ -997,7 +997,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/baseline/3",
@@ -1055,7 +1055,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/cli-skill/1",
@@ -1114,7 +1114,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/cli-skill/2",
@@ -1173,7 +1173,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/cli-skill/3",
@@ -1236,7 +1236,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq-guided/1",
@@ -1301,7 +1301,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq-guided/2",
@@ -1366,7 +1366,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq-guided/3",
@@ -1431,7 +1431,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq/1",
@@ -1496,7 +1496,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq/2",
@@ -1565,7 +1565,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-colors/semantiq/3",
@@ -1634,7 +1634,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-colors__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/baseline/1",
@@ -1693,7 +1693,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__1.jsonl",
       "first_context_tokens": 6888
     },
     {
@@ -1719,7 +1719,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn matched\\\\w*\\\\(|fn should_skip_entry|fn skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"fn matched\\\\w*\\\\(|fn should_skip_entry|fn skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -1754,7 +1754,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/baseline/3",
@@ -1814,7 +1814,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/cli-skill/1",
@@ -1879,7 +1879,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/cli-skill/2",
@@ -1940,7 +1940,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/cli-skill/3",
@@ -2001,7 +2001,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/semantiq-guided/1",
@@ -2067,7 +2067,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__1.jsonl",
       "first_context_tokens": 9079
     },
     {
@@ -2135,7 +2135,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/semantiq-guided/3",
@@ -2202,7 +2202,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/semantiq/1",
@@ -2268,7 +2268,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__1.jsonl",
       "first_context_tokens": 8462
     },
     {
@@ -2336,7 +2336,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-ignore-decision/semantiq/3",
@@ -2403,7 +2403,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-ignore-decision__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/baseline/1",
@@ -2428,11 +2428,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
+          "input": "{\"pattern\": \"fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-B\": 3, \"-A\": 3, \"head_limit\": 60}"
+          "input": "{\"pattern\": \"threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-B\": 3, \"-A\": 3, \"head_limit\": 60}"
         }
       ],
       "tool_errors": 0,
@@ -2466,7 +2466,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/baseline/2",
@@ -2491,15 +2491,15 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
+          "input": "{\"pattern\": \"fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-n\": true}"
+          "input": "{\"pattern\": \"threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-n\": true}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
         }
       ],
       "tool_errors": 0,
@@ -2533,7 +2533,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/baseline/3",
@@ -2558,15 +2558,15 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
+          "input": "{\"pattern\": \"fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-n\": true}"
+          "input": "{\"pattern\": \"threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-n\": true}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
         }
       ],
       "tool_errors": 0,
@@ -2599,7 +2599,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/cli-skill/1",
@@ -2633,7 +2633,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 164, \"limit\": 12}"
         }
       ],
       "tool_errors": 0,
@@ -2666,7 +2666,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/cli-skill/2",
@@ -2700,7 +2700,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 160, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 160, \"limit\": 25}"
         },
         {
           "name": "Grep",
@@ -2738,7 +2738,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/cli-skill/3",
@@ -2772,7 +2772,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 155, \"limit\": 20}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/core/flags/hiargs.rs\", \"offset\": 155, \"limit\": 20}"
         }
       ],
       "tool_errors": 0,
@@ -2806,7 +2806,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq-guided/1",
@@ -2880,7 +2880,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq-guided/2",
@@ -2954,7 +2954,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq-guided/3",
@@ -2994,11 +2994,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 155, \"limit\": 30}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 155, \"limit\": 30}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 835, \"limit\": 30}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 835, \"limit\": 30}"
         }
       ],
       "tool_errors": 0,
@@ -3032,7 +3032,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq/1",
@@ -3064,11 +3064,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
+          "input": "{\"pattern\": \"fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-B\": 3, \"-A\": 3}"
+          "input": "{\"pattern\": \"threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"output_mode\": \"content\", \"-B\": 3, \"-A\": 3}"
         }
       ],
       "tool_errors": 0,
@@ -3102,7 +3102,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__1.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq/2",
@@ -3134,11 +3134,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
+          "input": "{\"pattern\": \"fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\", \"-A\": 25}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"available_parallelism|fn threads\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core\", \"output_mode\": \"content\", \"-B\": 12, \"-A\": 12}"
+          "input": "{\"pattern\": \"available_parallelism|fn threads\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core\", \"output_mode\": \"content\", \"-B\": 12, \"-A\": 12}"
         }
       ],
       "tool_errors": 0,
@@ -3172,7 +3172,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-concept-threads/semantiq/3",
@@ -3212,7 +3212,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 160, \"limit\": 14}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/core/flags/hiargs.rs\", \"offset\": 160, \"limit\": 14}"
         }
       ],
       "tool_errors": 0,
@@ -3246,7 +3246,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-concept-threads__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/baseline/1",
@@ -3303,7 +3303,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__1.jsonl",
       "first_context_tokens": 6842
     },
     {
@@ -3362,7 +3362,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/baseline/3",
@@ -3420,7 +3420,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/cli-skill/1",
@@ -3479,7 +3479,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/cli-skill/2",
@@ -3538,7 +3538,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/cli-skill/3",
@@ -3597,7 +3597,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/semantiq-guided/1",
@@ -3661,7 +3661,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__1.jsonl",
       "first_context_tokens": 9033
     },
     {
@@ -3727,7 +3727,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/semantiq-guided/3",
@@ -3792,7 +3792,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/semantiq/1",
@@ -3824,7 +3824,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"max-columns\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep\", \"glob\": \"*.rs\", \"output_mode\": \"count\"}"
+          "input": "{\"pattern\": \"max-columns\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep\", \"glob\": \"*.rs\", \"output_mode\": \"count\"}"
         }
       ],
       "tool_errors": 0,
@@ -3856,7 +3856,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__1.jsonl",
       "first_context_tokens": 8416
     },
     {
@@ -3889,7 +3889,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"max-columns\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep\", \"glob\": \"*.rs\", \"output_mode\": \"count\"}"
+          "input": "{\"pattern\": \"max-columns\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep\", \"glob\": \"*.rs\", \"output_mode\": \"count\"}"
         }
       ],
       "tool_errors": 0,
@@ -3922,7 +3922,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-exact-max-columns/semantiq/3",
@@ -3987,7 +3987,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-exact-max-columns__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/baseline/1",
@@ -4012,7 +4012,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"Sink for \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"Sink for \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -4054,7 +4054,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__1.jsonl",
       "first_context_tokens": 6869
     },
     {
@@ -4123,7 +4123,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/baseline/3",
@@ -4148,7 +4148,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"Sink for \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"Sink for \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -4191,7 +4191,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/cli-skill/1",
@@ -4260,7 +4260,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/cli-skill/2",
@@ -4329,7 +4329,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/cli-skill/3",
@@ -4398,7 +4398,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/semantiq-guided/1",
@@ -4430,7 +4430,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"Sink for \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"Sink for \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -4472,7 +4472,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__1.jsonl",
       "first_context_tokens": 9060
     },
     {
@@ -4548,7 +4548,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/semantiq-guided/3",
@@ -4580,7 +4580,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"impl(<[^>]*>)? +(grep_searcher::)?(\\\\w+::)*Sink for\", \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep\"}"
+          "input": "{\"pattern\": \"impl(<[^>]*>)? +(grep_searcher::)?(\\\\w+::)*Sink for\", \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep\"}"
         }
       ],
       "tool_errors": 0,
@@ -4623,7 +4623,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/semantiq/1",
@@ -4655,7 +4655,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"impl(<[^>]*>)?\\\\s+(grep_searcher::)?Sink\\\\s+for\", \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\"}"
+          "input": "{\"pattern\": \"impl(<[^>]*>)?\\\\s+(grep_searcher::)?Sink\\\\s+for\", \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\"}"
         }
       ],
       "tool_errors": 0,
@@ -4697,7 +4697,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__1.jsonl",
       "first_context_tokens": 8443
     },
     {
@@ -4773,7 +4773,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-sink-impls/semantiq/3",
@@ -4805,7 +4805,7 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"impl(<[^>]*>)?\\\\s+(grep_searcher::)?Sink\\\\s+for\", \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates\"}"
+          "input": "{\"pattern\": \"impl(<[^>]*>)?\\\\s+(grep_searcher::)?Sink\\\\s+for\", \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates\"}"
         }
       ],
       "tool_errors": 0,
@@ -4848,7 +4848,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-sink-impls__semantiq__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/baseline/1",
@@ -4911,7 +4911,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__1.jsonl",
       "first_context_tokens": 6856
     },
     {
@@ -4937,15 +4937,15 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=1626 && /fn |^impl/ {l=NR\\\": \\\"$0} NR==945||NR==1626{print l}' walk.rs; awk 'NR<=945 && /fn |^impl/ {l=NR\\\": \\\"$0} NR==945{print l}' walk.rs\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=1626 && /fn |^impl/ {l=NR\\\": \\\"$0} NR==945||NR==1626{print l}' walk.rs; awk 'NR<=945 && /fn |^impl/ {l=NR\\\": \\\"$0} NR==945{print l}' walk.rs\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; grep -n \\\"^impl\\\\|^pub struct\\\\|^struct\\\" walk.rs | awk -F: '$1<950'\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; grep -n \\\"^impl\\\\|^pub struct\\\\|^struct\\\" walk.rs | awk -F: '$1<950'\"}"
         }
       ],
       "tool_errors": 0,
@@ -4980,7 +4980,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/baseline/3",
@@ -5005,11 +5005,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=1626 && /^ *(pub )?fn |^impl/ {l=NR\\\": \\\"$0} NR==945||NR==1626{print l}' walk.rs; awk 'NR<=945 && /^ *(pub )?fn |^impl/ {l=NR\\\": \\\"$0} NR==945{print l}' walk.rs"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=1626 && /^ *(pub )?fn |^impl/ {l=NR\\\": \\\"$0} NR==945||NR==1626{print l}' walk.rs; awk 'NR<=945 && /^ *(pub )?fn |^impl/ {l=NR\\\": \\\"$0} NR==945{print l}' walk.rs"
         },
         {
           "name": "Bash",
@@ -5048,7 +5048,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__baseline__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/cli-skill/1",
@@ -5074,11 +5074,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn |impl /{print NR\\\": \\\"$0}' /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src/walk.rs; grep -n \\\"^impl\\\\|^struct\\\" /private/var/folders/j2/5j8t"
+          "input": "{\"command\": \"awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn |impl /{print NR\\\": \\\"$0}' $TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src/walk.rs; grep -n \\\"^impl\\\\|^struct\\\" $TMPDIR"
         }
       ],
       "tool_errors": 0,
@@ -5113,7 +5113,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__1.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/cli-skill/2",
@@ -5139,11 +5139,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src; awk 'NR>=900&&NR<=945&&/fn |impl /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn |impl /{print NR\\\": \\\"$0}' walk.rs\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src; awk 'NR>=900&&NR<=945&&/fn |impl /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn |impl /{print NR\\\": \\\"$0}' walk.rs\"}"
         }
       ],
       "tool_errors": 0,
@@ -5178,7 +5178,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/cli-skill/3",
@@ -5204,11 +5204,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src; awk 'NR<=945 && /fn /{a=NR\\\": \\\"$0} NR==945{print a} ' walk.rs; awk 'NR<=1626 && /fn /{a=NR\\\": \\\"$0} NR==1626{print a}' walk.rs; grep -n \\\"^impl\\\\|^    impl\\\" "
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep-cli-skill/crates/ignore/src; awk 'NR<=945 && /fn /{a=NR\\\": \\\"$0} NR==945{print a} ' walk.rs; awk 'NR<=1626 && /fn /{a=NR\\\": \\\"$0} NR==1626{print a}' walk.rs; grep -n \\\"^impl\\\\|^    impl\\\" "
         },
         {
           "name": "Bash",
@@ -5247,7 +5247,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__cli-skill__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/semantiq-guided/1",
@@ -5317,7 +5317,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__1.jsonl",
       "first_context_tokens": 9047
     },
     {
@@ -5389,7 +5389,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/semantiq-guided/3",
@@ -5460,7 +5460,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq-guided__3.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/semantiq/1",
@@ -5492,11 +5492,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn /{print NR\\\": \\\"$0}' walk.rs; grep -n \\\"^impl\\\" walk.rs | awk -F: '$1<1626'\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn /{print NR\\\": \\\"$0}' walk.rs; grep -n \\\"^impl\\\" walk.rs | awk -F: '$1<1626'\"}"
         }
       ],
       "tool_errors": 0,
@@ -5530,7 +5530,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__1.jsonl",
       "first_context_tokens": 8430
     },
     {
@@ -5563,11 +5563,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn /{print NR\\\": \\\"$0}' /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src/walk.rs; grep -n \\\"^impl\\\\|^struct\\\" /private/var/folders/j2/5j8t7l910ng8x0ychgq5"
+          "input": "{\"command\": \"awk 'NR>=900&&NR<=945&&/fn /{print NR\\\": \\\"$0} NR>=1560&&NR<=1626&&/fn /{print NR\\\": \\\"$0}' $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src/walk.rs; grep -n \\\"^impl\\\\|^struct\\\" $TMPDIR"
         }
       ],
       "tool_errors": 0,
@@ -5602,7 +5602,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__2.jsonl"
     },
     {
       "key": "ripgrep/rg-struct-skip-callers/semantiq/3",
@@ -5634,11 +5634,11 @@
       "tool_calls": [
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"should_skip_entry\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=945 && /fn /{a=NR\\\": \\\"$0} NR==945{print a} NR<=1626 && /fn /{b=NR\\\": \\\"$0} NR==1626{print b}' walk.rs; grep -n \\\"^impl\\\" walk.rs | awk -F: '$1<1626'\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/ripgrep/crates/ignore/src; awk 'NR<=945 && /fn /{a=NR\\\": \\\"$0} NR==945{print a} NR<=1626 && /fn /{b=NR\\\": \\\"$0} NR==1626{print b}' walk.rs; grep -n \\\"^impl\\\" walk.rs | awk -F: '$1<1626'\"}"
         }
       ],
       "tool_errors": 0,
@@ -5673,7 +5673,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/ripgrep__rg-struct-skip-callers__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/baseline/1",
@@ -5702,11 +5702,11 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"^\\\\s*(pub )?(async )?fn |^//!\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/threshold\", \"output_mode\": \"content\", \"head_limit\": 60}"
+          "input": "{\"pattern\": \"^\\\\s*(pub )?(async )?fn |^//!\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/threshold\", \"output_mode\": \"content\", \"head_limit\": 60}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"^\\\\s*(pub )?fn |^//!\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/threshold.rs\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"^\\\\s*(pub )?fn |^//!\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/threshold.rs\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -5743,7 +5743,7 @@
         "precision": 1.0,
         "success": false
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__1.jsonl",
       "first_context_tokens": 6872
     },
     {
@@ -5806,7 +5806,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/baseline/3",
@@ -5877,7 +5877,7 @@
         "precision": 1.0,
         "success": false
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/cli-skill/1",
@@ -5907,7 +5907,7 @@
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd crates/semantiq-retrieval/src; ls threshold; grep -rn \\\"record\\\\|fn \\\" threshold/calibrator.rs | head -40; grep -rln \\\"calibrat\\\\|Calibrat\\\" /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates | head\"}"
+          "input": "{\"command\": \"cd crates/semantiq-retrieval/src; ls threshold; grep -rn \\\"record\\\\|fn \\\" threshold/calibrator.rs | head -40; grep -rln \\\"calibrat\\\\|Calibrat\\\" $TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates | head\"}"
         }
       ],
       "tool_errors": 0,
@@ -5943,7 +5943,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/cli-skill/2",
@@ -5973,11 +5973,11 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"^\\\\s*(pub )?(async )?fn |^//!\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src\", \"glob\": \"**/{threshold/calibrator.rs,engine/threshold.rs}\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"^\\\\s*(pub )?(async )?fn |^//!\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src\", \"glob\": \"**/{threshold/calibrator.rs,engine/threshold.rs}\", \"output_mode\": \"content\"}"
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"ls /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/threshold; grep -rn \\\"observation\\\" -il /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/"
+          "input": "{\"command\": \"ls $TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/threshold; grep -rn \\\"observation\\\" -il $TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/"
         }
       ],
       "tool_errors": 0,
@@ -6014,7 +6014,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/cli-skill/3",
@@ -6082,7 +6082,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/semantiq-guided/1",
@@ -6149,7 +6149,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__1.jsonl",
       "first_context_tokens": 9063
     },
     {
@@ -6218,7 +6218,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/semantiq-guided/3",
@@ -6288,7 +6288,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/semantiq/1",
@@ -6356,7 +6356,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__1.jsonl",
       "first_context_tokens": 8446
     },
     {
@@ -6426,7 +6426,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-calibration/semantiq/3",
@@ -6502,7 +6502,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-calibration__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/baseline/1",
@@ -6563,7 +6563,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__1.jsonl",
       "first_context_tokens": 6854
     },
     {
@@ -6622,7 +6622,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/baseline/3",
@@ -6684,7 +6684,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/cli-skill/1",
@@ -6747,7 +6747,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/cli-skill/2",
@@ -6810,7 +6810,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/cli-skill/3",
@@ -6873,7 +6873,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/semantiq-guided/1",
@@ -6937,7 +6937,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__1.jsonl",
       "first_context_tokens": 9045
     },
     {
@@ -7003,7 +7003,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/semantiq-guided/3",
@@ -7068,7 +7068,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/semantiq/1",
@@ -7104,7 +7104,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn |MAX|hidden|starts_with\\\\('\\\\.'\\\\)\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/exclusions.rs\", \"output_mode\": \"content\", \"head_limit\": 30}"
+          "input": "{\"pattern\": \"fn |MAX|hidden|starts_with\\\\('\\\\.'\\\\)\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/exclusions.rs\", \"output_mode\": \"content\", \"head_limit\": 30}"
         }
       ],
       "tool_errors": 0,
@@ -7136,7 +7136,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__1.jsonl",
       "first_context_tokens": 8428
     },
     {
@@ -7173,7 +7173,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn |MAX|hidden|starts_with\\\\(\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/exclusions.rs\", \"output_mode\": \"content\", \"head_limit\": 20}"
+          "input": "{\"pattern\": \"fn |MAX|hidden|starts_with\\\\(\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/exclusions.rs\", \"output_mode\": \"content\", \"head_limit\": 20}"
         }
       ],
       "tool_errors": 0,
@@ -7206,7 +7206,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-exclusions/semantiq/3",
@@ -7275,7 +7275,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-exclusions__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/baseline/1",
@@ -7304,7 +7304,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"compute_sha256|MODEL_SHA256|TOKENIZER_SHA256|^\\\\s*(pub )?fn \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"compute_sha256|MODEL_SHA256|TOKENIZER_SHA256|^\\\\s*(pub )?fn \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -7340,7 +7340,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__1.jsonl",
       "first_context_tokens": 6867
     },
     {
@@ -7402,7 +7402,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/baseline/3",
@@ -7463,7 +7463,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/cli-skill/1",
@@ -7497,7 +7497,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn |hash|verify|size|download\", \"-i\": true, \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\"}"
+          "input": "{\"pattern\": \"fn |hash|verify|size|download\", \"-i\": true, \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\"}"
         }
       ],
       "tool_errors": 0,
@@ -7534,7 +7534,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/cli-skill/2",
@@ -7568,7 +7568,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\", \"offset\": 110, \"limit\": 100}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\", \"offset\": 110, \"limit\": 100}"
         }
       ],
       "tool_errors": 0,
@@ -7604,7 +7604,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/cli-skill/3",
@@ -7638,11 +7638,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/CHANGELOG.md\", \"offset\": 405, \"limit\": 22}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/CHANGELOG.md\", \"offset\": 405, \"limit\": 22}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn |sha|checksum\", \"-i\": true, \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\", \"head_limit\": 80}"
+          "input": "{\"pattern\": \"fn |sha|checksum\", \"-i\": true, \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\", \"head_limit\": 80}"
         }
       ],
       "tool_errors": 0,
@@ -7679,7 +7679,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/semantiq-guided/1",
@@ -7747,7 +7747,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__1.jsonl",
       "first_context_tokens": 9058
     },
     {
@@ -7817,7 +7817,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/semantiq-guided/3",
@@ -7886,7 +7886,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/semantiq/1",
@@ -7953,7 +7953,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__1.jsonl",
       "first_context_tokens": 8441
     },
     {
@@ -7990,7 +7990,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"compute_sha256|MODEL_SHA256|TOKENIZER_SHA256|^\\\\s*(pub )?(async )?fn \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"compute_sha256|MODEL_SHA256|TOKENIZER_SHA256|^\\\\s*(pub )?(async )?fn \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-embeddings/src/model.rs\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -8027,7 +8027,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-model-integrity/semantiq/3",
@@ -8095,7 +8095,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-model-integrity__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/baseline/1",
@@ -8161,7 +8161,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/baseline/2",
@@ -8190,7 +8190,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
         }
       ],
       "tool_errors": 0,
@@ -8231,7 +8231,7 @@
         "precision": 0.75,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/baseline/3",
@@ -8260,11 +8260,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 335, \"limit\": 50}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 335, \"limit\": 50}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"\\\\.\\\\.|traversal\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src\", \"output_mode\": \"content\", \"glob\": \"!**/tests/**\", \"head_limit\": 20}"
+          "input": "{\"pattern\": \"\\\\.\\\\.|traversal\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src\", \"output_mode\": \"content\", \"glob\": \"!**/tests/**\", \"head_limit\": 20}"
         }
       ],
       "tool_errors": 0,
@@ -8303,7 +8303,7 @@
         "precision": 0.5,
         "success": false
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/cli-skill/1",
@@ -8378,7 +8378,7 @@
         "precision": 0.75,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/cli-skill/2",
@@ -8412,7 +8412,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
         }
       ],
       "tool_errors": 0,
@@ -8453,7 +8453,7 @@
         "precision": 0.75,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/cli-skill/3",
@@ -8528,7 +8528,7 @@
         "precision": 0.8,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq-guided/1",
@@ -8568,7 +8568,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 695, \"limit\": 30}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 695, \"limit\": 30}"
         }
       ],
       "tool_errors": 0,
@@ -8605,7 +8605,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq-guided/2",
@@ -8641,7 +8641,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 335, \"limit\": 50}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 335, \"limit\": 50}"
         }
       ],
       "tool_errors": 0,
@@ -8677,7 +8677,7 @@
         "precision": 1.0,
         "success": false
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq-guided/3",
@@ -8717,11 +8717,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 345, \"limit\": 25}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq/src/http/routes.rs\", \"offset\": 285, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq/src/http/routes.rs\", \"offset\": 285, \"limit\": 25}"
         }
       ],
       "tool_errors": 0,
@@ -8758,7 +8758,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq/1",
@@ -8806,7 +8806,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 695, \"limit\": 40}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 695, \"limit\": 40}"
         },
         {
           "name": "Grep",
@@ -8850,7 +8850,7 @@
         "precision": 0.667,
         "success": false
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq/2",
@@ -8886,11 +8886,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 340, \"limit\": 30}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 340, \"limit\": 30}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq/src/http/routes.rs\", \"offset\": 290, \"limit\": 20}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq/src/http/routes.rs\", \"offset\": 290, \"limit\": 20}"
         }
       ],
       "tool_errors": 0,
@@ -8930,7 +8930,7 @@
         "precision": 0.75,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-path-guard/semantiq/3",
@@ -8970,7 +8970,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 340, \"limit\": 35}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-mcp/src/server.rs\", \"offset\": 340, \"limit\": 35}"
         }
       ],
       "tool_errors": 0,
@@ -9007,7 +9007,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-path-guard__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/baseline/1",
@@ -9036,7 +9036,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 100}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 100}"
         }
       ],
       "tool_errors": 0,
@@ -9070,7 +9070,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__1.jsonl",
       "first_context_tokens": 6866
     },
     {
@@ -9100,7 +9100,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
         }
       ],
       "tool_errors": 0,
@@ -9136,7 +9136,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/baseline/3",
@@ -9165,7 +9165,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
         }
       ],
       "tool_errors": 0,
@@ -9200,7 +9200,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/cli-skill/1",
@@ -9234,11 +9234,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 100, \"limit\": 130}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 100, \"limit\": 130}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 420, \"limit\": 25}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 420, \"limit\": 25}"
         }
       ],
       "tool_errors": 0,
@@ -9273,7 +9273,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/cli-skill/2",
@@ -9334,7 +9334,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/cli-skill/3",
@@ -9364,7 +9364,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"rename|Rename|remove|delete\", \"-i\": true, \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src\"}"
+          "input": "{\"pattern\": \"rename|Rename|remove|delete\", \"-i\": true, \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src\"}"
         }
       ],
       "tool_errors": 0,
@@ -9398,7 +9398,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/semantiq-guided/1",
@@ -9465,7 +9465,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__1.jsonl",
       "first_context_tokens": 9057
     },
     {
@@ -9534,7 +9534,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/semantiq-guided/3",
@@ -9602,7 +9602,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/semantiq/1",
@@ -9638,7 +9638,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
         }
       ],
       "tool_errors": 0,
@@ -9673,7 +9673,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__1.jsonl",
       "first_context_tokens": 8440
     },
     {
@@ -9710,11 +9710,11 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"offset\": 120, \"limit\": 90}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn \", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"fn \", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/auto_indexer.rs\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -9750,7 +9750,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-rename/semantiq/3",
@@ -9816,7 +9816,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-rename__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/baseline/1",
@@ -9881,7 +9881,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__1.jsonl",
       "first_context_tokens": 6880
     },
     {
@@ -9949,7 +9949,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/baseline/3",
@@ -10016,7 +10016,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/cli-skill/1",
@@ -10084,7 +10084,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/cli-skill/2",
@@ -10152,7 +10152,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/cli-skill/3",
@@ -10221,7 +10221,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/semantiq-guided/1",
@@ -10297,7 +10297,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__1.jsonl",
       "first_context_tokens": 9071
     },
     {
@@ -10371,7 +10371,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/semantiq-guided/3",
@@ -10444,7 +10444,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/semantiq/1",
@@ -10516,7 +10516,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__1.jsonl",
       "first_context_tokens": 8454
     },
     {
@@ -10591,7 +10591,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-concept-upgrade-wipe/semantiq/3",
@@ -10665,7 +10665,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-concept-upgrade-wipe__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/baseline/1",
@@ -10722,7 +10722,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__1.jsonl",
       "first_context_tokens": 6846
     },
     {
@@ -10781,7 +10781,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/baseline/3",
@@ -10839,7 +10839,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/cli-skill/1",
@@ -10898,7 +10898,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/cli-skill/2",
@@ -10957,7 +10957,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/cli-skill/3",
@@ -11016,7 +11016,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/semantiq-guided/1",
@@ -11084,7 +11084,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__1.jsonl",
       "first_context_tokens": 9037
     },
     {
@@ -11154,7 +11154,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/semantiq-guided/3",
@@ -11223,7 +11223,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/semantiq/1",
@@ -11291,7 +11291,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__1.jsonl",
       "first_context_tokens": 8420
     },
     {
@@ -11361,7 +11361,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-default-db/semantiq/3",
@@ -11430,7 +11430,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-default-db__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/baseline/1",
@@ -11487,7 +11487,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__1.jsonl",
       "first_context_tokens": 6848
     },
     {
@@ -11546,7 +11546,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/baseline/3",
@@ -11604,7 +11604,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/cli-skill/1",
@@ -11663,7 +11663,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/cli-skill/2",
@@ -11722,7 +11722,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/cli-skill/3",
@@ -11781,7 +11781,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/semantiq-guided/1",
@@ -11845,7 +11845,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__1.jsonl",
       "first_context_tokens": 9039
     },
     {
@@ -11911,7 +11911,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/semantiq-guided/3",
@@ -11976,7 +11976,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/semantiq/1",
@@ -12040,7 +12040,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__1.jsonl",
       "first_context_tokens": 8422
     },
     {
@@ -12106,7 +12106,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-onnx-threads/semantiq/3",
@@ -12171,7 +12171,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-onnx-threads__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/baseline/1",
@@ -12230,7 +12230,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__1.jsonl",
       "first_context_tokens": 6846
     },
     {
@@ -12291,7 +12291,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/baseline/3",
@@ -12351,7 +12351,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/cli-skill/1",
@@ -12412,7 +12412,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/cli-skill/2",
@@ -12473,7 +12473,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/cli-skill/3",
@@ -12534,7 +12534,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/semantiq-guided/1",
@@ -12600,7 +12600,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__1.jsonl",
       "first_context_tokens": 9037
     },
     {
@@ -12668,7 +12668,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/semantiq-guided/3",
@@ -12735,7 +12735,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/semantiq/1",
@@ -12801,7 +12801,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__1.jsonl",
       "first_context_tokens": 8420
     },
     {
@@ -12869,7 +12869,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-parser-version/semantiq/3",
@@ -12936,7 +12936,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-parser-version__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/baseline/1",
@@ -12993,7 +12993,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__1.jsonl",
       "first_context_tokens": 6834
     },
     {
@@ -13052,7 +13052,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/baseline/3",
@@ -13110,7 +13110,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/cli-skill/1",
@@ -13169,7 +13169,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/cli-skill/2",
@@ -13228,7 +13228,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/cli-skill/3",
@@ -13287,7 +13287,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/semantiq-guided/1",
@@ -13351,7 +13351,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__1.jsonl",
       "first_context_tokens": 9025
     },
     {
@@ -13417,7 +13417,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/semantiq-guided/3",
@@ -13482,7 +13482,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/semantiq/1",
@@ -13546,7 +13546,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__1.jsonl",
       "first_context_tokens": 8408
     },
     {
@@ -13612,7 +13612,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-exact-query-expander/semantiq/3",
@@ -13677,7 +13677,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-exact-query-expander__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/baseline/1",
@@ -13736,7 +13736,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__1.jsonl",
       "first_context_tokens": 6839
     },
     {
@@ -13797,7 +13797,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/baseline/3",
@@ -13857,7 +13857,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/cli-skill/1",
@@ -13918,7 +13918,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/cli-skill/2",
@@ -13979,7 +13979,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/cli-skill/3",
@@ -14040,7 +14040,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/semantiq-guided/1",
@@ -14106,7 +14106,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__1.jsonl",
       "first_context_tokens": 9030
     },
     {
@@ -14174,7 +14174,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/semantiq-guided/3",
@@ -14241,7 +14241,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/semantiq/1",
@@ -14307,7 +14307,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__1.jsonl",
       "first_context_tokens": 8413
     },
     {
@@ -14375,7 +14375,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-embedding-impls/semantiq/3",
@@ -14442,7 +14442,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-embedding-impls__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/baseline/1",
@@ -14503,7 +14503,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__1.jsonl",
       "first_context_tokens": 6859
     },
     {
@@ -14566,7 +14566,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/baseline/3",
@@ -14628,7 +14628,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/cli-skill/1",
@@ -14691,7 +14691,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/cli-skill/2",
@@ -14754,7 +14754,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/cli-skill/3",
@@ -14817,7 +14817,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/semantiq-guided/1",
@@ -14885,7 +14885,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__1.jsonl",
       "first_context_tokens": 9050
     },
     {
@@ -14955,7 +14955,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/semantiq-guided/3",
@@ -15024,7 +15024,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/semantiq/1",
@@ -15092,7 +15092,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__1.jsonl",
       "first_context_tokens": 8433
     },
     {
@@ -15162,7 +15162,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-exclude-entry-callers/semantiq/3",
@@ -15231,7 +15231,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-exclude-entry-callers__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/baseline/1",
@@ -15260,7 +15260,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 40, \"offset\": 65}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 40, \"offset\": 65}"
         },
         {
           "name": "Grep",
@@ -15299,7 +15299,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__1.jsonl",
       "first_context_tokens": 6860
     },
     {
@@ -15329,7 +15329,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 65, \"limit\": 40}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 65, \"limit\": 40}"
         },
         {
           "name": "Grep",
@@ -15337,7 +15337,7 @@
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine; grep -n \\\"fn \\\\|search_symbols\\\\|search_by_terms\\\" search.rs | sed -n 1,80p\"}"
+          "input": "{\"command\": \"cd $TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine; grep -n \\\"fn \\\\|search_symbols\\\\|search_by_terms\\\" search.rs | sed -n 1,80p\"}"
         }
       ],
       "tool_errors": 0,
@@ -15373,7 +15373,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/baseline/3",
@@ -15402,7 +15402,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 60, \"limit\": 50}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 60, \"limit\": 50}"
         },
         {
           "name": "Grep",
@@ -15410,7 +15410,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"^\\\\s*(pub(\\\\(crate\\\\))? )?fn |search_symbols|self\\\\.store\\\\.search\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"output_mode\": \"content\"}"
+          "input": "{\"pattern\": \"^\\\\s*(pub(\\\\(crate\\\\))? )?fn |search_symbols|self\\\\.store\\\\.search\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"output_mode\": \"content\"}"
         }
       ],
       "tool_errors": 0,
@@ -15446,7 +15446,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/cli-skill/1",
@@ -15476,7 +15476,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 100}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 100}"
         },
         {
           "name": "Grep",
@@ -15522,7 +15522,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/cli-skill/2",
@@ -15552,7 +15552,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 100}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"limit\": 100}"
         },
         {
           "name": "Grep",
@@ -15560,15 +15560,15 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"fn search\\\\(|\\\\.search\\\\(|fn \\\\w+.*\\\\n?.*search_symbols\", \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates\", \"glob\": \"*.rs\", \"head_limit\": 30}"
+          "input": "{\"pattern\": \"fn search\\\\(|\\\\.search\\\\(|fn \\\\w+.*\\\\n?.*search_symbols\", \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates\", \"glob\": \"*.rs\", \"head_limit\": 30}"
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 85, \"limit\": 40}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 85, \"limit\": 40}"
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"pub fn \\\\w+|pub\\\\(crate\\\\) fn \\\\w+\", \"output_mode\": \"content\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/engine/search.rs\", \"head_limit\": 12}"
+          "input": "{\"pattern\": \"pub fn \\\\w+|pub\\\\(crate\\\\) fn \\\\w+\", \"output_mode\": \"content\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-retrieval/src/engine/search.rs\", \"head_limit\": 12}"
         }
       ],
       "tool_errors": 0,
@@ -15604,7 +15604,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/cli-skill/3",
@@ -15634,7 +15634,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 60, \"limit\": 50}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq-index/src/store/symbols.rs\", \"offset\": 60, \"limit\": 50}"
         },
         {
           "name": "Grep",
@@ -15642,7 +15642,7 @@
         },
         {
           "name": "Bash",
-          "input": "{\"command\": \"cd crates/semantiq-retrieval/src/engine; grep -n \\\"fn \\\" search.rs | awk -F: '$1<440' | tail -8; grep -rn \\\"search_symbols\\\" /private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates --include=*.rs | grep -v \\\"store.search_symbols\\"
+          "input": "{\"command\": \"cd crates/semantiq-retrieval/src/engine; grep -n \\\"fn \\\" search.rs | awk -F: '$1<440' | tail -8; grep -rn \\\"search_symbols\\\" $TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates --include=*.rs | grep -v \\\"store.search_symbols\\"
         }
       ],
       "tool_errors": 0,
@@ -15678,7 +15678,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/semantiq-guided/1",
@@ -15751,7 +15751,7 @@
         "precision": 0.75,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__1.jsonl",
       "first_context_tokens": 9051
     },
     {
@@ -15824,7 +15824,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/semantiq-guided/3",
@@ -15896,7 +15896,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/semantiq/1",
@@ -15971,7 +15971,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__1.jsonl",
       "first_context_tokens": 8434
     },
     {
@@ -16050,7 +16050,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-fts-escape/semantiq/3",
@@ -16133,7 +16133,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-fts-escape__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/baseline/1",
@@ -16202,7 +16202,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__1.jsonl",
       "first_context_tokens": 6853
     },
     {
@@ -16277,7 +16277,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/baseline/3",
@@ -16351,7 +16351,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/cli-skill/1",
@@ -16422,7 +16422,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/cli-skill/2",
@@ -16493,7 +16493,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/cli-skill/3",
@@ -16531,7 +16531,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq/src/http/mod.rs\", \"limit\": 70}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates/semantiq/src/http/mod.rs\", \"limit\": 70}"
         }
       ],
       "tool_errors": 0,
@@ -16570,7 +16570,7 @@
         "precision": 0.5,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/semantiq-guided/1",
@@ -16646,7 +16646,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__1.jsonl",
       "first_context_tokens": 9044
     },
     {
@@ -16723,7 +16723,7 @@
         "precision": 0.5,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/semantiq-guided/3",
@@ -16804,7 +16804,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/semantiq/1",
@@ -16880,7 +16880,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__1.jsonl",
       "first_context_tokens": 8427
     },
     {
@@ -16962,7 +16962,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-impact-exposure/semantiq/3",
@@ -17039,7 +17039,7 @@
         "precision": 0.667,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-impact-exposure__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/baseline/1",
@@ -17105,7 +17105,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/baseline/2",
@@ -17171,7 +17171,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/baseline/3",
@@ -17237,7 +17237,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/cli-skill/1",
@@ -17304,7 +17304,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/cli-skill/2",
@@ -17371,7 +17371,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/cli-skill/3",
@@ -17438,7 +17438,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq-guided/1",
@@ -17515,7 +17515,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq-guided/2",
@@ -17588,7 +17588,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq-guided/3",
@@ -17661,7 +17661,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq/1",
@@ -17734,7 +17734,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq/2",
@@ -17807,7 +17807,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-open-callers/semantiq/3",
@@ -17880,7 +17880,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-open-callers__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/baseline/1",
@@ -17943,7 +17943,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__1.jsonl",
       "first_context_tokens": 6856
     },
     {
@@ -18008,7 +18008,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/baseline/3",
@@ -18072,7 +18072,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/cli-skill/1",
@@ -18137,7 +18137,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/cli-skill/2",
@@ -18202,7 +18202,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/cli-skill/3",
@@ -18267,7 +18267,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/semantiq-guided/1",
@@ -18337,7 +18337,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__1.jsonl",
       "first_context_tokens": 9047
     },
     {
@@ -18409,7 +18409,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/semantiq-guided/3",
@@ -18480,7 +18480,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/semantiq/1",
@@ -18550,7 +18550,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__1.jsonl",
       "first_context_tokens": 8430
     },
     {
@@ -18622,7 +18622,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-relpath-impact/semantiq/3",
@@ -18693,7 +18693,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-relpath-impact__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/baseline/1",
@@ -18754,7 +18754,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__1.jsonl",
       "first_context_tokens": 6867
     },
     {
@@ -18817,7 +18817,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/baseline/3",
@@ -18879,7 +18879,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/cli-skill/1",
@@ -18942,7 +18942,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/cli-skill/2",
@@ -19005,7 +19005,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/cli-skill/3",
@@ -19068,7 +19068,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/semantiq-guided/1",
@@ -19136,7 +19136,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__1.jsonl",
       "first_context_tokens": 9058
     },
     {
@@ -19206,7 +19206,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/semantiq-guided/3",
@@ -19275,7 +19275,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/semantiq/1",
@@ -19343,7 +19343,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__1.jsonl",
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__1.jsonl",
       "first_context_tokens": 8441
     },
     {
@@ -19413,7 +19413,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-search-callers/semantiq/3",
@@ -19482,7 +19482,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-search-callers__semantiq__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/baseline/1",
@@ -19551,7 +19551,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/baseline/2",
@@ -19620,7 +19620,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/baseline/3",
@@ -19649,7 +19649,7 @@
         },
         {
           "name": "Read",
-          "input": "{\"file_path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 85, \"limit\": 40}"
+          "input": "{\"file_path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq/crates/semantiq-retrieval/src/engine/search.rs\", \"offset\": 85, \"limit\": 40}"
         },
         {
           "name": "Grep",
@@ -19693,7 +19693,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__baseline__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/cli-skill/1",
@@ -19763,7 +19763,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/cli-skill/2",
@@ -19797,7 +19797,7 @@
         },
         {
           "name": "Grep",
-          "input": "{\"pattern\": \"\\\\.search\\\\(|fn search|\\\\.search_with|\\\\.search_async\", \"path\": \"/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates\", \"output_mode\": \"content\", \"glob\": \"*.rs\"}"
+          "input": "{\"pattern\": \"\\\\.search\\\\(|fn search|\\\\.search_with|\\\\.search_async\", \"path\": \"$TMPDIR/semantiq-agent-bench/checkouts/semantiq-cli-skill/crates\", \"output_mode\": \"content\", \"glob\": \"*.rs\"}"
         }
       ],
       "tool_errors": 0,
@@ -19837,7 +19837,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/cli-skill/3",
@@ -19907,7 +19907,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__cli-skill__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq-guided/1",
@@ -19988,7 +19988,7 @@
         "precision": 0.714,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq-guided/2",
@@ -20069,7 +20069,7 @@
         "precision": 0.714,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq-guided/3",
@@ -20150,7 +20150,7 @@
         "precision": 0.714,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq-guided__3.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq/1",
@@ -20234,7 +20234,7 @@
         "precision": 1.0,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__1.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__1.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq/2",
@@ -20317,7 +20317,7 @@
         "precision": 0.833,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__2.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__2.jsonl"
     },
     {
       "key": "semantiq/sq-struct-transitive-search-symbols/semantiq/3",
@@ -20402,7 +20402,7 @@
         "precision": 0.714,
         "success": true
       },
-      "transcript": "/private/var/folders/j2/5j8t7l910ng8x0ychgq51cvc0000gp/T/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__3.jsonl"
+      "transcript": "$TMPDIR/semantiq-agent-bench/transcripts/2026-10-06/semantiq__sq-struct-transitive-search-symbols__semantiq__3.jsonl"
     }
   ]
 }
