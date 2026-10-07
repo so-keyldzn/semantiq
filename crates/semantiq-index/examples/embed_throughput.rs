@@ -11,7 +11,9 @@
 //! - `cross-file-sorted`: windows of 256 chunks sorted by length, then batches
 //!   of 32 (what phase 2 does).
 //!
-//! Rounds alternate the strategies so a CPU load change hits all of them.
+//! Rounds alternate the strategies so a CPU load change hits all of them. A
+//! fourth argument runs a single strategy, to compare CPU time per process
+//! (`/usr/bin/time`), which a loaded machine distorts less than wall time.
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
@@ -31,6 +33,7 @@ fn main() -> Result<()> {
         .context("usage: embed_throughput <db> [chunks] [rounds]")?;
     let limit: usize = args.next().map(|a| a.parse()).transpose()?.unwrap_or(1024);
     let rounds: usize = args.next().map(|a| a.parse()).transpose()?.unwrap_or(2);
+    let only = args.next();
 
     let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = conn.prepare("SELECT file_id, content FROM chunks ORDER BY id LIMIT ?1")?;
@@ -66,6 +69,9 @@ fn main() -> Result<()> {
     let mut totals = [0f64; 3];
     for round in 0..rounds {
         for (i, (name, run)) in strategies.iter().enumerate() {
+            if only.as_deref().is_some_and(|only| only != *name) {
+                continue;
+            }
             let start = Instant::now();
             let passes = run(model.as_ref(), &chunks)?;
             let secs = start.elapsed().as_secs_f64();
@@ -81,6 +87,9 @@ fn main() -> Result<()> {
         }
     }
     for (i, (name, _)) in strategies.iter().enumerate() {
+        if totals[i] == 0.0 {
+            continue;
+        }
         println!(
             "mean   {:<18} {:>7.1}s {:>6.1} chunks/s",
             name,
