@@ -95,7 +95,7 @@ fn build_index() -> Option<Arc<IndexStore>> {
                 // `RetrievalEngine::search` -> `embed_query`.
                 for c in stored {
                     if let Ok(emb) = model.embed(&c.content) {
-                        let _ = store.update_chunk_embedding(c.id, &emb);
+                        let _ = store.store_chunk_embeddings(&[(c.id, emb.as_slice())]);
                     }
                 }
             }

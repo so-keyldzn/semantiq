@@ -162,19 +162,13 @@ impl IndexStore {
         }
     }
 
-    /// Update the embedding for a chunk.
-    ///
-    /// The two writes (the `chunks.embedding` BLOB and the `chunks_vec` virtual
-    /// table row) are wrapped in a single `BEGIN IMMEDIATE`/`COMMIT` transaction
-    /// so a failure on the second write can never leave the chunk with a stored
-    /// embedding but no searchable vector (or vice versa).
-    pub fn update_chunk_embedding(&self, chunk_id: i64, embedding: &[f32]) -> Result<()> {
-        self.store_chunk_embeddings(&[(chunk_id, embedding)])
-            .map(|_| ())
-    }
-
     /// Store the embeddings of several chunks in one transaction and return
     /// how many were written.
+    ///
+    /// The two writes per chunk (the `chunks.embedding` BLOB and the
+    /// `chunks_vec` virtual table row) share the transaction, so a failure on
+    /// the second write can never leave a chunk with a stored embedding but no
+    /// searchable vector (or vice versa).
     ///
     /// A chunk deleted since its content was read (its file was reindexed while
     /// the vector was computed) is skipped: no `chunks_vec` row is written for
@@ -385,7 +379,9 @@ impl IndexStore {
         })
     }
 
-    /// Get all chunks for a file.
+    /// All chunks of a file. Test support only: production code reads chunks
+    /// by id (`get_chunks_by_ids`) or by pending state.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn get_chunks_by_file(&self, file_id: i64) -> Result<Vec<ChunkRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(

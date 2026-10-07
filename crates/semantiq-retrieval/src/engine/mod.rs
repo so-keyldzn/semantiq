@@ -178,17 +178,6 @@ impl RetrievalEngine {
     pub fn distance_collector(&self) -> Option<&DistanceCollector> {
         self.distance_collector.as_ref()
     }
-
-    /// Get bootstrap status information.
-    pub fn bootstrap_status(&self) -> Option<(bool, u8, usize)> {
-        self.distance_collector.as_ref().map(|c| {
-            (
-                c.is_bootstrap(),
-                c.bootstrap_progress(),
-                c.total_observations(),
-            )
-        })
-    }
 }
 
 #[cfg(test)]

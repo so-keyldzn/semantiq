@@ -20,7 +20,15 @@ tracing.workspace = true
 notify.workspace = true
 ignore.workspace = true
 
+[features]
+default = []
+# Store accessors that only tests need (`get_chunks_by_file`, `needs_full_reindex`,
+# `set_parser_version`). Enabled by the dev-dependencies of this crate and of
+# semantiq-retrieval, never by a binary.
+test-support = []
+
 [dev-dependencies]
 # Tests never download the embedding model (see the `test-stub` feature).
 semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
+semantiq-index = { path = ".", features = ["test-support"] }
 tempfile.workspace = true

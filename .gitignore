@@ -30,3 +30,5 @@ models/
 docs/
 .claude/settings.json
 .claude
+
+__pycache__

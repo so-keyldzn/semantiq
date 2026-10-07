@@ -173,7 +173,7 @@ fn test_insert_and_get_chunks() {
 }
 
 #[test]
-fn test_update_chunk_embedding() {
+fn test_store_chunk_embeddings() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
@@ -197,13 +197,15 @@ fn test_update_chunk_embedding() {
     let embedding: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
         .map(|i| i as f32 * 0.001)
         .collect();
-    store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+    store
+        .store_chunk_embeddings(&[(chunk_id, embedding.as_slice())])
+        .unwrap();
 
     assert_eq!(store.embedding_counts().unwrap().pending(), 0);
 }
 
 #[test]
-fn test_update_chunk_embedding_rejects_wrong_dimension() {
+fn test_store_chunk_embeddings_rejects_wrong_dimension() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
@@ -224,7 +226,7 @@ fn test_update_chunk_embedding_rejects_wrong_dimension() {
     // Too short
     let too_short: Vec<f32> = vec![0.1; crate::schema::EMBEDDING_DIMENSION - 1];
     let err = store
-        .update_chunk_embedding(chunk_id, &too_short)
+        .store_chunk_embeddings(&[(chunk_id, too_short.as_slice())])
         .unwrap_err();
     assert!(
         err.to_string()
@@ -234,7 +236,11 @@ fn test_update_chunk_embedding_rejects_wrong_dimension() {
 
     // Too long
     let too_long: Vec<f32> = vec![0.1; crate::schema::EMBEDDING_DIMENSION + 1];
-    assert!(store.update_chunk_embedding(chunk_id, &too_long).is_err());
+    assert!(
+        store
+            .store_chunk_embeddings(&[(chunk_id, too_long.as_slice())])
+            .is_err()
+    );
 
     // The rejected writes must not have stored anything.
     assert_eq!(store.embedding_counts().unwrap().pending(), 1);
@@ -242,7 +248,7 @@ fn test_update_chunk_embedding_rejects_wrong_dimension() {
 }
 
 #[test]
-fn test_update_chunk_embedding_writes_both_tables_atomically() {
+fn test_store_chunk_embeddings_writes_both_tables_atomically() {
     let store = IndexStore::open_in_memory().unwrap();
 
     let file_id = store
@@ -262,7 +268,9 @@ fn test_update_chunk_embedding_writes_both_tables_atomically() {
     let embedding: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)
         .map(|i| i as f32 * 0.001)
         .collect();
-    store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+    store
+        .store_chunk_embeddings(&[(chunk_id, embedding.as_slice())])
+        .unwrap();
 
     // chunks.embedding populated (no longer "without embedding")
     assert_eq!(store.embedding_counts().unwrap().pending(), 0);
@@ -295,7 +303,9 @@ fn test_insert_file_keeps_stable_id_and_no_orphans() {
     store.insert_chunks(file_id, &chunks).unwrap();
     let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
     let embedding: Vec<f32> = vec![0.5; crate::schema::EMBEDDING_DIMENSION];
-    store.update_chunk_embedding(chunk_id, &embedding).unwrap();
+    store
+        .store_chunk_embeddings(&[(chunk_id, embedding.as_slice())])
+        .unwrap();
 
     // Re-index: same path, different content/size/hash.
     let file_id2 = store
@@ -373,13 +383,13 @@ fn test_vector_search() {
         .collect();
 
     store
-        .update_chunk_embedding(stored_chunks[0].id, &embedding1)
+        .store_chunk_embeddings(&[(stored_chunks[0].id, embedding1.as_slice())])
         .unwrap();
     store
-        .update_chunk_embedding(stored_chunks[1].id, &embedding2)
+        .store_chunk_embeddings(&[(stored_chunks[1].id, embedding2.as_slice())])
         .unwrap();
     store
-        .update_chunk_embedding(stored_chunks[2].id, &embedding3)
+        .store_chunk_embeddings(&[(stored_chunks[2].id, embedding3.as_slice())])
         .unwrap();
 
     let query: Vec<f32> = (0..crate::schema::EMBEDDING_DIMENSION)

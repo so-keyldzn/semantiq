@@ -2132,6 +2132,7 @@ dependencies = [
  "notify",
  "rusqlite",
  "semantiq-embeddings",
+ "semantiq-index",
  "semantiq-parser",
  "serde",
  "serde_json",

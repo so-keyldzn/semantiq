@@ -141,7 +141,9 @@ impl IndexStore {
 
     // Parser version management
 
-    /// Check if a full re-index is needed (parser version changed).
+    /// Check if a full re-index is needed (parser version changed). Test
+    /// support only: production goes through `check_and_prepare_for_reindex`.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn needs_full_reindex(&self) -> Result<bool> {
         self.with_conn(Self::needs_full_reindex_impl)
     }
@@ -174,7 +176,9 @@ impl IndexStore {
         }
     }
 
-    /// Update the parser version in metadata.
+    /// Update the parser version in metadata. Test support only: production
+    /// stamps it inside `check_and_prepare_for_reindex`.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_parser_version(&self) -> Result<()> {
         self.with_conn(Self::set_parser_version_impl)
     }

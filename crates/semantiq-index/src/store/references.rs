@@ -84,9 +84,8 @@ impl IndexStore {
         })
     }
 
-    /// Number of non-definition occurrences of an exact identifier name.
-    /// Non-definition occurrences of `name`, counting every occurrence on a
-    /// line (`refs.count`), not just the lines.
+    /// Number of non-definition occurrences of an exact identifier name,
+    /// counting every occurrence on a line (`refs.count`), not just the lines.
     pub fn count_usages(&self, name: &str) -> Result<usize> {
         self.with_conn(|conn| {
             let count: i64 = conn.query_row(

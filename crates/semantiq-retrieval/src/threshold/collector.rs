@@ -111,18 +111,6 @@ impl DistanceCollector {
         }
     }
 
-    /// Create a collector that starts in production mode (no bootstrap).
-    pub fn production(config: CollectorConfig) -> Self {
-        Self {
-            buffer: Mutex::new(Vec::with_capacity(config.buffer_size)),
-            in_bootstrap: AtomicBool::new(false),
-            total_observations: AtomicUsize::new(config.bootstrap_threshold + 1),
-            needs_calibration: AtomicBool::new(false),
-            sample_counter: Mutex::new(0),
-            config,
-        }
-    }
-
     /// Retention of stored observations, in seconds (`max_age_days`).
     pub fn max_age_secs(&self) -> i64 {
         self.config.max_age_days.saturating_mul(86_400)

@@ -55,7 +55,7 @@ fn reindex_same_file_does_not_leak_vectors() {
     assert_eq!(stored.len(), 3);
     for (i, c) in stored.iter().enumerate() {
         store
-            .update_chunk_embedding(c.id, &make_embedding(i as f32))
+            .store_chunk_embeddings(&[(c.id, make_embedding(i as f32).as_slice())])
             .unwrap();
     }
 
@@ -67,7 +67,7 @@ fn reindex_same_file_does_not_leak_vectors() {
     assert_eq!(stored2.len(), 2);
     for (i, c) in stored2.iter().enumerate() {
         store
-            .update_chunk_embedding(c.id, &make_embedding(10.0 + i as f32))
+            .store_chunk_embeddings(&[(c.id, make_embedding(10.0 + i as f32).as_slice())])
             .unwrap();
     }
 
@@ -85,7 +85,7 @@ fn delete_file_purges_vectors() {
     let stored = store.get_chunks_by_file(file_id).unwrap();
     for c in &stored {
         store
-            .update_chunk_embedding(c.id, &make_embedding(0.5))
+            .store_chunk_embeddings(&[(c.id, make_embedding(0.5).as_slice())])
             .unwrap();
     }
 
@@ -104,7 +104,7 @@ fn clear_all_data_purges_vectors() {
     store.insert_chunks(file_id, &chunks).unwrap();
     for c in store.get_chunks_by_file(file_id).unwrap() {
         store
-            .update_chunk_embedding(c.id, &make_embedding(0.7))
+            .store_chunk_embeddings(&[(c.id, make_embedding(0.7).as_slice())])
             .unwrap();
     }
 
@@ -116,7 +116,7 @@ fn clear_all_data_purges_vectors() {
 /// Regression for the real production leak path (HIGH-1 / HIGH-2).
 ///
 /// `AutoIndexer::index_file` calls `insert_file(path, ...)` on every reindex,
-/// then `insert_chunks(file_id, ...)`, then `update_chunk_embedding(...)`.
+/// then `insert_chunks(file_id, ...)`, then `store_chunk_embeddings(...)`.
 ///
 /// The original bug: `insert_file` used `INSERT OR REPLACE`. Re-inserting the
 /// same path deleted the old `files` row (FK CASCADE wiped its `chunks`, but
@@ -146,14 +146,14 @@ fn prod_reindex_path_does_not_leak_vectors() {
     store.insert_chunks(id_v1, &chunks_v1).unwrap();
     for (i, c) in store.get_chunks_by_file(id_v1).unwrap().iter().enumerate() {
         store
-            .update_chunk_embedding(c.id, &make_embedding(i as f32))
+            .store_chunk_embeddings(&[(c.id, make_embedding(i as f32).as_slice())])
             .unwrap();
     }
     assert_no_orphans(&store, "after V1 index pass");
 
     // --- Pass 2: same path, new content V2 (hash V2). This is the exact call
     // order AutoIndexer uses on a reindex: insert_file -> insert_chunks ->
-    // update_chunk_embedding. ---
+    // store_chunk_embeddings. ---
     let id_v2 = store
         .insert_file("app.rs", Some("rust"), "fn v2_x() {}", 2000)
         .unwrap();
@@ -170,7 +170,7 @@ fn prod_reindex_path_does_not_leak_vectors() {
     store.insert_chunks(id_v2, &chunks_v2).unwrap();
     for c in store.get_chunks_by_file(id_v2).unwrap() {
         store
-            .update_chunk_embedding(c.id, &make_embedding(100.0))
+            .store_chunk_embeddings(&[(c.id, make_embedding(100.0).as_slice())])
             .unwrap();
     }
 
@@ -203,7 +203,7 @@ fn many_reindexes_keep_invariant() {
         store.insert_chunks(file_id, &chunks).unwrap();
         for c in store.get_chunks_by_file(file_id).unwrap() {
             store
-                .update_chunk_embedding(c.id, &make_embedding(i as f32))
+                .store_chunk_embeddings(&[(c.id, make_embedding(i as f32).as_slice())])
                 .unwrap();
         }
     }

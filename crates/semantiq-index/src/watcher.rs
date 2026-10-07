@@ -43,12 +43,6 @@ impl FileWatcher {
         Ok(())
     }
 
-    pub fn unwatch(&mut self, path: &Path) -> Result<()> {
-        self.watcher.unwatch(path)?;
-        self.watched_paths.retain(|p| p != path);
-        Ok(())
-    }
-
     pub fn poll_events(&self) -> Vec<FileEvent> {
         let mut events = Vec::new();
 

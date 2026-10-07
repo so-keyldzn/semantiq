@@ -184,7 +184,7 @@ fn migrate_v5_to_v6_recreates_chunks_vec_and_forces_reindex() {
         .unwrap();
     let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
     store
-        .update_chunk_embedding(chunk_id, &vec![0.1; EMBEDDING_DIMENSION])
+        .store_chunk_embeddings(&[(chunk_id, vec![0.1; EMBEDDING_DIMENSION].as_slice())])
         .unwrap();
     drop(store);
 
@@ -306,7 +306,7 @@ fn switching_between_stub_and_onnx_builds_resets_index() {
         .unwrap();
     let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
     store
-        .update_chunk_embedding(chunk_id, &vec![0.0; EMBEDDING_DIMENSION])
+        .store_chunk_embeddings(&[(chunk_id, vec![0.0; EMBEDDING_DIMENSION].as_slice())])
         .unwrap();
     drop(store);
 

@@ -29,4 +29,5 @@ onnx = ["semantiq-embeddings/onnx"]
 [dev-dependencies]
 # Tests never download the embedding model (see the `test-stub` feature).
 semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
+semantiq-index = { path = "../semantiq-index", features = ["test-support"] }
 tempfile.workspace = true

@@ -162,6 +162,7 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 ### Testing Patterns
 
 - **In-memory DB**: `IndexStore::open_in_memory()` is the standard test fixture — no temp files needed for DB tests.
+- **Test-only store accessors**: `get_chunks_by_file`, `needs_full_reindex` and `set_parser_version` exist only under the `semantiq-index/test-support` feature (enabled by the dev-dependencies of `semantiq-index` and `semantiq-retrieval`); production reads chunks by id and goes through `check_and_prepare_for_reindex`. Set embeddings in tests with `store_chunk_embeddings`.
 - **MCP server tests**: `create_test_server()` in `server.rs` builds a server without background tasks. Uses `TempDir` for tests needing physical files.
 - **Async tests**: MCP tool handlers use `#[tokio::test]`.
 - **Parser tests**: `LanguageSupport::new()` + `support.parse(Language::X, source)`. `tests/expanded_coverage.rs` audits one construct per language (`audit_*`), `tests/bug_probes.rs` pins regressions (`b1_...` numbered probes); add a probe when fixing an extraction bug.

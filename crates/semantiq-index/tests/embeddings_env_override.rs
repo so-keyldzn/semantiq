@@ -52,7 +52,7 @@ fn stub_env_override_resets_coderankembed_index() {
         .unwrap();
     let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
     store
-        .update_chunk_embedding(chunk_id, &vec![0.1; EMBEDDING_DIMENSION])
+        .store_chunk_embeddings(&[(chunk_id, vec![0.1; EMBEDDING_DIMENSION].as_slice())])
         .unwrap();
     drop(store);
 
