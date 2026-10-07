@@ -105,6 +105,17 @@ enum Commands {
         /// Force full reindex (ignore cache)
         #[arg(short, long)]
         force: bool,
+
+        /// Index the structure only (symbols, references, calls, imports,
+        /// chunks) and skip the embeddings: every command but `search` works
+        /// on it, and `--embeddings-only` or `serve` computes them later
+        #[arg(long, conflicts_with = "embeddings_only")]
+        no_embeddings: bool,
+
+        /// Only compute the embeddings still missing (after `--no-embeddings`
+        /// or an interrupted run)
+        #[arg(long, conflicts_with = "force")]
+        embeddings_only: bool,
     },
 
     /// Show index statistics
@@ -397,7 +408,18 @@ async fn main() -> Result<()> {
             path,
             database,
             force,
-        } => commands::index(&path, database, force).await,
+            no_embeddings,
+            embeddings_only,
+        } => {
+            let phases = if no_embeddings {
+                commands::Phases::StructureOnly
+            } else if embeddings_only {
+                commands::Phases::EmbeddingsOnly
+            } else {
+                commands::Phases::All
+            };
+            commands::index_with(&path, database, force, phases).await
+        }
         Commands::Stats { database } => commands::stats(database).await,
         Commands::Search {
             query,

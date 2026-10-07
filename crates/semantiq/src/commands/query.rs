@@ -9,9 +9,13 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use ignore::WalkBuilder;
+use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
 use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
-use semantiq_index::{AutoIndexer, IndexStore, should_exclude_entry, should_exclude_path};
+use semantiq_index::{
+    AutoIndexer, EmbeddingProgress, IndexStore, embed_pending, should_exclude_entry,
+    should_exclude_path,
+};
 use semantiq_mcp::server::{
     CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
     ImpactParams, RepoMapParams, SearchParams, calls_output, dead_code_output, deps_output,
@@ -64,7 +68,8 @@ pub(crate) struct SearchArgs {
 }
 
 pub(crate) fn search(index: &IndexArgs, args: SearchArgs, json: bool) -> Result<()> {
-    let (engine, _) = open_engine(index, Engine::WithEmbeddings)?;
+    let (engine, _, store) = open_engine_with_store(index, Engine::WithEmbeddings)?;
+    complete_embeddings(&engine, &store)?;
     let output = search_output(
         &engine,
         SearchParams {
@@ -260,8 +265,55 @@ fn normalize_file_arg(file: &str, root: &Path) -> String {
     relative.trim_start_matches("./").to_string()
 }
 
+/// Pending chunks `search` embeds itself before answering: about what a
+/// refresh of a few edited files leaves, a second or two of inference.
+const INLINE_EMBEDDING_LIMIT: usize = 64;
+
+/// Before a search, embed the chunks the refresh (phase 1 only) left without
+/// an embedding when there are few of them. Otherwise, e.g. after
+/// `semantiq index --no-embeddings` or during a first `serve`, answer with the
+/// embeddings available and say how much of the semantic index is ready.
+fn complete_embeddings(engine: &RetrievalEngine, store: &IndexStore) -> Result<()> {
+    let Some(model) = engine.embedding_model().filter(|model| !model.is_stub()) else {
+        return Ok(());
+    };
+    let counts = store.embedding_counts()?;
+    if counts.pending() == 0 {
+        return Ok(());
+    }
+    if counts.pending() <= INLINE_EMBEDDING_LIMIT {
+        let result = embed_pending(
+            store,
+            model,
+            DEFAULT_BATCH_SIZE,
+            &EmbeddingProgress::new(),
+            &|| false,
+            &mut |_| {},
+        )?;
+        tracing::debug!("Embedded {} pending chunks", result.embedded);
+        return Ok(());
+    }
+    eprintln!(
+        "semantiq: semantic index {}% ready ({}/{} chunks embedded), searching with what is \
+         ready: run `semantiq index --embeddings-only` to complete it",
+        counts.percent(),
+        counts.embedded,
+        counts.total
+    );
+    Ok(())
+}
+
 /// Locate and open the index, refresh it, and build the engine.
 fn open_engine(index: &IndexArgs, mode: Engine) -> Result<(RetrievalEngine, PathBuf)> {
+    let (engine, root, _) = open_engine_with_store(index, mode)?;
+    Ok((engine, root))
+}
+
+/// `open_engine`, also returning the store.
+fn open_engine_with_store(
+    index: &IndexArgs,
+    mode: Engine,
+) -> Result<(RetrievalEngine, PathBuf, Arc<IndexStore>)> {
     let (db_path, root) = locate_index(index)?;
     let store = Arc::new(IndexStore::open(&db_path)?);
 
@@ -281,10 +333,12 @@ fn open_engine(index: &IndexArgs, mode: Engine) -> Result<(RetrievalEngine, Path
         .to_str()
         .context("Project root path contains invalid UTF-8")?;
     let engine = match mode {
-        Engine::WithEmbeddings => RetrievalEngine::new(store, root_str),
-        Engine::WithoutEmbeddings => RetrievalEngine::without_embeddings(store, root_str),
+        Engine::WithEmbeddings => RetrievalEngine::new(Arc::clone(&store), root_str),
+        Engine::WithoutEmbeddings => {
+            RetrievalEngine::without_embeddings(Arc::clone(&store), root_str)
+        }
     };
-    Ok((engine, root))
+    Ok((engine, root, store))
 }
 
 /// Resolve `(database, project root)` from the flags, or by looking for
@@ -331,8 +385,9 @@ fn locate_index(index: &IndexArgs) -> Result<(PathBuf, PathBuf)> {
     Ok((db_path, root))
 }
 
-/// Bring the index up to date before answering. The cheap check runs first so
-/// an unchanged project never pays for the embedding model the indexer loads.
+/// Bring the index up to date before answering: phase 1 (structure) only, no
+/// embedding model. The cheap check runs first so an unchanged project never
+/// pays for the parsers either.
 fn refresh(store: &Arc<IndexStore>, root: &Path) -> Result<()> {
     let rebuild = store.check_and_prepare_for_reindex()?;
     if rebuild {
@@ -341,7 +396,7 @@ fn refresh(store: &Arc<IndexStore>, root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let indexer = AutoIndexer::new(Arc::clone(store), root.to_path_buf())?;
+    let indexer = AutoIndexer::without_watcher(Arc::clone(store), root.to_path_buf())?;
     let result = indexer.initial_index()?;
     eprintln!(
         "semantiq: refreshed index ({} files reindexed, {} removed{})",

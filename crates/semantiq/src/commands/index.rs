@@ -1,452 +1,359 @@
-//! Index a project directory
+//! Index a project directory, in two phases.
+//!
+//! Phase 1 (structure) parses every new or changed file and stores its
+//! symbols, references, call edges, type relations, imports and chunks: every
+//! command but `search` is usable once it is done. Phase 2 (embeddings) then
+//! embeds the chunks still without a vector, and can be interrupted and
+//! resumed (`--embeddings-only`).
 
-use anyhow::Result;
-use ignore::WalkBuilder;
+use anyhow::{Result, bail};
 use semantiq_embeddings::create_embedding_model;
-use semantiq_index::{
-    IndexStore, exceeds_indexed_size, paths::to_relative_string, should_exclude_entry,
-};
-use semantiq_parser::{
-    ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
-    StructureExtractor, SymbolExtractor, resolve_local_import,
-};
-use std::fs;
+use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
+use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, UNIX_EPOCH};
-use tracing::{debug, error, info, warn};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
 
 use super::common::{resolve_db_path, resolve_project_root, warn_if_semantic_search_unavailable};
 
-/// Per-file extraction counts, accumulated into the run totals.
-#[derive(Default)]
-struct FileStats {
-    symbols: usize,
-    chunks: usize,
-    deps: usize,
+/// Which indexing phases to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Phases {
+    /// Structure, then embeddings.
+    All,
+    /// Structure only (`--no-embeddings`): chunks stay pending for phase 2.
+    StructureOnly,
+    /// Embed the pending chunks only (`--embeddings-only`).
+    EmbeddingsOnly,
 }
 
+/// How often phase 2 logs its progress.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+
 pub(crate) async fn index(path: &Path, database: Option<PathBuf>, force: bool) -> Result<()> {
+    index_with(path, database, force, Phases::All).await
+}
+
+pub(crate) async fn index_with(
+    path: &Path,
+    database: Option<PathBuf>,
+    force: bool,
+    phases: Phases,
+) -> Result<()> {
     let project_root = resolve_project_root(path)?;
     let db_path = resolve_db_path(database, &project_root);
 
     info!("Indexing project: {:?}", project_root);
-    warn_if_semantic_search_unavailable();
     info!("Database: {:?}", db_path);
 
     let start = Instant::now();
-    let store = IndexStore::open(&db_path)?;
+    let store = Arc::new(IndexStore::open(&db_path)?);
 
     // Check if parser version changed and prepare for full reindex if needed
-    let needs_full_reindex = store.check_and_prepare_for_reindex()?;
-    let force = force || needs_full_reindex;
+    let rebuilt = store.check_and_prepare_for_reindex()?;
 
-    let mut language_support = LanguageSupport::new()?;
-    let chunk_extractor = ChunkExtractor::new();
-
-    // Initialize embedding model
-    let embedding_model = match create_embedding_model(None) {
-        Ok(model) => {
-            info!("Embedding model loaded (dim={})", model.dimension());
-            Some(model)
-        }
-        Err(e) => {
-            warn!(
-                "Could not load embedding model: {}. Embeddings will not be generated.",
-                e
+    if phases == Phases::EmbeddingsOnly {
+        if store.get_stats()?.file_count == 0 {
+            bail!(
+                "The index at {} is empty{}: run `semantiq index` first.",
+                db_path.display(),
+                if rebuilt { " (its format changed)" } else { "" }
             );
-            None
         }
-    };
-
-    let mut file_count = 0;
-    let mut symbol_count = 0;
-    let mut chunk_count = 0;
-    let mut dep_count = 0;
-    let mut error_count = 0;
-
-    // Walk the directory, excluding hidden dirs and dependency folders
-    let walker = WalkBuilder::new(&project_root)
-        .hidden(true) // Exclude hidden directories (.git, .claude, etc.)
-        .git_ignore(true)
-        .filter_entry(|entry| {
-            let name = entry.file_name().to_string_lossy();
-            !should_exclude_entry(&name)
-        })
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
+    } else {
+        // `--force` rebuilds from scratch, embeddings included.
+        if force && !rebuilt {
+            store.clear_all_data()?;
         }
-
-        // Check if this is a supported language
-        let language = match Language::from_path(path) {
-            Some(lang) => lang,
-            None => continue,
-        };
-
-        // Get relative path (warns if `path` falls outside `project_root`).
-        let rel_path = to_relative_string(path, &project_root);
-
-        // Index this file in isolation so a DB/IO/parse error on a single file
-        // is logged and counted but does not abort the whole run.
-        match index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            embedding_model.as_deref(),
-            &project_root,
-            path,
-            &rel_path,
-            language,
-            force,
-        ) {
-            Ok(Some(stats)) => {
-                symbol_count += stats.symbols;
-                chunk_count += stats.chunks;
-                dep_count += stats.deps;
-                file_count += 1;
-
-                // Progress update every 100 files
-                if file_count % 100 == 0 {
-                    info!("Indexed {} files...", file_count);
-                }
-            }
-            Ok(None) => {
-                // File skipped (unreadable, unchanged, or too large).
-            }
-            Err(e) => {
-                error!("Failed to index {}: {}", rel_path, e);
-                error_count += 1;
-            }
-        }
+        index_structure(&store, &project_root)?;
     }
 
-    let elapsed = start.elapsed();
+    if phases == Phases::StructureOnly {
+        let pending = store.embedding_counts()?.pending();
+        if pending > 0 {
+            info!(
+                "{} chunks without embeddings: `semantiq index --embeddings-only` (or `semantiq serve`) computes them",
+                pending
+            );
+        }
+    } else {
+        warn_if_semantic_search_unavailable();
+        index_embeddings(&store)?;
+    }
 
-    info!("Indexing complete!");
-    info!("  Files: {}", file_count);
-    info!("  Symbols: {}", symbol_count);
-    info!("  Chunks: {}", chunk_count);
-    info!("  Dependencies: {}", dep_count);
-    info!("  Errors: {}", error_count);
-    info!("  Time: {:.2}s", elapsed.as_secs_f64());
-
+    info!("  Time: {:.2}s", start.elapsed().as_secs_f64());
     Ok(())
 }
 
-/// Index a single file, returning its extraction stats.
-///
-/// Returns `Ok(None)` when the file is intentionally skipped (unreadable,
-/// unchanged, or too large) and `Ok(Some(stats))` when it is indexed. Errors
-/// are propagated so the caller can log and count them without aborting the run.
-#[allow(clippy::too_many_arguments)]
-fn index_one_file(
-    store: &IndexStore,
-    language_support: &mut LanguageSupport,
-    chunk_extractor: &ChunkExtractor,
-    embedding_model: Option<&dyn semantiq_embeddings::EmbeddingModel>,
-    project_root: &Path,
-    path: &Path,
-    rel_path: &str,
-    language: Language,
-    force: bool,
-) -> Result<Option<FileStats>> {
-    // Skip files above their size limit (lower for JSON/YAML/TOML data files)
-    // before reading them, and drop any row an older version left for them.
-    if let Ok(meta) = fs::metadata(path)
-        && exceeds_indexed_size(path, meta.len())
-    {
-        debug!("Skipping {} (too large: {} bytes)", rel_path, meta.len());
-        if store.get_file_by_path(rel_path)?.is_some() {
-            store.delete_file(rel_path)?;
+/// Phase 1: parse new and changed files, drop vanished ones.
+fn index_structure(store: &Arc<IndexStore>, project_root: &Path) -> Result<()> {
+    let start = Instant::now();
+    let indexer = AutoIndexer::without_watcher(Arc::clone(store), project_root.to_path_buf())?;
+    let result = indexer.initial_index_with(&mut |progress| {
+        // Progress update every 100 files
+        if progress.indexed.is_multiple_of(100) {
+            info!("Indexed {} files...", progress.indexed);
         }
-        return Ok(None);
+    })?;
+    let stats = store.get_stats()?;
+
+    info!(
+        "Structure ready in {:.2}s (refs, calls, impact, hierarchy, dead-code, deps, explain, map)",
+        start.elapsed().as_secs_f64()
+    );
+    info!(
+        "  Files: {} indexed, {} unchanged, {} removed",
+        result.indexed, result.skipped, result.removed
+    );
+    info!("  Symbols: {}", stats.symbol_count);
+    info!("  Chunks: {}", stats.chunk_count);
+    info!("  Dependencies: {}", stats.dependency_count);
+    info!("  Errors: {}", result.errors);
+    Ok(())
+}
+
+/// Phase 2: embed every chunk that has no embedding yet. Each batch is
+/// committed on its own, so an interrupted run resumes where it stopped.
+fn index_embeddings(store: &IndexStore) -> Result<()> {
+    let counts = store.embedding_counts()?;
+    if counts.pending() == 0 {
+        info!("Embeddings: all {} chunks already embedded", counts.total);
+        return Ok(());
     }
 
-    // Read file content
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
+    let model = match create_embedding_model(None) {
+        Ok(model) => {
+            info!("Embedding model loaded (dim={})", model.dimension());
+            model
+        }
         Err(e) => {
-            debug!("Skipping {}: {}", rel_path, e);
-            return Ok(None);
+            warn!(
+                "Could not load embedding model: {}. {} chunks left without embeddings.",
+                e,
+                counts.pending()
+            );
+            return Ok(());
         }
     };
 
-    // Check if we need to reindex
-    if !force && !store.needs_reindex(rel_path, &content)? {
-        debug!("Skipping {} (unchanged)", rel_path);
-        return Ok(None);
-    }
-
-    // Get file metadata
-    let metadata = fs::metadata(path)?;
-    let size = metadata.len() as i64;
-    let last_modified = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0i64);
-
-    // Insert file record
-    let file_id = store.insert_file(
-        rel_path,
-        Some(language.name()),
-        &content,
-        size,
-        last_modified,
+    info!(
+        "Embedding {} chunks (interrupting is safe: `semantiq index --embeddings-only` resumes)",
+        counts.pending()
+    );
+    let start = Instant::now();
+    let progress = EmbeddingProgress::new();
+    let mut last_report = Instant::now();
+    let result = embed_pending(
+        store,
+        model.as_ref(),
+        DEFAULT_BATCH_SIZE,
+        &progress,
+        &|| false,
+        &mut |progress| {
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                let counts = progress.counts();
+                info!(
+                    "Embeddings: {}/{} chunks ({}%)",
+                    counts.embedded,
+                    counts.total,
+                    counts.percent()
+                );
+                last_report = Instant::now();
+            }
+        },
     )?;
 
-    let mut stats = FileStats::default();
-
-    // Parse and extract symbols
-    match language_support.parse(language, &content) {
-        Ok(tree) => {
-            // Extract symbols
-            let symbols = SymbolExtractor::extract(&tree, &content, language)?;
-            store.insert_symbols(file_id, &symbols)?;
-
-            // Extract identifier occurrences for AST-based find_refs
-            let references = ReferenceExtractor::extract(&tree, &content, language);
-            store.insert_references(file_id, &references)?;
-
-            // Call edges and type relations (semantiq_calls / semantiq_hierarchy)
-            let structure =
-                StructureExtractor::extract(&tree, &content, language, &symbols, &references);
-            store.insert_structure(file_id, &structure)?;
-            stats.symbols = symbols.len();
-
-            // Extract chunks
-            let chunks = chunk_extractor.extract(&tree, &content, language)?;
-            store.insert_chunks(file_id, &chunks)?;
-            stats.chunks = chunks.len();
-
-            // Generate embeddings for chunks in batch to reduce ONNX overhead.
-            if let Some(model) = embedding_model {
-                let stored_chunks = store.get_chunks_by_file(file_id)?;
-                if !stored_chunks.is_empty() {
-                    let texts: Vec<String> =
-                        stored_chunks.iter().map(|c| c.content.clone()).collect();
-                    match model.embed_batch(&texts) {
-                        Ok(embeddings) => {
-                            for (chunk, embedding) in stored_chunks.iter().zip(embeddings.iter()) {
-                                if let Err(e) = store.update_chunk_embedding(chunk.id, embedding) {
-                                    warn!(
-                                        "Failed to store embedding for chunk {}: {}",
-                                        chunk.id, e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Batch embedding failed, falling back to individual: {}", e);
-                            // Fallback to individual embedding on batch failure.
-                            for chunk in &stored_chunks {
-                                match model.embed(&chunk.content) {
-                                    Ok(embedding) => {
-                                        if let Err(e) =
-                                            store.update_chunk_embedding(chunk.id, &embedding)
-                                        {
-                                            warn!(
-                                                "Failed to store embedding for chunk {}: {}",
-                                                chunk.id, e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        debug!(
-                                            "Failed to generate embedding for chunk {}: {}",
-                                            chunk.id, e
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Extract imports and store as dependencies
-            let imports = ImportExtractor::extract(&tree, &content, language)?;
-            store.delete_dependencies(file_id)?;
-            for import in &imports {
-                let resolved = if import.kind == ImportKind::Local {
-                    resolve_local_import(rel_path, &import.path, language, project_root)
-                } else {
-                    None
-                };
-                store.insert_dependency(
-                    file_id,
-                    &import.path,
-                    import.name.as_deref(),
-                    import.kind.as_str(),
-                    resolved.as_deref(),
-                )?;
-            }
-            stats.deps = imports.len();
-
-            debug!(
-                "Indexed {}: {} symbols, {} chunks, {} deps",
-                rel_path, stats.symbols, stats.chunks, stats.deps
-            );
-        }
-        Err(e) => {
-            warn!("Failed to parse {}: {}", rel_path, e);
-        }
+    let elapsed = start.elapsed().as_secs_f64();
+    info!(
+        "Embeddings ready in {:.2}s: {} chunks embedded ({:.1} chunks/s)",
+        elapsed,
+        result.embedded,
+        result.embedded as f64 / elapsed.max(f64::EPSILON)
+    );
+    if result.failed > 0 {
+        warn!(
+            "{} chunks could not be embedded; `semantiq index --embeddings-only` retries them",
+            result.failed
+        );
     }
-
-    Ok(Some(stats))
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use semantiq_embeddings::StubEmbeddingModel;
     use std::fs;
     use tempfile::tempdir;
 
-    /// A real source file is indexed and its stats are reported.
-    #[test]
-    fn test_index_one_file_indexes_real_file() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let file = root.join("lib.rs");
-        fs::write(&file, "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
-
-        let store = IndexStore::open_in_memory().unwrap();
-        let mut language_support = LanguageSupport::new().unwrap();
-        let chunk_extractor = ChunkExtractor::new();
-        let model = StubEmbeddingModel::new();
-
-        let result = index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            Some(&model),
-            root,
-            &file,
-            "lib.rs",
-            Language::Rust,
-            true,
-        )
-        .unwrap();
-
-        let stats = result.expect("file should be indexed");
-        assert!(stats.symbols >= 1, "expected at least one symbol");
-
-        let db_stats = store.get_stats().unwrap();
-        assert_eq!(db_stats.file_count, 1);
-        assert_eq!(db_stats.chunk_count, stats.chunks);
-    }
-
-    /// An unreadable / missing path is skipped (Ok(None)), not an error, so the
-    /// caller keeps going instead of aborting the whole run.
-    #[test]
-    fn test_index_one_file_skips_unreadable_file() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let missing = root.join("does_not_exist.rs");
-
-        let store = IndexStore::open_in_memory().unwrap();
-        let mut language_support = LanguageSupport::new().unwrap();
-        let chunk_extractor = ChunkExtractor::new();
-
-        let result = index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            None,
-            root,
-            &missing,
-            "does_not_exist.rs",
-            Language::Rust,
-            true,
-        )
-        .expect("missing file should be a skip, not an error");
-
-        assert!(result.is_none(), "missing file should yield Ok(None)");
-        assert_eq!(store.get_stats().unwrap().file_count, 0);
-    }
-
-    /// Unchanged files are skipped on a second pass when `force` is false.
-    #[test]
-    fn test_index_one_file_skips_unchanged() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let file = root.join("main.rs");
-        fs::write(&file, "fn main() {}\n").unwrap();
-
-        let store = IndexStore::open_in_memory().unwrap();
-        let mut language_support = LanguageSupport::new().unwrap();
-        let chunk_extractor = ChunkExtractor::new();
-
-        // First pass indexes the file.
-        let first = index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            None,
-            root,
-            &file,
-            "main.rs",
-            Language::Rust,
-            false,
-        )
-        .unwrap();
-        assert!(first.is_some());
-
-        // Second pass without force sees no change and skips.
-        let second = index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            None,
-            root,
-            &file,
-            "main.rs",
-            Language::Rust,
-            false,
-        )
-        .unwrap();
-        assert!(second.is_none(), "unchanged file should be skipped");
-    }
-
-    /// Batch embedding via the stub model populates chunk vectors without error.
-    #[test]
-    fn test_index_one_file_batch_embeddings() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let file = root.join("util.rs");
+    fn write_project(root: &Path) {
         fs::write(
-            &file,
-            "pub fn one() {}\npub fn two() {}\npub fn three() {}\n",
+            root.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\npub fn twice(x: i32) -> i32 { add(x, x) }\n",
         )
         .unwrap();
+        fs::write(root.join("main.rs"), "fn main() { let _ = twice(2); }\n").unwrap();
+    }
 
-        let store = IndexStore::open_in_memory().unwrap();
-        let mut language_support = LanguageSupport::new().unwrap();
-        let chunk_extractor = ChunkExtractor::new();
-        let model = StubEmbeddingModel::new();
+    /// `--no-embeddings` stores the structure (refs, call edges) and leaves
+    /// every chunk pending; `--embeddings-only` then embeds all of them.
+    #[tokio::test]
+    async fn test_structure_then_embeddings_only() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_project(root);
+        let db = root.join("index.db");
 
-        let stats = index_one_file(
-            &store,
-            &mut language_support,
-            &chunk_extractor,
-            Some(&model),
-            root,
-            &file,
-            "util.rs",
-            Language::Rust,
-            true,
-        )
-        .unwrap()
-        .expect("file should be indexed");
+        index_with(root, Some(db.clone()), false, Phases::StructureOnly)
+            .await
+            .unwrap();
+        let store = IndexStore::open(&db).unwrap();
+        assert_eq!(store.get_stats().unwrap().file_count, 2);
+        assert!(!store.find_references_by_name("add", 10).unwrap().is_empty());
+        let counts = store.embedding_counts().unwrap();
+        assert!(counts.total > 0);
+        assert_eq!(counts.embedded, 0, "phase 1 must not embed");
 
-        // Stub embeddings should not leave orphan chunk vectors behind.
+        index_with(root, Some(db.clone()), false, Phases::EmbeddingsOnly)
+            .await
+            .unwrap();
+        let counts = store.embedding_counts().unwrap();
+        assert_eq!(counts.pending(), 0);
         assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
-        let _ = stats.chunks;
+    }
+
+    /// Structural queries answer from phase 1 alone, and search answers while
+    /// phase 2 is partway through.
+    #[tokio::test]
+    async fn test_queries_without_embeddings() {
+        use semantiq_mcp::server::{
+            CallsParams, FindRefsParams, ImpactParams, SearchParams, calls_output,
+            find_refs_output, impact_output, search_output,
+        };
+        use semantiq_retrieval::RetrievalEngine;
+
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write_project(&root);
+        let db = root.join("index.db");
+        index_with(&root, Some(db.clone()), false, Phases::StructureOnly)
+            .await
+            .unwrap();
+
+        let store = Arc::new(IndexStore::open(&db).unwrap());
+        assert_eq!(store.embedding_counts().unwrap().embedded, 0);
+        let root_str = root.to_str().unwrap();
+        let engine = RetrievalEngine::without_embeddings(Arc::clone(&store), root_str);
+
+        let refs = find_refs_output(
+            &engine,
+            FindRefsParams {
+                symbol: "add".to_string(),
+                limit: Some(10),
+            },
+        )
+        .unwrap();
+        assert!(
+            serde_json::to_string(&refs).unwrap().contains("main.rs")
+                || serde_json::to_string(&refs).unwrap().contains("lib.rs")
+        );
+
+        let calls = calls_output(
+            &engine,
+            CallsParams {
+                symbol: "add".to_string(),
+                direction: Some("callers".to_string()),
+                file_path: None,
+                max_depth: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            serde_json::to_string(&calls).unwrap().contains("twice"),
+            "{}",
+            serde_json::to_string(&calls).unwrap()
+        );
+
+        let impact = impact_output(
+            &engine,
+            ImpactParams {
+                symbol: "add".to_string(),
+                file_path: None,
+                max_depth: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            serde_json::to_string(&impact).unwrap().contains("twice"),
+            "{}",
+            serde_json::to_string(&impact).unwrap()
+        );
+
+        // Phase 2 interrupted after one chunk: search still answers.
+        let model = semantiq_embeddings::StubEmbeddingModel::new();
+        let batches = std::sync::atomic::AtomicUsize::new(0);
+        embed_pending(
+            &store,
+            &model,
+            1,
+            &EmbeddingProgress::new(),
+            &|| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1,
+            &mut |_| {},
+        )
+        .unwrap();
+        let counts = store.embedding_counts().unwrap();
+        assert!(counts.embedded == 1 && counts.pending() > 0);
+        let engine = RetrievalEngine::new(Arc::clone(&store), root_str);
+        let search = search_output(
+            &engine,
+            SearchParams {
+                query: "twice".to_string(),
+                limit: Some(5),
+                min_score: None,
+                file_type: None,
+                symbol_kind: None,
+                snippets: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            serde_json::to_string(&search).unwrap().contains("twice"),
+            "{}",
+            serde_json::to_string(&search).unwrap()
+        );
+    }
+
+    /// A full run embeds everything; a second run has nothing left to do.
+    #[tokio::test]
+    async fn test_full_index_embeds_all_chunks() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_project(root);
+        let db = root.join("index.db");
+
+        index(root, Some(db.clone()), false).await.unwrap();
+        let store = IndexStore::open(&db).unwrap();
+        let counts = store.embedding_counts().unwrap();
+        assert!(counts.total > 0);
+        assert_eq!(counts.pending(), 0);
+
+        // `--force` rebuilds, embeddings included.
+        index(root, Some(db.clone()), true).await.unwrap();
+        assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+        assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+    }
+
+    /// `--embeddings-only` on an empty index points at a full index run.
+    #[tokio::test]
+    async fn test_embeddings_only_on_empty_index_fails() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let db = root.join("index.db");
+        let err = index_with(root, Some(db), false, Phases::EmbeddingsOnly)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("semantiq index"));
     }
 }

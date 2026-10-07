@@ -61,7 +61,9 @@ crates/
 
 ### Data Flow
 
-1. **Indexing**: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` / `StructureExtractor` → `IndexStore` (SQLite with FTS5 triggers + sqlite-vec embeddings)
+1. **Indexing** runs in two phases.
+   **Phase 1 (structure)**, `AutoIndexer`: `WalkBuilder` (ignore crate) → `should_exclude_entry()` filter → `Language::from_path()` → content hash check (`needs_reindex`) → tree-sitter parse → `SymbolExtractor` / `ChunkExtractor` / `ImportExtractor` / `ReferenceExtractor` / `StructureExtractor` → `IndexStore` (SQLite with FTS5 triggers). Chunks are stored without embeddings (`insert_chunks` carries over the embedding of a chunk whose content did not change), and the file hash is stamped last: the commit point no longer depends on embeddings.
+   **Phase 2 (embeddings)**, `semantiq-index/src/embedder.rs`: `embed_pending()` walks the chunks with `embedding IS NULL` by id (`pending_embedding_chunks`), `embed_batch` 32 texts at a time across files (same CPU time as per-file batches within ±3% on oxyn, 4x fewer forward passes; sorting by length measured no gain, `examples/embed_throughput.rs`), computed outside the DB lock and written per batch by `store_chunk_embeddings` (skips chunks deleted meanwhile: no `chunks_vec` orphan). A NULL embedding = still to do, so phase 2 is resumable. `serve` runs it on the `BackgroundEmbedder` thread (woken after the initial phase 1 and after each watcher reindex, model loaded on first pass); `semantiq index` runs both phases in the foreground (`--no-embeddings`, `--embeddings-only`); the query refresh is phase 1 only, `search` embeds up to 64 pending chunks itself, else notes on stderr how much of the semantic index is ready.
 
 2. **Search**: `RetrievalEngine::search()` runs 3 strategies sequentially: **semantic** (sqlite-vec KNN) → **symbol** (FTS5 MATCH) → **text** (grep, only if results < limit). Results are deduplicated by `"file_path:start_line:end_line"`, scored, and merged.
 
@@ -122,6 +124,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 - `IndexStore`: `Arc<Mutex<Connection>>` — serialized single connection.
 - `LanguageSupport`: Wrapped in `Mutex` in `AutoIndexer` (tree-sitter parsers are `!Send`).
 - `OnnxEmbeddingModel`: `Mutex<Session>`.
+- `BackgroundEmbedder`: own thread and model; `EmbeddingProgress` atomics read by the `semantiq_search` notice (`⏳ Semantic index N% ready`) and `GET /stats`.
 - `RetrievalEngine`: `Arc<RwLock<ThresholdConfig>>` for thresholds, `Mutex<Option<FileListCache>>` (30s TTL) for text search file list, `Mutex<Option<(fingerprint, Arc<RankedRepo>)>>` for the unfocused repo map ranking.
 
 ### HTTP API (`--http-port`)

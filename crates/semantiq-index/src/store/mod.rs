@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // Re-export types
 pub use calibrations::{CalibrationData, CalibrationRecord};
+pub use chunks::{EmbeddingCounts, PendingChunk};
 pub use graph::{GraphFile, GraphRefCount, RepoGraphData};
 
 /// Global initializer for sqlite-vec extension.

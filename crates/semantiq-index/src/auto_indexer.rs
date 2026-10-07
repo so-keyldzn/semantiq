@@ -3,7 +3,6 @@ use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::Result;
 use ignore::WalkBuilder;
-use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
     StructureExtractor, SymbolExtractor, resolve_local_import,
@@ -14,45 +13,60 @@ use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 use tracing::{debug, error, info, warn};
 
+/// Phase 1 of indexing: parse files and store their structure (symbols,
+/// references, call edges, type relations, imports) and chunks. Embeddings
+/// are phase 2 (`crate::embedder`): chunks are stored without one, and the
+/// file hash is stamped as soon as phase 1 is done with the file.
 pub struct AutoIndexer {
     store: Arc<IndexStore>,
-    watcher: Mutex<FileWatcher>,
+    watcher: Option<Mutex<FileWatcher>>,
     project_root: PathBuf,
     language_support: Mutex<LanguageSupport>,
     chunk_extractor: ChunkExtractor,
-    embedding_model: Box<dyn EmbeddingModel>,
 }
 
 impl AutoIndexer {
+    /// An indexer that also watches the project for changes (`process_events`).
     pub fn new(store: Arc<IndexStore>, project_root: PathBuf) -> Result<Self> {
         let mut watcher = FileWatcher::new()?;
         watcher.watch(&project_root)?;
+        let indexer = Self::build(store, project_root, Some(watcher))?;
+        info!("AutoIndexer initialized for {:?}", indexer.project_root);
+        Ok(indexer)
+    }
 
-        let language_support = LanguageSupport::new()?;
-        let chunk_extractor = ChunkExtractor::new();
+    /// An indexer for one-shot runs (`semantiq index`, query refresh): no
+    /// file watcher, `process_events` is a no-op.
+    pub fn without_watcher(store: Arc<IndexStore>, project_root: PathBuf) -> Result<Self> {
+        Self::build(store, project_root, None)
+    }
 
-        // Initialize embedding model (downloads if needed)
-        let embedding_model = create_embedding_model(None)?;
-        info!(
-            "Embedding model initialized (dim={})",
-            embedding_model.dimension()
-        );
-
-        info!("AutoIndexer initialized for {:?}", project_root);
-
+    fn build(
+        store: Arc<IndexStore>,
+        project_root: PathBuf,
+        watcher: Option<FileWatcher>,
+    ) -> Result<Self> {
         Ok(Self {
             store,
-            watcher: Mutex::new(watcher),
+            watcher: watcher.map(Mutex::new),
             project_root,
-            language_support: Mutex::new(language_support),
-            chunk_extractor,
-            embedding_model,
+            language_support: Mutex::new(LanguageSupport::new()?),
+            chunk_extractor: ChunkExtractor::new(),
         })
     }
 
     /// Perform initial indexing of all files in the project
     /// Only indexes files that are new or have changed since last index
     pub fn initial_index(&self) -> Result<InitialIndexResult> {
+        self.initial_index_with(&mut |_| {})
+    }
+
+    /// `initial_index`, calling `on_file` after each indexed file (progress
+    /// display).
+    pub fn initial_index_with(
+        &self,
+        on_file: &mut dyn FnMut(&InitialIndexResult),
+    ) -> Result<InitialIndexResult> {
         info!("Starting initial index of {:?}", self.project_root);
 
         let mut result = InitialIndexResult::default();
@@ -114,30 +128,26 @@ impl AutoIndexer {
             };
 
             // Check if file needs to be reindexed
-            match self.store.needs_reindex(&rel_path, &content) {
-                Ok(true) => {
-                    // File is new or changed, index it
-                    if let Err(e) = self.index_file(path) {
-                        error!("Failed to index {}: {}", rel_path, e);
-                        result.errors += 1;
-                    } else {
-                        result.indexed += 1;
-                    }
-                }
-                Ok(false) => {
-                    // File already indexed and unchanged
-                    result.skipped += 1;
-                }
-                Err(e) => {
+            let needs_reindex = self
+                .store
+                .needs_reindex(&rel_path, &content)
+                .unwrap_or_else(|e| {
                     debug!("Error checking reindex for {}: {}", rel_path, e);
                     // Try to index anyway
-                    if let Err(e) = self.index_file(path) {
-                        error!("Failed to index {}: {}", rel_path, e);
-                        result.errors += 1;
-                    } else {
-                        result.indexed += 1;
-                    }
-                }
+                    true
+                });
+            if !needs_reindex {
+                // File already indexed and unchanged
+                result.skipped += 1;
+                continue;
+            }
+            // File is new or changed, index it (already checked: forced)
+            if let Err(e) = self.index_file(path, true) {
+                error!("Failed to index {}: {}", rel_path, e);
+                result.errors += 1;
+            } else {
+                result.indexed += 1;
+                on_file(&result);
             }
         }
 
@@ -166,9 +176,11 @@ impl AutoIndexer {
 
     /// Process pending file events and reindex changed files
     pub fn process_events(&self) -> Result<ProcessResult> {
+        let Some(watcher) = &self.watcher else {
+            return Ok(ProcessResult::default());
+        };
         let events = {
-            let watcher = self
-                .watcher
+            let watcher = watcher
                 .lock()
                 .map_err(|e| anyhow::anyhow!("FileWatcher lock poisoned: {}", e))?;
             watcher.poll_events()
@@ -195,7 +207,7 @@ impl AutoIndexer {
                         }
                         continue;
                     }
-                    match self.index_file(&path) {
+                    match self.index_file(&path, false) {
                         Ok(true) => result.indexed += 1,
                         Ok(false) => {}
                         Err(e) => {
@@ -225,9 +237,10 @@ impl AutoIndexer {
         Ok(result)
     }
 
-    /// Index a single file. Returns `Ok(false)` when the file was skipped
-    /// (excluded, unsupported, unreadable or content unchanged since last index).
-    fn index_file(&self, path: &Path) -> Result<bool> {
+    /// Index a single file (phase 1). Returns `Ok(false)` when the file was
+    /// skipped (excluded, unsupported, unreadable or, unless `force`, content
+    /// unchanged since last index).
+    fn index_file(&self, path: &Path, force: bool) -> Result<bool> {
         // Get relative path (warns if `path` falls outside the project root).
         let rel_path = crate::paths::to_relative_string(path, &self.project_root);
 
@@ -269,11 +282,12 @@ impl AutoIndexer {
 
         // Skip files whose content is unchanged since the last index: watchers
         // fire on touch, metadata changes and duplicate events, and re-running
-        // the parser + embedding model for those is pure waste.
-        if !self
-            .store
-            .needs_reindex(&rel_path, &content)
-            .unwrap_or(true)
+        // the parser (and phase 2's embedding model) for those is pure waste.
+        if !force
+            && !self
+                .store
+                .needs_reindex(&rel_path, &content)
+                .unwrap_or(true)
         {
             debug!("Unchanged, skipping: {}", rel_path);
             return Ok(false);
@@ -339,55 +353,11 @@ impl AutoIndexer {
                     StructureExtractor::extract(&tree, &content, language, &symbols, &references);
                 self.store.insert_structure(file_id, &structure)?;
 
-                // Extract chunks and generate embeddings
+                // Extract chunks. Their embeddings are phase 2: a chunk whose
+                // content did not change keeps its embedding, the others wait
+                // for the embedder (`crate::embedder`).
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
                 self.store.insert_chunks(file_id, &chunks)?;
-
-                // Generate embeddings for chunks in batch to reduce ONNX overhead
-                let chunks_to_embed = self.store.get_chunks_by_file(file_id)?;
-                if !chunks_to_embed.is_empty() {
-                    let texts: Vec<String> =
-                        chunks_to_embed.iter().map(|c| c.content.clone()).collect();
-                    match self.embedding_model.embed_batch(&texts) {
-                        Ok(embeddings) => {
-                            for (chunk, embedding) in chunks_to_embed.iter().zip(embeddings.iter())
-                            {
-                                if let Err(e) =
-                                    self.store.update_chunk_embedding(chunk.id, embedding)
-                                {
-                                    debug!(
-                                        "Failed to store embedding for chunk {}: {}",
-                                        chunk.id, e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Batch embedding failed, falling back to individual: {}", e);
-                            // Fallback to individual embedding on batch failure
-                            for chunk in &chunks_to_embed {
-                                match self.embedding_model.embed(&chunk.content) {
-                                    Ok(embedding) => {
-                                        if let Err(e) =
-                                            self.store.update_chunk_embedding(chunk.id, &embedding)
-                                        {
-                                            debug!(
-                                                "Failed to store embedding for chunk {}: {}",
-                                                chunk.id, e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        debug!(
-                                            "Failed to generate embedding for chunk {}: {}",
-                                            chunk.id, e
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 // Extract imports and store as dependencies
                 let imports = ImportExtractor::extract(&tree, &content, language)?;
@@ -425,7 +395,8 @@ impl AutoIndexer {
         drop(language_support);
 
         // Commit point: stamp the real content hash LAST, only after all
-        // children (symbols/chunks/dependencies/embeddings) are persisted. A
+        // children (symbols/chunks/dependencies) are persisted. Embeddings are
+        // not part of it: a chunk without one is phase 2's pending work. A
         // crash before this line leaves the OLD/sentinel hash in place, so
         // `needs_reindex` returns true next time and the file is reindexed
         // rather than silently treated as up-to-date with partial data.

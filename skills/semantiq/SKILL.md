@@ -121,7 +121,9 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
 
 `0` success (even with no results), `1` error, `2` bad usage. Messages go to
 stderr. "No Semantiq index found" → run `semantiq index` at the project root
-(first run can take a minute; later runs only reindex changed files).
+(first run can take a few minutes, mostly embeddings; `semantiq index
+--no-embeddings` makes every command but `search` usable in seconds; later runs
+only reindex changed files).
 
 `search` loads the embedding model on each call (~1 s); the other commands
 skip it and answer in tens of milliseconds, so prefer `refs`/`calls`/`explain`

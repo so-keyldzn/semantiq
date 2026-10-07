@@ -164,6 +164,11 @@ impl RetrievalEngine {
         }
     }
 
+    /// The embedding model, when one is loaded (not with `without_embeddings`).
+    pub fn embedding_model(&self) -> Option<&dyn EmbeddingModel> {
+        self.embedding_model.as_deref()
+    }
+
     /// Get the current threshold configuration.
     pub fn threshold_config(&self) -> Arc<RwLock<ThresholdConfig>> {
         Arc::clone(&self.threshold_config)
