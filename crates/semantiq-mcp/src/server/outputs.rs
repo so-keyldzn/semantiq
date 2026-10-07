@@ -42,6 +42,12 @@ fn validate_file_path(value: &str) -> Result<String, String> {
     Ok(path)
 }
 
+/// Default number of `semantiq_search` results.
+pub const DEFAULT_SEARCH_LIMIT: usize = 10;
+/// Default number of `semantiq_find_refs` references.
+pub const DEFAULT_REFS_LIMIT: usize = 30;
+const MAX_LIMIT: usize = 1000;
+
 pub fn search_output(
     engine: &RetrievalEngine,
     params: SearchParams,
@@ -55,7 +61,11 @@ pub fn search_output(
     );
 
     let query = validate_input(&params.query, "Query")?;
-    let limit = params.limit.unwrap_or(20).min(1000);
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .clamp(1, MAX_LIMIT);
+    let snippets = params.snippets.unwrap_or(false);
 
     let mut options = SearchOptions::new();
 
@@ -77,29 +87,111 @@ pub fn search_output(
         }
     }
 
-    let results = engine.search(&query, limit, Some(options)).map_err(|e| {
-        error!("Search failed: {}", e);
-        "Search failed: an internal error occurred".to_string()
-    })?;
+    // One extra result tells whether the list is truncated.
+    let mut results = engine
+        .search(&query, limit + 1, Some(options))
+        .map_err(|e| {
+            error!("Search failed: {}", e);
+            "Search failed: an internal error occurred".to_string()
+        })?
+        .results;
+    let truncated = results.len() > limit;
+    results.truncate(limit);
 
+    let terms = query_terms(&query);
     Ok(SearchOutput {
-        query,
-        total_count: results.total_count,
-        search_time_ms: results.search_time_ms,
         results: results
-            .results
             .into_iter()
             .map(|r| SearchHit {
+                preview: preview_line(&r.content, r.metadata.symbol_name.as_deref(), &terms),
                 file_path: r.file_path,
                 start_line: r.start_line,
                 end_line: r.end_line,
-                score: r.score,
+                score: (f64::from(r.score) * 100.0).round() / 100.0,
                 symbol_name: r.metadata.symbol_name,
                 symbol_kind: r.metadata.symbol_kind,
-                content: r.content,
+                content: snippets.then_some(r.content),
             })
             .collect(),
+        query,
+        truncated,
     })
+}
+
+/// Words too common in natural-language queries to locate a line.
+const STOP_WORDS: &[&str] = &[
+    "the", "and", "for", "with", "where", "what", "when", "which", "how", "are", "is", "does",
+    "into", "from", "that", "this", "code", "file", "files",
+];
+
+/// Inflections dropped from query words so "debounced" finds "debounce".
+const SUFFIXES: &[&str] = &["ing", "ed", "es", "er", "s"];
+
+/// Lowercase query words worth looking for in a line, reduced to a stem.
+fn query_terms(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 3 && !STOP_WORDS.contains(&w.as_str()))
+        .map(|w| {
+            SUFFIXES
+                .iter()
+                .find_map(|suffix| w.strip_suffix(suffix).filter(|stem| stem.len() >= 4))
+                .map(str::to_string)
+                .unwrap_or(w)
+        })
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn is_comment_line(line: &str) -> bool {
+    ["//", "/*", "*", "#", "--", "<!--"]
+        .iter()
+        .any(|marker| line.starts_with(marker))
+}
+
+/// The line of a hit that best shows why it matched: the line declaring the
+/// symbol, else the line holding the most query terms (code before comments),
+/// else the first line of code.
+fn preview_line(content: &str, symbol: Option<&str>, terms: &[String]) -> String {
+    let lines: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    if let Some(symbol) = symbol
+        && let Some(line) = lines
+            .iter()
+            .find(|l| !is_comment_line(l) && l.contains(symbol))
+    {
+        return clip_line(line);
+    }
+
+    let mut best: Option<(usize, &str)> = None;
+    for line in &lines {
+        let lower = line.to_lowercase();
+        let hits = terms.iter().filter(|t| lower.contains(t.as_str())).count();
+        if hits == 0 {
+            continue;
+        }
+        // Two points per term, one more for code over comments.
+        let score = hits * 2 + usize::from(!is_comment_line(line));
+        if best.is_none_or(|(s, _)| score > s) {
+            best = Some((score, line));
+        }
+    }
+
+    let line = best.map(|(_, l)| l).or_else(|| {
+        lines
+            .iter()
+            .find(|l| !is_comment_line(l) && **l != "}")
+            .or(lines.first())
+            .copied()
+    });
+    line.map(clip_line).unwrap_or_default()
 }
 
 pub fn find_refs_output(
@@ -109,40 +201,54 @@ pub fn find_refs_output(
     debug!(symbol = %params.symbol, limit = ?params.limit, "semantiq_find_refs called");
 
     let symbol = validate_input(&params.symbol, "Symbol name")?;
-    let limit = params.limit.unwrap_or(50).min(1000);
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_REFS_LIMIT)
+        .clamp(1, MAX_LIMIT);
 
-    let results = engine.find_references(&symbol, limit).map_err(|e| {
-        error!("Find references failed: {}", e);
-        "Find references failed: an internal error occurred".to_string()
-    })?;
+    // One extra reference tells whether the list is truncated.
+    let mut results = engine
+        .find_references(&symbol, limit + 1)
+        .map_err(|e| {
+            error!("Find references failed: {}", e);
+            "Find references failed: an internal error occurred".to_string()
+        })?
+        .results;
+    let truncated = results.len() > limit;
+    results.truncate(limit);
 
     let mut definitions = Vec::new();
     let mut usages = Vec::new();
-    for r in results.results {
+    for r in results {
         let kind = r
             .metadata
             .match_type
             .unwrap_or_else(|| "reference".to_string());
-        let is_definition = kind == "definition";
-        let reference = Reference {
-            file_path: r.file_path,
-            line: r.start_line,
-            kind,
-            content: r.content,
-        };
-        if is_definition {
-            definitions.push(reference);
+        if kind == "definition" {
+            // A definition's content is its whole source: keep the line
+            // declaring the name.
+            let content = preview_line(&r.content, Some(&symbol), &[]);
+            definitions.push(Reference {
+                file_path: r.file_path,
+                line: r.start_line,
+                kind: r.metadata.symbol_kind.unwrap_or(kind),
+                content,
+            });
         } else {
-            usages.push(reference);
+            usages.push(Reference {
+                file_path: r.file_path,
+                line: r.start_line,
+                kind,
+                content: clip_line(r.content.lines().next().unwrap_or("")),
+            });
         }
     }
 
     Ok(FindRefsOutput {
         symbol,
-        total_count: results.total_count,
-        search_time_ms: results.search_time_ms,
         definitions,
         usages,
+        truncated,
     })
 }
 
@@ -158,8 +264,12 @@ pub fn deps_output(engine: &RetrievalEngine, params: DepsParams) -> Result<DepsO
         .map(|deps| {
             deps.into_iter()
                 .map(|d| Import {
+                    // The name is redundant when the path already ends with it
+                    // (`crate::a::Name` imported as `Name`).
+                    import_name: d
+                        .import_name
+                        .filter(|name| !d.target_path.ends_with(name.as_str())),
                     target_path: d.target_path,
-                    import_name: d.import_name,
                     kind: d.kind,
                 })
                 .collect()
@@ -168,7 +278,13 @@ pub fn deps_output(engine: &RetrievalEngine, params: DepsParams) -> Result<DepsO
         .get_dependents(&file_path)
         .inspect_err(|e| error!("Could not analyze dependents: {}", e))
         .ok()
-        .map(|deps| deps.into_iter().map(|d| d.target_path).collect());
+        .map(|deps| {
+            // One row per importing statement: list each file once.
+            let mut paths: Vec<String> = deps.into_iter().map(|d| d.target_path).collect();
+            paths.sort();
+            paths.dedup();
+            paths
+        });
 
     Ok(DepsOutput {
         file_path,
@@ -274,6 +390,7 @@ pub fn explain_output(
             symbol,
             found: false,
             definitions: Vec::new(),
+            imported_in: Vec::new(),
             usage_count: 0,
             related_symbols: Vec::new(),
         });
@@ -285,11 +402,17 @@ pub fn explain_output(
     related_symbols.sort();
     related_symbols.truncate(10);
 
+    // Import statements are listed apart, without the module docs the index
+    // attaches to them.
+    let (imports, definitions): (Vec<_>, Vec<_>) = explanation
+        .definitions
+        .into_iter()
+        .partition(|d| d.kind == "import");
+
     Ok(ExplainOutput {
         symbol: explanation.name,
         found: true,
-        definitions: explanation
-            .definitions
+        definitions: definitions
             .into_iter()
             .map(|d| Definition {
                 file_path: d.file_path,
@@ -299,6 +422,10 @@ pub fn explain_output(
                 signature: d.signature,
                 doc_comment: d.doc_comment,
             })
+            .collect(),
+        imported_in: imports
+            .into_iter()
+            .map(|d| format!("{}:{}", d.file_path, d.start_line))
             .collect(),
         usage_count: explanation.usage_count,
         related_symbols,
@@ -364,7 +491,7 @@ pub fn repo_map_output(
             .map(|f| RepoMapFileOut {
                 file_path: f.path,
                 language: f.language,
-                rank: f.rank,
+                rank: round_rank(f.rank),
                 symbols: f
                     .symbols
                     .into_iter()
@@ -375,11 +502,86 @@ pub fn repo_map_output(
                         parent: s.parent,
                         signature: s.signature,
                         doc: s.doc,
-                        rank: s.rank,
+                        rank: round_rank(s.rank),
                     })
                     .collect(),
             })
             .collect(),
         text: map.text,
     })
+}
+
+/// Ranks are only compared with each other: 4 significant digits are enough.
+fn round_rank(rank: f64) -> f64 {
+    if rank == 0.0 || !rank.is_finite() {
+        return rank;
+    }
+    let scale = 10f64.powi(3 - rank.abs().log10().floor() as i32);
+    (rank * scale).round() / scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preview_prefers_the_symbol_declaration() {
+        let content = "/// Escape a query for escape_fts5_query users.\n#[inline]\npub fn escape_fts5_query(q: &str) -> String {\n    q.replace('\"', \"\")\n}";
+        assert_eq!(
+            preview_line(content, Some("escape_fts5_query"), &[]),
+            "pub fn escape_fts5_query(q: &str) -> String {"
+        );
+    }
+
+    #[test]
+    fn test_preview_picks_the_line_with_most_query_terms() {
+        let content = "fn process(&self) {\n    // events are debounced here\n    let batch = self.debounce(events, DEBOUNCE_MS);\n}";
+        let terms = query_terms("where are file watcher events debounced?");
+        assert_eq!(terms, vec!["debounc", "event", "watch"]);
+        assert_eq!(
+            preview_line(content, None, &terms),
+            "let batch = self.debounce(events, DEBOUNCE_MS);"
+        );
+    }
+
+    #[test]
+    fn test_preview_falls_back_to_first_code_line_and_clips() {
+        let long = format!("let x = \"{}\";", "a".repeat(200));
+        let content = format!("\n// header\n{}\n}}", long);
+        let preview = preview_line(&content, None, &query_terms("nothing matches"));
+        assert_eq!(preview.chars().count(), MAX_LINE_CHARS);
+        assert!(preview.starts_with("let x = \"aaa") && preview.ends_with('…'));
+        assert_eq!(preview_line("", None, &[]), "");
+    }
+
+    #[test]
+    fn test_round_rank_keeps_four_significant_digits() {
+        assert_eq!(round_rank(0.123456), 0.1235);
+        assert_eq!(round_rank(0.000123456), 0.0001235);
+        assert_eq!(round_rank(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_render_helpers() {
+        let paths: Vec<String> = ["a::X", "b::Y", "a::Z", "./local.js", "std::io"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(join_paths(&paths), "a::{X, Z}, b::Y, ./local.js, std::io");
+
+        let merged = merge_lines([
+            (3, "call".to_string()),
+            (5, "type".to_string()),
+            (9, "call".to_string()),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                ("3,9".to_string(), "call".to_string()),
+                ("5".to_string(), "type".to_string())
+            ]
+        );
+        assert_eq!(location("a.rs", 4, 4), "a.rs:4");
+        assert_eq!(location("a.rs", 4, 9), "a.rs:4-9");
+    }
 }

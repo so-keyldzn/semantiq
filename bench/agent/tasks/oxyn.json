@@ -1,0 +1,687 @@
+{
+  "repo": {
+    "name": "oxyn",
+    "source": "https://github.com/so-keyldzn/oxyn",
+    "commit": "f2fb2ab97f2f4b355970c254c95b16753d3cab5f",
+    "note": "oxyn main @ f2fb2ab (Tauri database client: Rust workspace crates/ + drivers/, React/TS front-end apps/desktop), ~1 000 Rust/TS source files"
+  },
+  "tasks": [
+    {
+      "id": "ox-concept-approval",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "When the AI assistant (or the user) wants to run a statement against a database marked as production, something decides whether it runs straight away, has to wait for a human OK, or is refused outright. Name the source file that holds that decision logic, and the front-end component in which the human gives (or withholds) the OK.",
+      "expected": [
+        {
+          "id": "core/policy.rs",
+          "any": [
+            "crates/oxyn-core/src/policy\\.rs$"
+          ]
+        },
+        {
+          "id": "approval-dialog.tsx",
+          "any": [
+            "apps/desktop/src/components/oxyn/approval-dialog\\.tsx$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-exec/src/(approval|executor|production_read_tests|preview_tests)\\.rs$",
+        "crates/oxyn-core/src/(command|preview|lib|ai)\\.rs$",
+        "crates/oxyn-desktop/src/backend(\\.rs|/confirm.*)$",
+        "crates/oxyn-desktop/src/commands(\\.rs|/.*)$",
+        "crates/oxyn-ai/src/(runtime|tools)\\.rs$",
+        "apps/desktop/src/components/oxyn/(assistant-view|assistant-queue|object-operation-review|assistant-sample-approval)\\.tsx$",
+        "apps/desktop/src/features/(consoles/console-panel|metadata/object-operation-flow|actions/action-overlays|assistant/assistant-panel)\\.tsx$",
+        "apps/desktop/src/lib/ipc/(client|types|ai)\\.ts$"
+      ]
+    },
+    {
+      "id": "ox-concept-secrets",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A user types a database password into the connection form. Follow it: where does it end up so that it is never written into the saved connection settings, and how is it handed back to the driver when the connection is opened later? List the source files that implement this, on the front-end side and on the Rust side.",
+      "expected": [
+        {
+          "id": "desktop/credentials.rs",
+          "any": [
+            "crates/oxyn-desktop/src/credentials\\.rs$"
+          ]
+        },
+        {
+          "id": "secrets/keyring_store.rs",
+          "any": [
+            "crates/oxyn-secrets/src/keyring_store\\.rs$"
+          ]
+        },
+        {
+          "id": "typed-secrets.ts",
+          "any": [
+            "apps/desktop/src/features/connections/typed-secrets\\.ts$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-secrets/src/",
+        "crates/oxyn-desktop/src/backend(\\.rs|/settings.*)$",
+        "crates/oxyn-desktop/src/(commands|ipc)(\\.rs|/settings\\.rs)$",
+        "crates/oxyn-exec/src/(sessions|executor)\\.rs$",
+        "crates/oxyn-driver/src/(credentials|traits|lib)\\.rs$",
+        "crates/oxyn-core/src/connection\\.rs$",
+        "apps/desktop/src/features/connections/connection-screen(-view)?\\.tsx$",
+        "apps/desktop/src/components/oxyn/connection-form\\.tsx$",
+        "apps/desktop/src/lib/ipc/(client|types|settings)\\.ts$",
+        "apps/desktop/src/features/settings/connections-settings\\.tsx$"
+      ],
+      "min_recall": 0.66
+    },
+    {
+      "id": "ox-concept-large-results",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A query returns millions of rows. How does the application avoid keeping all of them in memory while the user can still scroll anywhere in the grid, even before the query has finished? List the Rust source files that implement the storage of the rows, and the front-end file through which the grid asks for the slice it is about to display.",
+      "expected": [
+        {
+          "id": "data/spill.rs",
+          "any": [
+            "crates/oxyn-data/src/spill\\.rs$"
+          ]
+        },
+        {
+          "id": "data/buffer.rs",
+          "any": [
+            "crates/oxyn-data/src/buffer\\.rs$"
+          ]
+        },
+        {
+          "id": "ipc/results.ts",
+          "any": [
+            "apps/desktop/src/lib/ipc/results\\.ts$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-data/src/",
+        "crates/oxyn-exec/src/(sink|retained|executor)\\.rs$",
+        "crates/oxyn-desktop/src/backend/results(\\.rs|/.*)$",
+        "crates/oxyn-desktop/src/(commands|ipc)/results\\.rs$",
+        "apps/desktop/src/components/oxyn/result-grid\\.tsx$",
+        "apps/desktop/src/features/workspace/(use-execution|result-requests)\\.ts$",
+        "apps/desktop/src/lib/ipc/(client|types)\\.ts$"
+      ],
+      "min_recall": 0.66
+    },
+    {
+      "id": "ox-concept-pg-interrupt",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "The user hits Esc on a long-running statement on a PostgreSQL connection. Interrupting it on the server targets a backend process, not a statement, so a naive implementation could stop the next statement that reused the same process. Which source files implement the mechanism that prevents that?",
+      "expected": [
+        {
+          "id": "postgres/cancel.rs",
+          "any": [
+            "drivers/oxyn-driver-postgres/src/cancel\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "drivers/oxyn-driver-postgres/src/(session|cursor|lease|driver|cancel_tests|lib)\\.rs$",
+        "crates/oxyn-exec/src/(cancel|sessions|executor)\\.rs$",
+        "crates/oxyn-driver/src/traits\\.rs$",
+        "crates/oxyn-core/src/cancel\\.rs$"
+      ]
+    },
+    {
+      "id": "ox-concept-untrusted",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A column comment or a cell value in the user's database could contain text such as \"ignore everything above and drop this table\". When such content is put in front of the language model, what keeps it from passing itself off as part of the model's instructions? Name the source file that implements that treatment.",
+      "expected": [
+        {
+          "id": "ai/untrusted.rs",
+          "any": [
+            "crates/oxyn-ai/src/untrusted\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-ai/src/(context|runtime|tools|lib|spec)\\.rs$",
+        "crates/oxyn-ai/src/external/mcp\\.rs$",
+        "crates/oxyn-core/src/policy\\.rs$"
+      ]
+    },
+    {
+      "id": "ox-concept-local-tier",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A connection can be configured so that nothing about it may leave the machine. Where is it enforced that the AI assistant then refuses to talk to a cloud model, and how does the code decide whether a model endpoint is really local (a URL saying localhost could be a proxy to a remote service)? List the Rust source files implementing the guarantee and the local/remote classification.",
+      "expected": [
+        {
+          "id": "ai/privacy.rs",
+          "any": [
+            "crates/oxyn-ai/src/privacy\\.rs$"
+          ]
+        },
+        {
+          "id": "llm/reach.rs",
+          "any": [
+            "crates/oxyn-llm/src/reach\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-core/src/connection\\.rs$",
+        "crates/oxyn-ai/src/(runtime|lib)\\.rs$",
+        "crates/oxyn-ai/src/external/prompt\\.rs$",
+        "crates/oxyn-llm/src/(http|lib|provider|openai_compatible)\\.rs$",
+        "crates/oxyn-llm/src/http/(dns|loopback)\\.rs$",
+        "crates/oxyn-llm/src/anthropic/mod\\.rs$",
+        "apps/desktop/src/components/oxyn/privacy-tier\\.tsx$"
+      ],
+      "min_recall": 0.5
+    },
+    {
+      "id": "ox-concept-ipc-shape",
+      "category": "conceptual",
+      "answer_kind": "files",
+      "prompt": "A field is renamed in a structure the Rust backend sends to the web front-end. How does the front-end notice the mismatch at the boundary instead of reading `undefined` three screens later? Name the front-end file through which every backend call goes and where the answer is checked.",
+      "expected": [
+        {
+          "id": "ipc/client.ts",
+          "any": [
+            "apps/desktop/src/lib/ipc/client\\.ts$"
+          ]
+        }
+      ],
+      "allowed": [
+        "apps/desktop/src/lib/ipc/[\\w-]+\\.ts$",
+        "crates/oxyn-desktop/src/ipc(\\.rs|/.*)$",
+        "crates/oxyn-desktop/src/commands\\.rs$"
+      ]
+    },
+    {
+      "id": "ox-struct-driver-connect-chain",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Starting from the driver trait method `Driver::connect` (the one that opens a database session in crates/oxyn-driver), which non-test functions or methods reach it through calls, up to three levels up: its direct caller, that caller's callers, and theirs? Several unrelated functions are also named `connect` or `test_connection`; only list the ones actually on the call path.",
+      "expected": [
+        {
+          "id": "open_driver_session",
+          "any": [
+            "^(\\w+::)*open_driver_session$"
+          ]
+        },
+        {
+          "id": "Executor::connect",
+          "any": [
+            "^(oxyn_exec::)?(executor::)?(Executor::)?connect$"
+          ]
+        },
+        {
+          "id": "Executor::test_connection",
+          "any": [
+            "^(oxyn_exec::)?(executor::)?(Executor::)?test_connection$"
+          ]
+        },
+        {
+          "id": "execute_command",
+          "any": [
+            "^(\\w+::)*execute_command$"
+          ]
+        }
+      ],
+      "allowed": [
+        "^(\\w+::)*(Executor::)?(run|dispatch_as|dispatch|approve|decide)$",
+        "^(\\w+::)*Driver::connect$"
+      ],
+      "min_recall": 0.75
+    },
+    {
+      "id": "ox-struct-driver-connect-impact",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "If the signature of the trait method `Driver::connect` (crates/oxyn-driver) changes, which non-test source files must be updated: the trait definition, every production implementation and every production call site? Ignore test doubles, examples in doc comments and benchmarks.",
+      "expected": [
+        {
+          "id": "driver/traits.rs",
+          "any": [
+            "crates/oxyn-driver/src/traits\\.rs$"
+          ]
+        },
+        {
+          "id": "sqlite/driver.rs",
+          "any": [
+            "drivers/oxyn-driver-sqlite/src/driver\\.rs$"
+          ]
+        },
+        {
+          "id": "postgres/driver.rs",
+          "any": [
+            "drivers/oxyn-driver-postgres/src/driver\\.rs$"
+          ]
+        },
+        {
+          "id": "mysql/driver.rs",
+          "any": [
+            "drivers/oxyn-driver-mysql/src/driver\\.rs$"
+          ]
+        },
+        {
+          "id": "exec/executor.rs",
+          "any": [
+            "crates/oxyn-exec/src/executor\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-driver/src/registry\\.rs$",
+        "drivers/oxyn-driver-(sqlite|postgres|mysql)/src/lib\\.rs$"
+      ],
+      "min_recall": 0.8
+    },
+    {
+      "id": "ox-struct-cancel-chain",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "The driver trait method `Session::cancel` asks the database server to interrupt a running statement. Dozens of unrelated functions are also called `cancel`. Inside crates/oxyn-exec, which non-test function calls `Session::cancel` directly, and which function calls that one?",
+      "expected": [
+        {
+          "id": "SessionSlot::cancel_statement",
+          "any": [
+            "^(\\w+::)*cancel_statement$"
+          ]
+        },
+        {
+          "id": "CancelRegistry::cancel",
+          "any": [
+            "^(oxyn_exec::)?(cancel::)?CancelRegistry::cancel$"
+          ]
+        }
+      ],
+      "allowed": [
+        "^(\\w+::)*cancel_connection$",
+        "^(\\w+::)*(Executor::)?(execute_command|close_session|run_statement|disconnect)$",
+        "^(\\w+::)*Session::cancel$"
+      ]
+    },
+    {
+      "id": "ox-struct-backend-run-callers",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "In crates/oxyn-desktop, `Backend::run` dispatches a command under a cancellable token the front-end can reach. Many other things in the workspace are also called `run` (the agent runtime, catalog fills, updates, drivers, Tauri's builder). Which non-test source files call `Backend::run` itself?",
+      "expected": [
+        {
+          "id": "backend.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend\\.rs$"
+          ]
+        },
+        {
+          "id": "backend/metadata.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend/metadata\\.rs$"
+          ]
+        },
+        {
+          "id": "backend/results.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend/results\\.rs$"
+          ]
+        },
+        {
+          "id": "backend/windows/closing.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend/windows/closing\\.rs$"
+          ]
+        },
+        {
+          "id": "backend/consoles.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend/consoles\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [],
+      "min_recall": 0.8
+    },
+    {
+      "id": "ox-struct-catalog-provider-impls",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Which concrete types implement the `CatalogProvider` trait in production code? Exclude every test double and fake.",
+      "expected": [
+        {
+          "id": "SqliteCatalog",
+          "any": [
+            "\\bSqliteCatalog\\b"
+          ]
+        },
+        {
+          "id": "PostgresCatalog",
+          "any": [
+            "\\bPostgresCatalog\\b"
+          ]
+        },
+        {
+          "id": "MysqlCatalog",
+          "any": [
+            "\\bMysqlCatalog\\b"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "ox-struct-command-sink-impls",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "Which types implement the AI runtime's `CommandSink` trait in production code (not in tests, not in doc examples)?",
+      "expected": [
+        {
+          "id": "WriteGate",
+          "any": [
+            "\\bWriteGate\\b"
+          ]
+        },
+        {
+          "id": "AgentSink",
+          "any": [
+            "\\bAgentSink\\b"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "ox-struct-session-trait-breakage",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "If a new required method (no default body) is added to the driver trait `Session` (crates/oxyn-driver/src/traits.rs), which source files would stop compiling because they contain an implementation of that trait? Include test files and test modules, which you would then have to fix and run.",
+      "expected": [
+        {
+          "id": "sqlite/session.rs",
+          "any": [
+            "drivers/oxyn-driver-sqlite/src/session\\.rs$"
+          ]
+        },
+        {
+          "id": "postgres/session.rs",
+          "any": [
+            "drivers/oxyn-driver-postgres/src/session\\.rs$"
+          ]
+        },
+        {
+          "id": "mysql/session.rs",
+          "any": [
+            "drivers/oxyn-driver-mysql/src/session\\.rs$"
+          ]
+        },
+        {
+          "id": "driver/traits.rs",
+          "any": [
+            "crates/oxyn-driver/src/traits\\.rs$"
+          ]
+        },
+        {
+          "id": "exec/executor.rs",
+          "any": [
+            "crates/oxyn-exec/src/executor\\.rs$"
+          ]
+        },
+        {
+          "id": "catalog_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/catalog_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "stopped_write_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/stopped_write_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "timeout_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/timeout_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "preview_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/preview_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "abandon_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/abandon_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "session_close_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/session_close_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "transaction_state_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/transaction_state_tests\\.rs$"
+          ]
+        },
+        {
+          "id": "production_read_tests.rs",
+          "any": [
+            "crates/oxyn-exec/src/production_read_tests\\.rs$"
+          ]
+        }
+      ],
+      "allowed": [],
+      "min_recall": 0.85
+    },
+    {
+      "id": "ox-struct-data-dependents",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "If the public API of the `oxyn-data` crate changes, which other workspace crates are affected, directly or transitively, through their normal (non-dev) dependencies? Answer with the path of each affected crate's Cargo.toml.",
+      "expected": [
+        {
+          "id": "oxyn-driver",
+          "any": [
+            "^crates/oxyn-driver(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-exec",
+          "any": [
+            "^crates/oxyn-exec(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-desktop",
+          "any": [
+            "^crates/oxyn-desktop(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-plugin",
+          "any": [
+            "^crates/oxyn-plugin(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-driver-sqlite",
+          "any": [
+            "^drivers/oxyn-driver-sqlite(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-driver-postgres",
+          "any": [
+            "^drivers/oxyn-driver-postgres(/Cargo\\.toml)?$"
+          ]
+        },
+        {
+          "id": "oxyn-driver-mysql",
+          "any": [
+            "^drivers/oxyn-driver-mysql(/Cargo\\.toml)?$"
+          ]
+        }
+      ],
+      "allowed": [
+        "^crates/oxyn-data(/Cargo\\.toml)?$"
+      ],
+      "min_recall": 0.85,
+      "min_precision": 0.85
+    },
+    {
+      "id": "ox-struct-approval-dialog-users",
+      "category": "structural",
+      "answer_kind": "files",
+      "prompt": "Which front-end source files actually render the `ApprovalDialog` component (excluding its own file, tests and Storybook stories)? Files that only mention it in a comment do not count.",
+      "expected": [
+        {
+          "id": "object-operation-flow.tsx",
+          "any": [
+            "apps/desktop/src/features/metadata/object-operation-flow\\.tsx$"
+          ]
+        },
+        {
+          "id": "console-panel.tsx",
+          "any": [
+            "apps/desktop/src/features/consoles/console-panel\\.tsx$"
+          ]
+        },
+        {
+          "id": "assistant-view.tsx",
+          "any": [
+            "apps/desktop/src/components/oxyn/assistant-view\\.tsx$"
+          ]
+        }
+      ],
+      "allowed": [
+        "apps/desktop/src/components/oxyn/approval-dialog\\.tsx$"
+      ],
+      "min_precision": 0.8
+    },
+    {
+      "id": "ox-struct-dead-exports",
+      "category": "structural",
+      "answer_kind": "symbols",
+      "prompt": "In the front-end (apps/desktop/src), which functions declared with `export function` (outside test and story files) are never used anywhere: no call, JSX use, import or other reference in any other place of the repository, tests, stories and Storybook configuration included? Mentions in Markdown documentation do not count as uses.",
+      "expected": [
+        {
+          "id": "AskAiButton",
+          "any": [
+            "^(\\w+[.:/])*AskAiButton$"
+          ]
+        },
+        {
+          "id": "canPreview",
+          "any": [
+            "^(\\w+[.:/])*canPreview$"
+          ]
+        },
+        {
+          "id": "environmentLabel",
+          "any": [
+            "^(\\w+[.:/])*environmentLabel$"
+          ]
+        },
+        {
+          "id": "isLocked",
+          "any": [
+            "^(\\w+[.:/])*isLocked$"
+          ]
+        },
+        {
+          "id": "useSchemaProposal",
+          "any": [
+            "^(\\w+[.:/])*useSchemaProposal$"
+          ]
+        }
+      ],
+      "allowed": [],
+      "min_recall": 0.8,
+      "min_precision": 0.6
+    },
+    {
+      "id": "ox-exact-page-rows",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Where is the constant `MAX_PAGE_ROWS` defined, on the Rust side and in its TypeScript mirror?",
+      "expected": [
+        {
+          "id": "backend/results.rs",
+          "any": [
+            "crates/oxyn-desktop/src/backend/results\\.rs$"
+          ]
+        },
+        {
+          "id": "ipc/results.ts",
+          "any": [
+            "apps/desktop/src/lib/ipc/results\\.ts$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "ox-exact-read-page-command",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Where is the Tauri command `read_result_page` defined, and which front-end file invokes it?",
+      "expected": [
+        {
+          "id": "commands/results.rs",
+          "any": [
+            "crates/oxyn-desktop/src/commands/results\\.rs$"
+          ]
+        },
+        {
+          "id": "ipc/results.ts",
+          "any": [
+            "apps/desktop/src/lib/ipc/results\\.ts$"
+          ]
+        }
+      ],
+      "allowed": [
+        "crates/oxyn-desktop/src/backend/results\\.rs$",
+        "crates/oxyn-desktop/src/(main|commands)\\.rs$"
+      ]
+    },
+    {
+      "id": "ox-exact-window-deny",
+      "category": "exact",
+      "answer_kind": "files",
+      "prompt": "Which source file produces the refusal message \"only the human may arrange the windows\"?",
+      "expected": [
+        {
+          "id": "core/policy.rs",
+          "any": [
+            "crates/oxyn-core/src/policy\\.rs$"
+          ]
+        }
+      ],
+      "allowed": []
+    },
+    {
+      "id": "ox-exact-timeout-budget",
+      "category": "exact",
+      "answer_kind": "symbols",
+      "prompt": "Where is the constant `TIMEOUT_CAUSE_BUDGET` used? Give the name of the function that uses it.",
+      "expected": [
+        {
+          "id": "timeout_cause",
+          "any": [
+            "^(\\w+::)*timeout_cause$"
+          ]
+        }
+      ],
+      "allowed": [
+        "^TIMEOUT_CAUSE_BUDGET$"
+      ]
+    }
+  ]
+}

@@ -16,7 +16,7 @@ async fn test_deps_returns_formatted_output() {
 
     assert!(result.is_ok());
     let output = result.unwrap();
-    assert!(output.contains("Dependency analysis for 'main.rs'"));
+    assert!(output.starts_with("main.rs\n"), "{output}");
     assert!(output.contains("Imports"));
 }
 
@@ -47,7 +47,7 @@ async fn test_deps_nonexistent_file() {
 
     assert!(result.is_ok());
     let output = result.unwrap();
-    assert!(output.contains("0 dependencies"));
+    assert!(output.contains("Imports (0):"), "{output}");
 }
 
 #[tokio::test]

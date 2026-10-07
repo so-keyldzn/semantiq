@@ -314,6 +314,7 @@ mod tests {
                 min_score: None,
                 file_type: None,
                 symbol_kind: None,
+                snippets: None,
             },
         )
         .unwrap();

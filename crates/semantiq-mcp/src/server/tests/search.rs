@@ -63,8 +63,7 @@ async fn test_search_returns_results_format() {
 
     assert!(result.is_ok());
     let output = result.unwrap();
-    assert!(output.contains("results for 'hello'"));
-    assert!(output.contains("ms)"));
+    assert!(output.contains("for 'hello'"), "{output}");
 }
 
 #[tokio::test]
@@ -147,4 +146,51 @@ async fn test_search_flags_incomplete_results_during_initial_indexing() {
         .await
         .unwrap();
     assert!(result.starts_with("⏳ Initial indexing in progress"));
+}
+
+#[tokio::test]
+async fn test_search_is_compact_and_flags_truncation() {
+    let (server, _temp) = create_test_server();
+    for i in 0..3 {
+        index_test_file(
+            &server.store,
+            &format!("f{i}.rs"),
+            &format!("/// Doc.\nfn shared_name_{i}() {{\n    let body = {i};\n}}"),
+            "rust",
+        );
+    }
+
+    let output = server
+        .search(crate::server::SearchParams {
+            query: "shared_name".to_string(),
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.results.len(), 2);
+    assert!(output.truncated);
+    let hit = &output.results[0];
+    assert!(hit.content.is_none());
+    assert!(hit.preview.starts_with("fn shared_name_"), "{hit:?}");
+    assert_eq!(hit.score, (hit.score * 100.0).round() / 100.0);
+
+    let text = output.render();
+    assert!(
+        text.starts_with("2 results for 'shared_name' (more exist: raise limit)\n"),
+        "{text}"
+    );
+    assert!(!text.contains("```"), "{text}");
+
+    let full = server
+        .search(crate::server::SearchParams {
+            query: "shared_name".to_string(),
+            snippets: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(!full.truncated);
+    assert!(full.results.iter().all(|r| r.content.is_some()));
+    assert!(full.render().contains("```\n"));
 }

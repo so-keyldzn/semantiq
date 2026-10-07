@@ -13,6 +13,9 @@ use semantiq_retrieval::{
 };
 use tracing::{debug, error};
 
+/// Reason the engine gives every dead symbol, implied by the tool itself.
+const UNREFERENCED_REASON: &str = "no reference outside its own definition";
+
 /// Validate an optional relative path argument (no traversal).
 fn validate_path(value: Option<&str>, label: &str) -> Result<Option<String>, String> {
     match value {
@@ -166,7 +169,12 @@ pub fn dead_code_output(
                 end_line: s.end_line,
                 signature: s.signature,
                 confidence: s.confidence.as_str().to_string(),
-                reasons: s.reasons,
+                // Every symbol is unreferenced: keep what lowers the confidence.
+                reasons: s
+                    .reasons
+                    .into_iter()
+                    .filter(|r| r != UNREFERENCED_REASON)
+                    .collect(),
             })
             .collect(),
         candidates: report.candidates,

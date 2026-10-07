@@ -1,7 +1,7 @@
 //! Parameters and structured outputs of the structural tools:
 //! `semantiq_calls`, `semantiq_hierarchy` and `semantiq_dead_code`.
 
-use super::ImpactDefinitionOut;
+use super::{ImpactDefinitionOut, group_by, location, merge_lines, render_definitions};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
@@ -9,14 +9,13 @@ use serde::{Deserialize, Serialize};
 pub struct CallsParams {
     /// Function or method name
     pub symbol: String,
-    /// callers (who calls it), callees (what it calls) or both (default both)
+    /// callers, callees or both (default)
     pub direction: Option<String>,
-    /// Restrict to the definition in this file (relative path), when the name
-    /// is defined in several places
+    /// Definition file, when several share the name
     pub file_path: Option<String>,
-    /// How many call levels to follow (default 1, max 3)
+    /// Call levels to follow (default 1, max 3)
     pub max_depth: Option<usize>,
-    /// Maximum number of call edges (default 100, max 1000)
+    /// Max call edges (default 100)
     pub limit: Option<usize>,
 }
 
@@ -53,9 +52,9 @@ pub struct CallEdgeOut {
 pub struct HierarchyParams {
     /// Type, class, interface or trait name
     pub symbol: String,
-    /// How many inheritance levels to follow (default 3, max 5)
+    /// Inheritance levels to follow (default 3, max 5)
     pub max_depth: Option<usize>,
-    /// Maximum number of relations per direction (default 200, max 1000)
+    /// Max relations per direction (default 200)
     pub limit: Option<usize>,
 }
 
@@ -87,13 +86,13 @@ pub struct TypeRelationOut {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct DeadCodeParams {
-    /// Only files whose relative path starts with this prefix, e.g. "src/"
+    /// Only files under this path prefix, e.g. "src/"
     pub path_prefix: Option<String>,
-    /// Only this language: rust, typescript, python, go, java, …
+    /// Only this language, e.g. "rust"
     pub language: Option<String>,
     /// Also report public / exported symbols (default false)
     pub include_public: Option<bool>,
-    /// Maximum number of symbols (default 100, max 1000)
+    /// Max symbols (default 100)
     pub limit: Option<usize>,
 }
 
@@ -119,7 +118,8 @@ pub struct DeadSymbolOut {
     pub signature: Option<String>,
     /// high, medium or low
     pub confidence: String,
-    /// Why it is reported, and what lowers the confidence
+    /// What lowers the confidence (empty when high)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<String>,
 }
 
@@ -142,111 +142,95 @@ fn confidence_note(confidence: &str) -> &'static str {
     }
 }
 
-fn render_definitions(output: &mut String, definitions: &[ImpactDefinitionOut]) {
-    if definitions.is_empty() {
-        output.push_str("No definition found in the index; matching by name only.\n\n");
-        return;
-    }
-    for def in definitions {
-        output.push_str(&format!(
-            "Defined at {}:{} ({})\n",
-            def.file_path, def.line, def.kind
-        ));
-    }
-    output.push('\n');
-}
-
 impl CallsOutput {
     pub fn render(&self) -> String {
-        let mut output = format!("# Calls of '{}' ({})\n\n", self.symbol, self.direction);
+        let mut output = format!("Calls of '{}'", self.symbol);
+        if self.truncated {
+            output.push_str(" (limit reached: incomplete, raise limit)");
+        }
+        output.push('\n');
         render_definitions(&mut output, &self.definitions);
 
         if self.direction != "callees" {
-            output.push_str(&format!("## Callers ({})\n\n", self.callers.len()));
-            if self.callers.is_empty() {
-                output.push_str("No call site found.\n");
-            }
-            for edge in &self.callers {
-                output.push_str(&format!(
-                    "{}{} → {}  {}:{}{}\n",
-                    "  ".repeat(edge.depth - 1),
-                    edge.caller.as_deref().unwrap_or("<top level>"),
-                    edge.callee,
-                    edge.file_path,
-                    edge.line,
-                    confidence_note(&edge.confidence)
-                ));
-            }
-            output.push('\n');
+            self.render_edges(&mut output, "Callers", &self.callers, true);
         }
-
         if self.direction != "callers" {
-            output.push_str(&format!("## Callees ({})\n\n", self.callees.len()));
-            if self.callees.is_empty() {
-                output.push_str("No call to a project symbol.\n");
-            }
-            for edge in &self.callees {
-                output.push_str(&format!(
-                    "{}{} → {}  {}:{}{}\n",
-                    "  ".repeat(edge.depth - 1),
-                    edge.caller.as_deref().unwrap_or("<top level>"),
-                    edge.callee,
-                    edge.file_path,
-                    edge.line,
-                    confidence_note(&edge.confidence)
-                ));
-            }
+            self.render_edges(&mut output, "Callees", &self.callees, false);
             if !self.external_callees.is_empty() {
                 output.push_str(&format!(
-                    "\nLibrary calls: {}\n",
+                    "Library calls: {}\n",
                     self.external_callees.join(", ")
                 ));
             }
-            output.push('\n');
         }
 
-        if self.truncated {
-            output.push_str("Limit reached: the graph is incomplete.\n");
-        }
         output
+    }
+
+    /// Edges grouped by file, one line per call: `line caller → callee`. The
+    /// queried symbol is implied (callers call it, callees are called by it),
+    /// and repeated calls are merged into one line listing their lines.
+    fn render_edges(&self, output: &mut String, title: &str, edges: &[CallEdgeOut], callers: bool) {
+        if edges.is_empty() {
+            output.push_str(&format!("{}: none\n", title));
+            return;
+        }
+        output.push_str(&format!("{} ({}):\n", title, edges.len()));
+        for (file, edges) in group_by(edges, |e| &e.file_path) {
+            output.push_str(&format!("{}\n", file));
+            let described = edges.into_iter().map(|edge| {
+                let caller = edge.caller.as_deref().unwrap_or("<top level>");
+                let mut text = if callers && edge.callee == self.symbol {
+                    caller.to_string()
+                } else if !callers && caller == self.symbol {
+                    edge.callee.clone()
+                } else {
+                    format!("{} → {}", caller, edge.callee)
+                };
+                if edge.depth > 1 {
+                    text.push_str(&format!(" (depth {})", edge.depth));
+                }
+                text.push_str(confidence_note(&edge.confidence));
+                (edge.line, text)
+            });
+            for (lines, text) in merge_lines(described) {
+                output.push_str(&format!("  {} {}\n", lines, text));
+            }
+        }
     }
 }
 
 impl HierarchyOutput {
     pub fn render(&self) -> String {
-        let mut output = format!("# Type hierarchy of '{}'\n\n", self.symbol);
+        let mut output = format!("Type hierarchy of '{}'", self.symbol);
+        if self.truncated {
+            output.push_str(" (limit reached: incomplete, raise limit)");
+        }
+        output.push('\n');
         render_definitions(&mut output, &self.definitions);
 
         let sections = [
-            ("Supertypes", &self.supertypes, true),
-            ("Subtypes / implementors", &self.subtypes, false),
+            ("Supertypes", &self.supertypes),
+            ("Subtypes / implementors", &self.subtypes),
         ];
-        for (title, edges, up) in sections {
-            output.push_str(&format!("## {} ({})\n\n", title, edges.len()));
+        for (title, edges) in sections {
             if edges.is_empty() {
-                output.push_str("None found.\n");
+                output.push_str(&format!("{}: none\n", title));
+                continue;
             }
+            output.push_str(&format!("{} ({}):\n", title, edges.len()));
             for edge in edges {
-                let far = if up { &edge.super_type } else { &edge.sub_type };
                 output.push_str(&format!(
                     "{}{} {} {}  {}:{}{}\n",
-                    "  ".repeat(edge.depth - 1),
+                    "  ".repeat(edge.depth),
                     edge.sub_type,
                     edge.kind,
                     edge.super_type,
                     edge.file_path,
                     edge.line,
-                    if edge.resolved {
-                        String::new()
-                    } else {
-                        format!(" ({} not defined in the project)", far)
-                    }
+                    if edge.resolved { "" } else { " (library type)" }
                 ));
             }
-            output.push('\n');
-        }
-        if self.truncated {
-            output.push_str("Limit reached: the hierarchy is incomplete.\n");
         }
         output
     }
@@ -255,8 +239,13 @@ impl HierarchyOutput {
 impl DeadCodeOutput {
     pub fn render(&self) -> String {
         let mut output = format!(
-            "# Dead code: {} symbols ({} unreferenced candidates; excluded: {} entry points, {} tests, {} public, {} trait members)\n\n",
+            "Dead code: {} unreferenced symbols{} ({} candidates; excluded: {} entry points, {} tests, {} public, {} trait members)\n",
             self.symbols.len(),
+            if self.truncated {
+                ", limit reached: raise limit"
+            } else {
+                ""
+            },
             self.candidates,
             self.excluded.entry_points,
             self.excluded.tests,
@@ -268,18 +257,16 @@ impl DeadCodeOutput {
         }
         for symbol in &self.symbols {
             output.push_str(&format!(
-                "- [{}] {} {} — {}:{}-{}\n    {}\n",
+                "[{}] {} {}  {}",
                 symbol.confidence,
                 symbol.kind,
                 symbol.name,
-                symbol.file_path,
-                symbol.start_line,
-                symbol.end_line,
-                symbol.reasons.join("; ")
+                location(&symbol.file_path, symbol.start_line, symbol.end_line)
             ));
-        }
-        if self.truncated {
-            output.push_str("\nLimit reached: more candidates exist.\n");
+            if !symbol.reasons.is_empty() {
+                output.push_str(&format!(" — {}", symbol.reasons.join("; ")));
+            }
+            output.push('\n');
         }
         output
     }
