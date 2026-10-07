@@ -11,7 +11,7 @@
       "source": "./",
       "displayName": "Semantiq",
       "description": "Structural code intelligence (references, calls, hierarchy, impact, dead code, repo map, semantic search) via the semantiq CLI skill and MCP server.",
-      "version": "0.10.1"
+      "version": "0.11.0"
     }
   ]
 }

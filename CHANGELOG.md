@@ -4,6 +4,33 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-07
+
+### Added
+- **Two-phase indexing**: phase 1 stores symbols, references, call edges,
+  type relations, imports and chunks and stamps the file hash as its commit
+  point; phase 2 embeds the chunks still without an embedding, 32 at a time
+  across files, outside the DB lock, one transaction per batch, resumable by
+  construction. On a large repository the structural tools answer after 14 s
+  instead of ~13 min. `serve` runs phase 2 on a background thread and
+  `semantiq_search` prepends `Semantic index N% ready` while it runs;
+  `semantiq index` runs both phases with progress and gains `--no-embeddings`
+  and `--embeddings-only`; the query commands' refresh is phase 1 only, and
+  `search` embeds up to 64 pending chunks itself. `semantiq stats` and
+  `GET /stats` report embedded / total chunks. An edit only re-embeds the
+  chunks whose content changed.
+- **Import lines**: `deps` says where each import statement is, `(L3)` or
+  `(L3-5)` for multi-line statements, grouped per line and kind:
+  `local: a::{X, Y} (L3); b::Z (L5)`. `line` and `end_line` are in the JSON
+  output of `semantiq_deps` and `semantiq deps --json`, `line` in
+  `POST /deps`.
+- **Occurrence counts**: a line that uses a name several times is counted as
+  such. `calls` shows `run ×2` when `run` calls the symbol twice on one line
+  (`f(f(x))`), `count` appears in the JSON edge when above 1, `explain`'s
+  `usage_count` counts occurrences, and the repo map weights edges by
+  occurrences. Only occurrences of the kind kept for the line count: a plain
+  reference next to a call (`retry(retry)`) is not a second call.
+
 ### Changed
 - **Smaller MCP tool definitions**: `tools/list` drops from ~5.1k to ~3.0k
   tokens (chars/4, -42 %) for the 9 tools; the part forwarded to the model
@@ -50,6 +77,22 @@ All notable changes to Semantiq will be documented in this file.
     its own definition" (true of every result) and is omitted when empty.
   - `semantiq_repo_map`: `rank` values keep 4 significant digits.
   - Optional fields are never `null`: they are omitted.
+- **Index schema v9** (migrated in place on first start, then a full reindex
+  fills the new columns): `dependencies.line` / `end_line`, `refs.count` /
+  `call_edges.count`; the never-read `symbols` / `chunks` byte offsets and
+  `files.size` are dropped.
+- **Calibration observations are pruned**: `distance_observations` older than
+  30 days are deleted at each flush, always keeping the 500 most recent so a
+  calibration sample stays available. Calibrated thresholds are untouched.
+
+### Removed
+- Store API with no caller outside tests: `IndexStore::update_chunk_embedding`
+  (use `store_chunk_embeddings`), `get_chunks_without_embeddings`,
+  `get_file_language`, `insert_distance_observation`, `load_calibration`,
+  `clear_calibrations`; `RetrievalEngine::bootstrap_status`,
+  `FileWatcher::unwatch`, `DistanceCollector::production`.
+  `get_chunks_by_file`, `needs_full_reindex` and `set_parser_version` are now
+  behind the `semantiq-index/test-support` feature.
 
 ## [0.10.1] - 2026-10-06
 

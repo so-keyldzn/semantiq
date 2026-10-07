@@ -1,7 +1,7 @@
 {
   "name": "semantiq",
   "displayName": "Semantiq",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Structural code intelligence for Claude Code: real references, call graph, type hierarchy, change impact, dead code, repository map and semantic search, through the semantiq CLI (Agent Skill) and MCP server. Requires the semantiq binary (npm install -g semantiq-mcp).",
   "author": {
     "name": "keyldzn",
