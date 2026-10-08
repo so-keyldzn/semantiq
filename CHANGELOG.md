@@ -4,6 +4,12 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+
+### Fixed
+- Resolve dotted local import paths (such as ./user.service) without
+  discarding the dotted suffix, while preserving explicit JavaScript-to-TypeScript
+  extension resolution and consistent paths on Windows.
+
 ## [0.11.0] - 2026-10-07
 
 ### Added

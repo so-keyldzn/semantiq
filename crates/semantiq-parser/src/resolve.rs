@@ -33,25 +33,41 @@ pub fn resolve_local_import(
 
         // Try exact match
         if abs.is_file() {
-            return Some(normalized.to_string_lossy().to_string());
+            return Some(normalized.to_string_lossy().replace('\\', "/"));
         }
 
         // Try with language-specific extensions
         for ext in extensions_for_language(language) {
-            let with_ext = abs.with_extension(ext);
+            let with_ext =
+                abs.with_file_name(format!("{}.{}", abs.file_name()?.to_string_lossy(), ext));
             if with_ext.is_file() {
                 let rel = with_ext.strip_prefix(project_root).ok()?;
-                return Some(rel.to_string_lossy().to_string());
+                return Some(rel.to_string_lossy().replace('\\', "/"));
             }
         }
 
+        // Explicit JS extensions may refer to TS source files.
+        if matches!(language, Language::JavaScript | Language::TypeScript) {
+            let replacements: &[&str] = match abs.extension().and_then(|e| e.to_str()) {
+                Some("js") | Some("mjs") => &["ts", "tsx"],
+                Some("jsx") => &["tsx", "ts"],
+                _ => &[],
+            };
+            for ext in replacements {
+                let swapped = abs.with_extension(ext);
+                if swapped.is_file() {
+                    let rel = swapped.strip_prefix(project_root).ok()?;
+                    return Some(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
         // Try index files (JS/TS)
         if matches!(language, Language::JavaScript | Language::TypeScript) {
             for index_name in &["index.ts", "index.tsx", "index.js", "index.jsx"] {
                 let index_path = abs.join(index_name);
                 if index_path.is_file() {
                     let rel = index_path.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().to_string());
+                    return Some(rel.to_string_lossy().replace('\\', "/"));
                 }
             }
         }
@@ -61,7 +77,7 @@ pub fn resolve_local_import(
             let init_path = abs.join("__init__.py");
             if init_path.is_file() {
                 let rel = init_path.strip_prefix(project_root).ok()?;
-                return Some(rel.to_string_lossy().to_string());
+                return Some(rel.to_string_lossy().replace('\\', "/"));
             }
         }
     }
@@ -215,6 +231,38 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_explicit_js_to_ts() {
+        let dir = setup_project(&["src/app.ts", "src/foo.ts"]);
+        let resolved =
+            resolve_local_import("src/app.ts", "./foo.js", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.ts"));
+    }
+
+    #[test]
+    fn test_resolve_explicit_jsx_to_tsx() {
+        let dir = setup_project(&["src/app.ts", "src/foo.tsx"]);
+        let resolved =
+            resolve_local_import("src/app.ts", "./foo.jsx", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.tsx"));
+    }
+
+    #[test]
+    fn test_resolve_explicit_mjs_to_ts() {
+        let dir = setup_project(&["src/app.ts", "src/foo.ts"]);
+        let resolved =
+            resolve_local_import("src/app.ts", "./foo.mjs", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.ts"));
+    }
+
+    #[test]
+    fn test_resolve_exact_js_file_takes_precedence() {
+        let dir = setup_project(&["src/app.ts", "src/foo.js", "src/foo.ts"]);
+        let resolved =
+            resolve_local_import("src/app.ts", "./foo.js", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.js"));
+    }
+
+    #[test]
     fn test_resolve_js_relative_import() {
         let dir = setup_project(&["src/components/Button.tsx", "src/utils/helpers.ts"]);
 
@@ -227,6 +275,29 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("src/utils/helpers.ts"));
     }
 
+    #[test]
+    fn test_resolve_dotted_module_name() {
+        let dir = setup_project(&["src/app.ts", "src/user.service.ts"]);
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "./user.service",
+            Language::TypeScript,
+            dir.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some("src/user.service.ts"));
+    }
+
+    #[test]
+    fn test_resolve_dotted_module_not_confused_with_shorter_name() {
+        let dir = setup_project(&["src/app.ts", "src/user.ts", "src/user.service.ts"]);
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "./user.service",
+            Language::TypeScript,
+            dir.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some("src/user.service.ts"));
+    }
     #[test]
     fn test_resolve_js_index_import() {
         let dir = setup_project(&["src/components/index.ts", "src/app.ts"]);
