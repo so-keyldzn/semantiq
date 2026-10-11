@@ -202,30 +202,12 @@ impl SemantiqServer {
         if self.is_initial_indexing() {
             return self.with_indexing_notice(output);
         }
-        if semantiq_embeddings::semantic_search_unavailable_reason().is_some() {
-            return output;
-        }
-        if let Some(error) = self.embedding_model_error() {
-            return format!(
-                "⚠️ Semantic index unavailable: {}. Only symbol and text matches are \
-                 returned.\n\n{}",
-                model_error_reason(error),
-                output
-            );
-        }
-        match self.embedding_in_progress() {
-            Some(counts) => {
-                format!(
-                    "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
-                     matches may be missing; symbol and text matches are complete.\n\n{}",
-                    counts.percent(),
-                    counts.embedded,
-                    counts.total,
-                    output
-                )
-            }
-            None => output,
-        }
+        search_notice(
+            semantiq_embeddings::semantic_search_unavailable_reason(),
+            self.embedding_model_error().map(model_error_reason),
+            self.embedding_in_progress(),
+            output,
+        )
     }
 
     /// Prepend a warning to a tool response while the initial index is incomplete.
@@ -356,6 +338,39 @@ fn model_error_reason(error: String) -> String {
     format!(
         "the embedding model could not be loaded ({error}); loading is retried in the background"
     )
+}
+
+/// Notice prepended to a `semantiq_search` output. With the stub backend
+/// (`backend_reason`) the instructions already say semantic search is off, so
+/// nothing is added; `unavailable_reason` (model load failure) warns that
+/// only symbol and text matches are returned; `in_progress` says how much of
+/// the semantic index is ready.
+fn search_notice(
+    backend_reason: Option<&str>,
+    unavailable_reason: Option<String>,
+    in_progress: Option<EmbeddingCounts>,
+    output: String,
+) -> String {
+    if backend_reason.is_some() {
+        return output;
+    }
+    if let Some(reason) = unavailable_reason {
+        return format!(
+            "⚠️ Semantic index unavailable: {reason}. Only symbol and text matches are \
+             returned.\n\n{output}"
+        );
+    }
+    match in_progress {
+        Some(counts) => format!(
+            "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
+             matches may be missing; symbol and text matches are complete.\n\n{}",
+            counts.percent(),
+            counts.embedded,
+            counts.total,
+            output
+        ),
+        None => output,
+    }
 }
 
 /// Wrap a tool output as both markdown text (for clients that only read

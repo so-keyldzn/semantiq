@@ -2,8 +2,9 @@
 //! file watcher (#47) and the embedding model's availability (#52).
 
 use super::SemantiqServer;
+use crate::server::{model_error_reason, search_notice};
 use rmcp::ServerHandler;
-use semantiq_index::{BackgroundEmbedder, EmbedderConfig, IndexStore};
+use semantiq_index::{BackgroundEmbedder, EmbedderConfig, EmbeddingCounts, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
 use std::fs;
 use std::sync::Arc;
@@ -147,5 +148,53 @@ async fn failed_model_load_is_reported_as_unavailable_reason() {
         assert!(reason.contains("sha256 mismatch"), "{reason}");
         assert!(reason.contains("retried"), "{reason}");
     }
-    assert!(crate::server::model_error_reason(error).contains("retried in the background"));
+    assert!(model_error_reason(error).contains("retried in the background"));
+}
+
+/// The notice itself, which the server only reaches with the ONNX backend.
+#[test]
+fn search_notice_has_three_cases() {
+    let output = "## Results\n".to_string();
+    let counts = EmbeddingCounts {
+        embedded: 21,
+        total: 50,
+    };
+
+    // Stub backend: the instructions already say so, nothing is added, even
+    // with an error or a pass in flight.
+    assert_eq!(
+        search_notice(
+            Some("the stub model is selected"),
+            Some("the embedding model could not be loaded (x)".into()),
+            Some(counts),
+            output.clone()
+        ),
+        output
+    );
+
+    // Model error wins over a pass in flight.
+    let notice = search_notice(
+        None,
+        Some(model_error_reason("sha256 mismatch".into())),
+        Some(counts),
+        output.clone(),
+    );
+    assert!(
+        notice.starts_with("⚠️ Semantic index unavailable: "),
+        "{notice}"
+    );
+    assert!(notice.contains("sha256 mismatch"), "{notice}");
+    assert!(notice.contains("Only symbol and text matches"), "{notice}");
+    assert!(notice.ends_with(&format!("\n\n{output}")), "{notice}");
+
+    // Pass in flight.
+    let notice = search_notice(None, None, Some(counts), output.clone());
+    assert!(
+        notice.starts_with("⏳ Semantic index 42% ready (21/50 chunks embedded)"),
+        "{notice}"
+    );
+    assert!(notice.ends_with(&format!("\n\n{output}")), "{notice}");
+
+    // Nothing to say.
+    assert_eq!(search_notice(None, None, None, output.clone()), output);
 }
