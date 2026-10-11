@@ -52,6 +52,22 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  npm-test:
+    name: npm installer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      # Download helpers of npm/scripts/install.js against a local HTTP server
+      # (node --test); the installer itself is never run here.
+      - name: Run npm test
+        working-directory: npm
+        run: npm test
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

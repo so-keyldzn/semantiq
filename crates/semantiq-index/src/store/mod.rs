@@ -180,7 +180,10 @@ impl IndexStore {
                     (SELECT COUNT(*) FROM files) as file_count,
                     (SELECT COUNT(*) FROM symbols) as symbol_count,
                     (SELECT COUNT(*) FROM chunks) as chunk_count,
-                    (SELECT COUNT(*) FROM dependencies) as dep_count",
+                    (SELECT COUNT(*) FROM dependencies) as dep_count,
+                    (SELECT COUNT(*) FROM refs) as ref_count,
+                    (SELECT COUNT(*) FROM call_edges) as call_edge_count,
+                    (SELECT COUNT(*) FROM type_relations) as type_relation_count",
                 [],
                 |row| {
                     Ok(IndexStats {
@@ -188,6 +191,9 @@ impl IndexStore {
                         symbol_count: row.get::<_, i64>(1)? as usize,
                         chunk_count: row.get::<_, i64>(2)? as usize,
                         dependency_count: row.get::<_, i64>(3)? as usize,
+                        ref_count: row.get::<_, i64>(4)? as usize,
+                        call_edge_count: row.get::<_, i64>(5)? as usize,
+                        type_relation_count: row.get::<_, i64>(6)? as usize,
                     })
                 },
             )
@@ -273,6 +279,13 @@ pub struct IndexStats {
     pub symbol_count: usize,
     pub chunk_count: usize,
     pub dependency_count: usize,
+    /// Rows of `refs` (identifier occurrences behind `find_refs`, `impact`,
+    /// `dead_code` and the repo map).
+    pub ref_count: usize,
+    /// Rows of `call_edges` (behind `calls`).
+    pub call_edge_count: usize,
+    /// Rows of `type_relations` (behind `hierarchy`).
+    pub type_relation_count: usize,
 }
 
 #[cfg(test)]

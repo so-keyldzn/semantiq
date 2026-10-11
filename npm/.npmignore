@@ -1,0 +1,4 @@
+test/
+bin/semantiq
+bin/semantiq.exe
+bin/*.tar.gz

@@ -95,15 +95,16 @@ struct GitHubRelease {
     tag_name: String,
 }
 
-fn get_cache_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("semantiq")
-        .join(CACHE_FILE)
+/// Where the version cache lives: `None` when the platform data directory is
+/// unknown (sandboxed IDE launch without HOME / XDG variables). The cache is
+/// then skipped rather than written into the current directory, which is the
+/// indexed project.
+fn get_cache_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("semantiq").join(CACHE_FILE))
 }
 
 fn read_cache() -> Option<VersionCache> {
-    let path = get_cache_path();
+    let path = get_cache_path()?;
     if !path.exists() {
         return None;
     }
@@ -112,7 +113,10 @@ fn read_cache() -> Option<VersionCache> {
 }
 
 fn write_cache(cache: &VersionCache) {
-    let path = get_cache_path();
+    let Some(path) = get_cache_path() else {
+        debug!("No data directory: version check result not cached");
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -239,6 +243,19 @@ pub fn is_version_newer(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_path_is_under_the_data_dir_or_absent() {
+        // Never a relative path: with no data directory the cache is skipped
+        // rather than written into the current (indexed) project.
+        match get_cache_path() {
+            Some(path) => {
+                assert!(path.is_absolute(), "{}", path.display());
+                assert!(path.ends_with(PathBuf::from("semantiq").join(CACHE_FILE)));
+            }
+            None => assert!(dirs::data_dir().is_none()),
+        }
+    }
 
     #[test]
     fn test_is_newer() {

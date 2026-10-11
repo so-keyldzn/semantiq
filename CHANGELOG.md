@@ -4,6 +4,37 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- The HTTP API (`serve --http-port`) rejects requests whose `Host` header is
+  not `localhost`, `127.0.0.1`, `[::1]` or the bound address with 403 when
+  bound to loopback, on every endpoint and not only `/mcp`: a page whose DNS name re-resolves to
+  127.0.0.1 can no longer read the indexed code same-origin (DNS rebinding).
+  `--http-host` with a non-loopback address disables the check (#38).
+- Dependencies: `anyhow` 1.0.104 (RUSTSEC-2026-0190), `crossbeam-epoch` 0.9.21
+  (RUSTSEC-2026-0204) and `memmap2` 0.9.11 (RUSTSEC-2026-0186). `rmcp` 3.5
+  already carries the Streamable HTTP `Host` check (RUSTSEC-2026-0189). The
+  `Security` workflow is green again; its remaining ignores are the three
+  unmaintained-only advisories without a fixed release (#39).
+
+### Added
+- `semantiq stats` reports the structure tables: `References`, `Call edges`
+  and `Type relations` (the data behind `refs` / `impact` / `dead-code`,
+  `calls` and `hierarchy`); `GET /stats` gains `indexed_refs`,
+  `indexed_call_edges` and `indexed_type_relations` (#50).
+
+### Changed
+- The release workflow fails before building anything when the `v*` tag does
+  not match the version in `Cargo.toml`, `npm/package.json`,
+  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`: a
+  release whose binary reports another version made every MCP session log
+  `Update available` and `semantiq update` reinstall it forever (#51).
+- `semantiq update` checks before downloading that the binary can be
+  replaced: a Homebrew (`Cellar`) or npm (`node_modules`) install is refused
+  with the matching `brew upgrade semantiq` / `npm update -g semantiq-mcp`
+  command, and an unwritable install directory fails right away. Without a
+  platform data directory (sandboxed launch without HOME / XDG), the version
+  check no longer writes its cache into the current project (#51).
+
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
   of calls: `refs foo` shows the definition line, `calls foo` no longer lists
@@ -82,6 +113,21 @@ All notable changes to Semantiq will be documented in this file.
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
 - `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
+- npm installer (`npm install -g semantiq-mcp`): release downloads follow
+  301/302/303/307/308 redirects (at most 5, each redirect response drained),
+  abort after 30 s without data instead of hanging `postinstall`, and retry
+  transient failures (network errors, timeouts, 429/5xx) three times with
+  backoff before printing the fallback instructions; a 404 is final. The
+  helpers are covered by `npm test` (`node --test`, Node 18+) against a local
+  HTTP server (#48).
+- `semantiq stats` finds the index the way the query commands do:
+  `.semantiq.db` in the current directory or a parent, or `--database`. From
+  a subdirectory of an indexed project it no longer fails with a hint that
+  would create a second, nested index (#50).
+- `semantiq map --json | head -5` (any query command, `--json` or markdown,
+  and `stats` / `calibrate`) ends quietly with exit code 0 when the reader
+  closes the pipe early, instead of panicking with `Broken pipe` and exit
+  code 101 (#49).
 
 ## [0.11.0] - 2026-10-07
 

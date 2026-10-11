@@ -149,6 +149,16 @@ pub(super) struct StatsResponse {
     pub indexed_symbols: usize,
     pub indexed_chunks: usize,
     pub indexed_dependencies: usize,
+    /// Rows of the `refs` table (identifier occurrences behind find-refs,
+    /// impact, dead-code and the repo map).
+    #[serde(default)]
+    pub indexed_refs: usize,
+    /// Rows of the `call_edges` table (behind `/calls`).
+    #[serde(default)]
+    pub indexed_call_edges: usize,
+    /// Rows of the `type_relations` table (behind `/hierarchy`).
+    #[serde(default)]
+    pub indexed_type_relations: usize,
     /// True while the initial index pass (phase 1: structure) is running
     /// (counts are still growing).
     #[serde(default)]

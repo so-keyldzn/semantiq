@@ -4,6 +4,7 @@
 //! demo) and the MCP Streamable HTTP transport at `/mcp`, so remote MCP
 //! clients can connect without spawning a stdio process.
 
+mod host;
 mod routes;
 #[cfg(test)]
 mod tests;
@@ -11,9 +12,12 @@ mod types;
 
 pub(crate) use routes::create_router;
 
+use host::{AllowedHosts, require_allowed_host};
+
 use anyhow::Result;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -39,12 +43,18 @@ pub(crate) async fn serve_http(
     cors_origin: Option<String>,
 ) -> Result<()> {
     // The MCP transport validates the `Host` header against loopback names to
-    // block DNS rebinding. When the user explicitly binds beyond loopback, the
-    // Host will be this machine's address, so the check has to go.
+    // block DNS rebinding; `require_allowed_host` below does the same for the
+    // REST endpoints, both with the same list (loopback names plus the bound
+    // address). When the user explicitly binds beyond loopback, the Host will
+    // be this machine's address, so both checks have to go.
+    let allowed_hosts = host
+        .is_loopback()
+        .then(|| AllowedHosts::for_bind_address(host));
     let mut mcp_config = StreamableHttpServerConfig::default();
-    if !host.is_loopback() {
-        mcp_config = mcp_config.disable_allowed_hosts();
-    }
+    mcp_config = match &allowed_hosts {
+        Some(allowed) => mcp_config.with_allowed_hosts(allowed.names().iter().cloned()),
+        None => mcp_config.disable_allowed_hosts(),
+    };
     // Open SSE streams would otherwise keep graceful shutdown waiting forever.
     let mcp_shutdown = mcp_config.cancellation_token.clone();
     let mcp_server = server.clone();
@@ -77,12 +87,18 @@ pub(crate) async fn serve_http(
         CorsLayer::new()
     };
 
-    let app: Router = create_router(server)
+    let mut app: Router = create_router(server)
         .nest_service("/mcp", mcp_service)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
+    if let Some(allowed) = allowed_hosts {
+        app = app.layer(middleware::from_fn_with_state(
+            allowed,
+            require_allowed_host,
+        ));
+    }
 
     // The API has no authentication, so binding beyond loopback exposes the
     // indexed source code to anyone who can reach this host.

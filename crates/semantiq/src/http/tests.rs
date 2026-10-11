@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::http::create_router;
+use crate::http::host::{AllowedHosts, require_allowed_host};
 use crate::http::types::*;
 
 /// Create a test router with an in-memory database
@@ -16,6 +17,21 @@ fn test_router() -> axum::Router {
     // Leak the tempdir so it stays alive for the duration of the test
     std::mem::forget(dir);
     create_router(Arc::new(server))
+}
+
+/// The test router behind the `Host` guard, as `serve --http-port` builds it
+/// when bound to the loopback address `bind`.
+fn router_bound_to(bind: &str) -> axum::Router {
+    let allowed = AllowedHosts::for_bind_address(bind.parse().unwrap());
+    test_router().layer(axum::middleware::from_fn_with_state(
+        allowed,
+        require_allowed_host,
+    ))
+}
+
+/// Bound to the default `127.0.0.1`.
+fn guarded_router() -> axum::Router {
+    router_bound_to("127.0.0.1")
 }
 
 async fn response_body(response: axum::http::Response<Body>) -> Vec<u8> {
@@ -68,6 +84,9 @@ async fn test_stats_returns_ok() {
     let stats: StatsResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(stats.indexed_files, 0);
     assert_eq!(stats.indexed_symbols, 0);
+    assert_eq!(stats.indexed_refs, 0);
+    assert_eq!(stats.indexed_call_edges, 0);
+    assert_eq!(stats.indexed_type_relations, 0);
     assert!(!stats.indexing);
     // `SemantiqServer::new` watches the temporary project.
     assert!(stats.watching);
@@ -498,4 +517,140 @@ async fn test_dead_code_endpoint() {
         post_json("/dead-code", r#"{"path_prefix": "crates/", "limit": 5000}"#).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["symbols"].as_array().unwrap().is_empty());
+}
+
+// ============================================
+// Loopback Host guard (DNS rebinding)
+// ============================================
+
+#[tokio::test]
+async fn test_foreign_host_is_rejected_on_rest_endpoints() {
+    // A page at http://evil.example:3000 whose name re-resolves to 127.0.0.1
+    // sends same-origin requests carrying its own Host: no CORS involved.
+    for (path, body) in [
+        ("/search", Some(r#"{"query": "compute"}"#)),
+        ("/stats", None),
+        ("/health", None),
+    ] {
+        let request = match body {
+            Some(body) => Request::post(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body)),
+            None => Request::get(path).body(Body::empty()),
+        };
+        let response = guarded_router()
+            .oneshot(request.unwrap().tap_host("evil.example:3000"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        let body = response_body(response).await;
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            "Forbidden: Host header is not allowed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_loopback_hosts_are_accepted() {
+    for host in [
+        "localhost:3000",
+        "localhost",
+        "LocalHost",
+        "127.0.0.1:3000",
+        "[::1]:3000",
+    ] {
+        let response = guarded_router()
+            .oneshot(
+                Request::get("/health")
+                    .header("host", host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn test_missing_host_is_rejected_unless_the_uri_carries_it() {
+    let response = guarded_router()
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // HTTP/2 puts the host in `:authority`, which hyper exposes on the URI.
+    let response = guarded_router()
+        .oneshot(
+            Request::get("http://localhost:3000/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = guarded_router()
+        .oneshot(
+            Request::get("http://evil.example/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_bound_loopback_address_is_accepted() {
+    // `--http-host 127.0.0.2` is loopback too: its clients send its address.
+    for (host, status) in [
+        ("127.0.0.2:3000", StatusCode::OK),
+        ("127.0.0.2", StatusCode::OK),
+        ("localhost:3000", StatusCode::OK),
+        ("127.0.0.3:3000", StatusCode::FORBIDDEN),
+        ("evil.example:3000", StatusCode::FORBIDDEN),
+    ] {
+        let response = router_bound_to("127.0.0.2")
+            .oneshot(
+                Request::get("/health")
+                    .header("host", host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn test_router_without_the_guard_ignores_host() {
+    // `--http-host 0.0.0.0` disables the guard: the Host is then this
+    // machine's address, whatever it is.
+    let response = test_router()
+        .oneshot(
+            Request::get("/health")
+                .header("host", "build-box.lan:3000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Set the `Host` header on a built request.
+trait TapHost {
+    fn tap_host(self, host: &str) -> Self;
+}
+
+impl TapHost for Request<Body> {
+    fn tap_host(mut self, host: &str) -> Self {
+        self.headers_mut()
+            .insert("host", axum::http::HeaderValue::from_str(host).unwrap());
+        self
+    }
 }

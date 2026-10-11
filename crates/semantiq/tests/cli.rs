@@ -7,6 +7,13 @@ use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::process::Stdio;
+
 fn command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_semantiq"));
     cmd.args(args)
@@ -337,6 +344,84 @@ fn empty_index_is_an_error() {
     let output = semantiq(dir.path(), &["explain", "x"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("is empty"), "{}", stderr(&output));
+}
+
+/// `semantiq map --json | head -5`: the reader closes the pipe before the
+/// output is fully written. That is not an error for the command (exit 0, no
+/// panic), for the JSON and the markdown output alike, and for `stats`.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_is_not_an_error() {
+    let project = indexed_project();
+    for args in [
+        &["map", "--json"][..],
+        &["map"][..],
+        &["refs", "compute"][..],
+        &["stats"][..],
+    ] {
+        // A socket whose reading end is already closed: the first write
+        // fails with EPIPE, whatever the output size.
+        let (reader, writer) = UnixStream::pair().unwrap();
+        drop(reader);
+        let output = command(project.path(), args)
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .output()
+            .unwrap();
+        let errors = stderr(&output);
+        assert!(
+            output.status.success(),
+            "{args:?} exited with {:?}: {errors}",
+            output.status.code()
+        );
+        assert!(!errors.contains("Broken pipe"), "{args:?}: {errors}");
+    }
+}
+
+/// `stats` finds the index the way the query commands do (current directory
+/// or a parent, `--database`) and reports the structure tables.
+#[test]
+fn stats_finds_the_index_from_a_subdirectory() {
+    let project = indexed_project();
+    let output = semantiq(&project.path().join("src"), &["stats"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    for line in [
+        "  Files indexed: 3\n",
+        "  Symbols: ",
+        "  Dependencies: ",
+        "  References: ",
+        "  Call edges: ",
+        "  Type relations: 0\n",
+    ] {
+        assert!(text.contains(line), "missing {line:?} in {text}");
+    }
+    let count = |label: &str| -> usize {
+        text.lines()
+            .find_map(|l| l.strip_prefix(label))
+            .unwrap_or_else(|| panic!("{label:?} in {text}"))
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    assert!(count("  References:") > 0, "{text}");
+    assert!(count("  Call edges:") > 0, "{text}");
+
+    // `--database` is honoured, with a path relative to the current directory.
+    let output = semantiq(
+        &project.path().join("src"),
+        &["stats", "--database", "../.semantiq.db"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Without an index, the hint is the same as for the query commands.
+    let empty = tempfile::tempdir().unwrap();
+    let output = semantiq(empty.path(), &["stats"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("No Semantiq index found"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

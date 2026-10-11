@@ -9,8 +9,55 @@ permissions:
   contents: write
 
 jobs:
+  # The archives and the npm package are named after the tag, while the binary
+  # reports the version compiled from Cargo.toml: a mismatch makes every MCP
+  # session log "Update available" and `semantiq update` reinstall the same
+  # release forever. Fail before building anything.
+  check-version:
+    name: Check tag matches versions
+    runs-on: ubuntu-latest
+    # Only reads the repository; the workflow default is `contents: write`.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compare the tag with Cargo.toml, npm/package.json and the plugin manifests
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "semantiq") | .version')
+          NPM=$(jq -r '.version' npm/package.json)
+          PLUGIN=$(jq -r '.version' .claude-plugin/plugin.json)
+          MARKETPLACE=$(jq -r '.plugins[] | select(.name == "semantiq") | .version' .claude-plugin/marketplace.json)
+          echo "tag ${GITHUB_REF_NAME} -> ${TAG}"
+          echo "Cargo.toml (workspace):          ${CARGO}"
+          echo "npm/package.json:                ${NPM}"
+          echo ".claude-plugin/plugin.json:      ${PLUGIN}"
+          echo ".claude-plugin/marketplace.json: ${MARKETPLACE}"
+          STATUS=0
+          for entry in "Cargo.toml=${CARGO}" "npm/package.json=${NPM}" \
+                       ".claude-plugin/plugin.json=${PLUGIN}" ".claude-plugin/marketplace.json=${MARKETPLACE}"; do
+            FILE="${entry%%=*}"
+            VERSION="${entry#*=}"
+            if [ "${VERSION}" != "${TAG}" ]; then
+              echo "::error::${FILE} declares version ${VERSION} but the tag is ${GITHUB_REF_NAME}"
+              STATUS=1
+            fi
+          done
+          if [ "${STATUS}" -ne 0 ]; then
+            echo "::error::Tag/version mismatch: bump the version in Cargo.toml, npm/package.json, .claude-plugin/plugin.json and .claude-plugin/marketplace.json together (see CLAUDE.md, Releasing), then re-tag."
+            exit 1
+          fi
+          echo "All version files match tag ${GITHUB_REF_NAME}."
+
   build:
     name: Build ${{ matrix.target }}
+    needs: check-version
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

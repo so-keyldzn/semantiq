@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use semantiq_index::{CalibrationData, IndexStore};
 use semantiq_retrieval::{CalibrationConfig, ThresholdCalibrator, format_calibration_summary};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use super::common::resolve_db_path;
+use super::common::{outln, print_stdout, resolve_db_path};
 
 /// Run threshold calibration.
 pub(crate) async fn calibrate(
@@ -26,42 +26,61 @@ pub(crate) async fn calibrate(
 
     let store = IndexStore::open(&db_path)?;
 
-    println!("Semantiq Threshold Calibration");
-    println!("==============================");
-    println!("Database: {:?}", db_path);
-    println!("Min samples: {}", min_samples);
-    println!("Dry run: {}", dry_run);
-    println!();
+    // One report, printed in one go (also what was written before an error):
+    // `semantiq calibrate | head` must not panic.
+    let mut out = String::new();
+    let result = run(&store, &db_path, language, dry_run, min_samples, &mut out);
+    print_stdout(out.trim_end())?;
+    result
+}
+
+fn run(
+    store: &IndexStore,
+    db_path: &Path,
+    language: Option<String>,
+    dry_run: bool,
+    min_samples: usize,
+    out: &mut String,
+) -> Result<()> {
+    outln!(out, "Semantiq Threshold Calibration");
+    outln!(out, "==============================");
+    outln!(out, "Database: {:?}", db_path);
+    outln!(out, "Min samples: {}", min_samples);
+    outln!(out, "Dry run: {}", dry_run);
+    outln!(out);
 
     // Get observation counts
     let counts = store.get_observation_counts()?;
     let total: usize = counts.values().sum();
 
     if counts.is_empty() {
-        println!("No distance observations found.");
-        println!();
-        println!("Distance observations are collected during semantic search.");
-        println!("Run more searches to collect data for calibration.");
+        outln!(out, "No distance observations found.");
+        outln!(out);
+        outln!(
+            out,
+            "Distance observations are collected during semantic search."
+        );
+        outln!(out, "Run more searches to collect data for calibration.");
         return Ok(());
     }
 
-    println!("Distance Observations:");
-    println!("  Total: {}", total);
+    outln!(out, "Distance Observations:");
+    outln!(out, "  Total: {}", total);
     for (lang, count) in &counts {
         let status = if *count >= min_samples {
             "ready"
         } else {
             "insufficient"
         };
-        println!("  {}: {} ({})", lang, count, status);
+        outln!(out, "  {}: {} ({})", lang, count, status);
     }
-    println!();
+    outln!(out);
 
     // Calibrate for specific language or all
     if let Some(ref lang) = language {
-        calibrate_language(&store, lang, min_samples, dry_run)?;
+        calibrate_language(store, lang, min_samples, dry_run, out)?;
     } else {
-        calibrate_all(&store, min_samples, dry_run)?;
+        calibrate_all(store, min_samples, dry_run, out)?;
     }
 
     Ok(())
@@ -72,11 +91,13 @@ fn calibrate_language(
     language: &str,
     min_samples: usize,
     dry_run: bool,
+    out: &mut String,
 ) -> Result<()> {
     let distances = store.get_distance_observations(language)?;
 
     if distances.len() < min_samples {
-        println!(
+        outln!(
+            out,
             "Insufficient samples for {}: {} < {} required",
             language,
             distances.len(),
@@ -89,20 +110,24 @@ fn calibrate_language(
     let result = calibrator.calibrate_language(language, &distances);
 
     if result.success {
-        println!("Calibration Result for {}:", language);
-        println!("  max_distance: {:.4}", result.thresholds.max_distance);
-        println!("  min_similarity: {:.4}", result.thresholds.min_similarity);
-        println!("  confidence: {}", result.thresholds.confidence);
-        println!("  samples: {}", result.thresholds.sample_count);
+        outln!(out, "Calibration Result for {}:", language);
+        outln!(out, "  max_distance: {:.4}", result.thresholds.max_distance);
+        outln!(
+            out,
+            "  min_similarity: {:.4}",
+            result.thresholds.min_similarity
+        );
+        outln!(out, "  confidence: {}", result.thresholds.confidence);
+        outln!(out, "  samples: {}", result.thresholds.sample_count);
 
         if let Some(ref stats) = result.thresholds.stats {
-            println!();
-            println!("  Statistics:");
-            println!("    mean: {:.4}", stats.mean);
-            println!("    std_dev: {:.4}", stats.std_dev);
-            println!("    p50 (median): {:.4}", stats.p50);
-            println!("    p90: {:.4}", stats.p90);
-            println!("    p95: {:.4}", stats.p95);
+            outln!(out);
+            outln!(out, "  Statistics:");
+            outln!(out, "    mean: {:.4}", stats.mean);
+            outln!(out, "    std_dev: {:.4}", stats.std_dev);
+            outln!(out, "    p50 (median): {:.4}", stats.p50);
+            outln!(out, "    p90: {:.4}", stats.p90);
+            outln!(out, "    p95: {:.4}", stats.p95);
         }
 
         if !dry_run {
@@ -120,24 +145,29 @@ fn calibrate_language(
                 std_distance: stats.map(|s| s.std_dev),
             };
             store.save_calibration(&data)?;
-            println!();
-            println!("Calibration saved to database.");
+            outln!(out);
+            outln!(out, "Calibration saved to database.");
         } else {
-            println!();
-            println!("Dry run - not saving to database.");
+            outln!(out);
+            outln!(out, "Dry run - not saving to database.");
         }
     } else {
-        println!("Calibration failed: {}", result.message);
+        outln!(out, "Calibration failed: {}", result.message);
     }
 
     Ok(())
 }
 
-fn calibrate_all(store: &IndexStore, min_samples: usize, dry_run: bool) -> Result<()> {
+fn calibrate_all(
+    store: &IndexStore,
+    min_samples: usize,
+    dry_run: bool,
+    out: &mut String,
+) -> Result<()> {
     let all_observations = store.get_all_distance_observations()?;
 
     if all_observations.is_empty() {
-        println!("No observations to calibrate.");
+        outln!(out, "No observations to calibrate.");
         return Ok(());
     }
 
@@ -148,7 +178,7 @@ fn calibrate_all(store: &IndexStore, min_samples: usize, dry_run: bool) -> Resul
     let config = calibrator.calibrate_all(&all_observations);
 
     // Print summary
-    println!("{}", format_calibration_summary(&config));
+    outln!(out, "{}", format_calibration_summary(&config));
 
     if !dry_run {
         // Save per-language calibrations
@@ -189,11 +219,11 @@ fn calibrate_all(store: &IndexStore, min_samples: usize, dry_run: bool) -> Resul
             store.save_calibration(&data)?;
         }
 
-        println!();
-        println!("Calibration saved to database.");
+        outln!(out);
+        outln!(out, "Calibration saved to database.");
     } else {
-        println!();
-        println!("Dry run - not saving to database.");
+        outln!(out);
+        outln!(out, "Dry run - not saving to database.");
     }
 
     Ok(())

@@ -12,6 +12,7 @@ cargo test                           # Run all tests (stub embeddings, never dow
 cargo test -p semantiq-parser        # Tests for one crate
 cargo test -p semantiq-parser test_language_from_extension  # Single test
 cargo test -p semantiq --test cli    # CLI integration tests (spawn the built binary on a temp project)
+cd npm && npm test                   # npm installer tests (node --test, Node 18+)
 cargo check                          # Type-check without building
 cargo fmt --all --check              # Format check, as CI runs it
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # Lint, as CI runs it (warnings fail)
@@ -61,7 +62,7 @@ cargo run -- update --check                  # Only report whether an update is 
 
 Semantiq is a Rust workspace providing semantic code understanding for AI coding assistants via MCP (Model Context Protocol).
 
-Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
+Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (`locate_index`, also used by `stats`; exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
 
 ### Crate Structure
 
@@ -147,7 +148,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 
 ### HTTP API (`--http-port`)
 
-Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp` (Host header restricted to loopback unless `--http-host` is non-loopback). Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp`. The whole router (REST and `/mcp`) rejects a `Host` header that is not `localhost` / `127.0.0.1` / `[::1]` / the bound address with 403 (DNS rebinding, `http/host.rs`, the same `AllowedHosts` list is given to rmcp) unless `--http-host` is non-loopback. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
 
 ### Environment Variables
 

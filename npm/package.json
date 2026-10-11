@@ -6,7 +6,8 @@
     "semantiq": "bin/semantiq.js"
   },
   "scripts": {
-    "postinstall": "node scripts/install.js"
+    "postinstall": "node scripts/install.js",
+    "test": "node --test test/install.test.js"
   },
   "keywords": [
     "mcp",

@@ -1,7 +1,10 @@
 //! Tests for IndexStore.
 
 use super::*;
-use semantiq_parser::{CodeChunk, Symbol, SymbolKind};
+use semantiq_parser::{
+    CallEdge, CodeChunk, FileStructure, Reference, ReferenceKind, RelationKind, Symbol, SymbolKind,
+    TypeRelation,
+};
 
 #[test]
 fn test_insert_and_get_file() {
@@ -707,6 +710,9 @@ fn test_get_stats() {
     assert_eq!(stats.symbol_count, 0);
     assert_eq!(stats.chunk_count, 0);
     assert_eq!(stats.dependency_count, 0);
+    assert_eq!(stats.ref_count, 0);
+    assert_eq!(stats.call_edge_count, 0);
+    assert_eq!(stats.type_relation_count, 0);
 
     let file_id = store
         .insert_file("test.rs", Some("rust"), "fn main() {}", 1000)
@@ -724,10 +730,53 @@ fn test_get_stats() {
         parent: None,
     }];
     store.insert_symbols(file_id, &symbols).unwrap();
+    store
+        .insert_references(
+            file_id,
+            &[
+                Reference {
+                    name: "main".to_string(),
+                    line: 1,
+                    kind: ReferenceKind::Definition,
+                    count: 1,
+                },
+                Reference {
+                    name: "helper".to_string(),
+                    line: 1,
+                    kind: ReferenceKind::Call,
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
+    store
+        .insert_structure(
+            file_id,
+            &FileStructure {
+                calls: vec![CallEdge {
+                    caller: "main".to_string(),
+                    caller_line: 1,
+                    callee: "helper".to_string(),
+                    count: 1,
+                    line: 1,
+                }],
+                relations: vec![TypeRelation {
+                    type_name: "Main".to_string(),
+                    super_name: "Runnable".to_string(),
+                    kind: RelationKind::Implements,
+                    line: 1,
+                    end_line: 1,
+                }],
+            },
+        )
+        .unwrap();
 
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 1);
     assert_eq!(stats.symbol_count, 1);
+    assert_eq!(stats.ref_count, 2);
+    assert_eq!(stats.call_edge_count, 1);
+    assert_eq!(stats.type_relation_count, 1);
 }
 
 #[test]
