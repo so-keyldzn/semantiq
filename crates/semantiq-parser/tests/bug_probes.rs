@@ -559,4 +559,87 @@ public:
             e.refs
         );
     }
+
+    // B16 (#66): comments inside a Rust `use` group are not path segments.
+    #[test]
+    fn b16_rust_use_group_comments() {
+        let e = extract_file(
+            "src/lib.rs",
+            "use foo::{ // keep\n    Bar, /* c */ Baz,\n};\n",
+        );
+        assert_eq!(
+            e.imports
+                .iter()
+                .map(|(p, _, _)| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo::Bar", "foo::Baz"]
+        );
+    }
+
+    // B17 (#66): Scala selector imports and PHP group imports yield one
+    // import per leaf, like the Rust brace expansion.
+    #[test]
+    fn b17_scala_php_brace_imports() {
+        let e = extract_file("src/A.scala", "import a.b.{C, D => E}\n");
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "a.b.C".to_string(),
+                    Some("C".to_string()),
+                    ImportKind::External
+                ),
+                (
+                    "a.b.D".to_string(),
+                    Some("E".to_string()),
+                    ImportKind::External
+                ),
+            ]
+        );
+        let e = extract_file("src/a.php", "<?php\nuse Foo\\{A, B as C};\n");
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "Foo\\A".to_string(),
+                    Some("A".to_string()),
+                    ImportKind::External
+                ),
+                (
+                    "Foo\\B".to_string(),
+                    Some("C".to_string()),
+                    ImportKind::External
+                ),
+            ]
+        );
+    }
+
+    // B18 (#66): call edges on a file with many symbols and calls stay cheap
+    // (line-sorted sweep, not calls x symbols) and attach each call to its
+    // innermost function.
+    #[test]
+    fn b18_call_edges_scale_linearly() {
+        let mut source = String::new();
+        for i in 0..4000 {
+            source.push_str(&format!(
+                "fn f{i}() {{\n    aa();\n    bb();\n    cc();\n}}\n"
+            ));
+        }
+        let start = std::time::Instant::now();
+        let e = extract_file("src/big.rs", &source);
+        let elapsed = start.elapsed();
+        assert_eq!(e.calls.len(), 12_000);
+        assert!(
+            e.calls
+                .iter()
+                .enumerate()
+                .all(|(i, (caller, _, _))| *caller == format!("f{}", i / 3)),
+            "each call attached to its own function"
+        );
+        // Parsing dominates; the old quadratic attachment alone took seconds.
+        assert!(
+            elapsed.as_secs() < 20,
+            "extraction took {elapsed:?} for 4000 functions / 12000 calls"
+        );
+    }
 }

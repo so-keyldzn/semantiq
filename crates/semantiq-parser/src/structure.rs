@@ -91,29 +91,31 @@ impl StructureExtractor {
     /// Attach each `call` reference to the innermost function/method containing
     /// it, falling back to the innermost type (field initialisers, class
     /// bodies), then to top-level code.
+    ///
+    /// Two line-sorted sweeps over the symbols (`O((S + R) log)`), not a scan
+    /// of every symbol per call: a 32k-line file with 8k symbols and 20k calls
+    /// took 1.2 s that way, six times its parse time.
     pub fn call_edges(symbols: &[Symbol], references: &[Reference]) -> Vec<CallEdge> {
-        let innermost = |line: usize, pred: &dyn Fn(SymbolKind) -> bool| {
-            symbols
-                .iter()
-                .filter(|s| pred(s.kind) && s.start_line <= line && line <= s.end_line)
-                .min_by_key(|s| s.end_line - s.start_line)
-        };
-
-        references
+        let calls: Vec<&Reference> = references
             .iter()
             .filter(|r| r.kind == ReferenceKind::Call)
-            .map(|r| {
-                let caller = innermost(r.line, &|k| {
-                    matches!(k, SymbolKind::Function | SymbolKind::Method)
-                })
-                .or_else(|| {
-                    innermost(r.line, &|k| {
-                        !matches!(
-                            k,
-                            SymbolKind::Import | SymbolKind::Module | SymbolKind::Variable
-                        )
-                    })
-                });
+            .collect();
+        let functions = innermost_by_line(symbols, &calls, |k| {
+            matches!(k, SymbolKind::Function | SymbolKind::Method)
+        });
+        let containers = innermost_by_line(symbols, &calls, |k| {
+            !matches!(
+                k,
+                SymbolKind::Import | SymbolKind::Module | SymbolKind::Variable
+            )
+        });
+
+        calls
+            .iter()
+            .zip(functions)
+            .zip(containers)
+            .map(|((r, function), container)| {
+                let caller = function.or(container);
                 CallEdge {
                     caller: caller.map(|s| s.name.clone()).unwrap_or_default(),
                     caller_line: caller.map(|s| s.start_line).unwrap_or(0),
@@ -146,6 +148,54 @@ impl StructureExtractor {
 
 /// Bare type name: generics, call arguments and qualification removed.
 /// `std::fmt::Display` → `Display`, `Base<T>` → `Base`, `mod.B()` → `B`.
+/// For each reference, the symbol of an accepted kind with the smallest line
+/// span containing its line (ties: the first in `symbols` order), as
+/// `innermost` used to compute it by scanning every symbol.
+///
+/// Symbols nest or are disjoint (they are AST nodes), so a sweep in line order
+/// keeps the open ones on a stack: a symbol is pushed when its first line is
+/// reached and popped once past its last line. The top of the stack is the
+/// innermost open symbol; a symbol that ended on a line shared with the start
+/// of its successor sits stale underneath and is popped with it.
+fn innermost_by_line<'a>(
+    symbols: &'a [Symbol],
+    references: &[&Reference],
+    accept: impl Fn(SymbolKind) -> bool,
+) -> Vec<Option<&'a Symbol>> {
+    let mut candidates: Vec<&Symbol> = symbols.iter().filter(|s| accept(s.kind)).collect();
+    // Outer symbols first on a shared start line (pushed first, so deeper on
+    // the stack); for identical spans the later one goes first so the first
+    // one ends up on top.
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (candidates[a], candidates[b]);
+        x.start_line
+            .cmp(&y.start_line)
+            .then(y.end_line.cmp(&x.end_line))
+            .then(b.cmp(&a))
+    });
+    candidates = order.into_iter().map(|i| candidates[i]).collect();
+
+    let mut by_line: Vec<usize> = (0..references.len()).collect();
+    by_line.sort_by_key(|&i| references[i].line);
+
+    let mut result = vec![None; references.len()];
+    let mut stack: Vec<&Symbol> = Vec::new();
+    let mut next = 0;
+    for i in by_line {
+        let line = references[i].line;
+        while next < candidates.len() && candidates[next].start_line <= line {
+            stack.push(candidates[next]);
+            next += 1;
+        }
+        while stack.last().is_some_and(|s| s.end_line < line) {
+            stack.pop();
+        }
+        result[i] = stack.last().copied();
+    }
+    result
+}
+
 fn bare_name(node: Node, src: &[u8]) -> Option<String> {
     let text = node.utf8_text(src).ok()?;
     let head = text.split(['<', '[', '(', '{']).next()?.trim();
@@ -646,6 +696,81 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// The line sweep gives the same caller as a scan of every symbol
+    /// (smallest span containing the line, first one on ties), including on
+    /// lines shared by the end of one symbol and the start of the next.
+    #[test]
+    fn test_call_edges_sweep_matches_naive_scan() {
+        let sym = |name: &str, kind: SymbolKind, start: usize, end: usize| Symbol {
+            name: name.to_string(),
+            kind,
+            start_line: start,
+            end_line: end,
+            start_byte: 0,
+            end_byte: 0,
+            signature: None,
+            doc_comment: None,
+            parent: None,
+        };
+        let symbols = vec![
+            sym("Outer", SymbolKind::Class, 1, 40),
+            sym("a", SymbolKind::Method, 2, 10),
+            sym("inner", SymbolKind::Function, 4, 6),
+            sym("b", SymbolKind::Method, 10, 12),
+            sym("c", SymbolKind::Method, 12, 12),
+            sym("d", SymbolKind::Method, 12, 12),
+            sym("field", SymbolKind::Variable, 14, 14),
+            sym("Nested", SymbolKind::Struct, 20, 30),
+            sym("e", SymbolKind::Function, 22, 25),
+            sym("top", SymbolKind::Function, 50, 55),
+        ];
+        let references: Vec<Reference> = (1..=60)
+            .map(|line| Reference {
+                name: format!("call{line}"),
+                line,
+                kind: ReferenceKind::Call,
+                count: 1,
+            })
+            .collect();
+        let naive = |line: usize, pred: &dyn Fn(SymbolKind) -> bool| {
+            symbols
+                .iter()
+                .filter(|s| pred(s.kind) && s.start_line <= line && line <= s.end_line)
+                .min_by_key(|s| s.end_line - s.start_line)
+        };
+        let expected: Vec<(String, usize)> = references
+            .iter()
+            .map(|r| {
+                let caller = naive(r.line, &|k| {
+                    matches!(k, SymbolKind::Function | SymbolKind::Method)
+                })
+                .or_else(|| {
+                    naive(r.line, &|k| {
+                        !matches!(
+                            k,
+                            SymbolKind::Import | SymbolKind::Module | SymbolKind::Variable
+                        )
+                    })
+                });
+                (
+                    caller.map(|s| s.name.clone()).unwrap_or_default(),
+                    caller.map(|s| s.start_line).unwrap_or(0),
+                )
+            })
+            .collect();
+        let actual: Vec<(String, usize)> = StructureExtractor::call_edges(&symbols, &references)
+            .into_iter()
+            .map(|e| (e.caller, e.caller_line))
+            .collect();
+        assert_eq!(actual, expected);
+        // Spot checks: nested function, shared boundary line, class fallback.
+        assert_eq!(actual[4], ("inner".to_string(), 4));
+        assert_eq!(actual[9], ("b".to_string(), 10));
+        assert_eq!(actual[11], ("c".to_string(), 12));
+        assert_eq!(actual[13], ("Outer".to_string(), 1));
+        assert_eq!(actual[45], (String::new(), 0));
     }
 
     #[test]

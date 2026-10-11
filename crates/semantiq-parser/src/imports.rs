@@ -1,6 +1,7 @@
 use crate::language::Language;
 use crate::python_stdlib::PYTHON_STD_MODULES;
 use anyhow::Result;
+use std::path::Path;
 use tree_sitter::{Node, Tree};
 
 #[derive(Debug, Clone)]
@@ -53,14 +54,55 @@ impl std::str::FromStr for ImportKind {
     }
 }
 
+/// Project-level facts that change how imports are classified.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportContext {
+    /// `module` path of the project's `go.mod`: imports under it are `Local`
+    /// (without it, `myapp/internal/store` looks like a standard package).
+    pub go_module: Option<String>,
+}
+
+impl ImportContext {
+    /// Reads the facts from the files at the project root (`go.mod`).
+    pub fn from_project_root(project_root: &Path) -> Self {
+        Self {
+            go_module: go_module_path(project_root),
+        }
+    }
+}
+
+/// The `module` directive of `<project_root>/go.mod`, if any.
+pub fn go_module_path(project_root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(project_root.join("go.mod")).ok()?;
+    text.lines().find_map(|line| {
+        let module = line.trim().strip_prefix("module")?;
+        if !module.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let module = module.split("//").next()?.trim().trim_matches('"');
+        (!module.is_empty()).then(|| module.to_string())
+    })
+}
+
 pub struct ImportExtractor;
 
 impl ImportExtractor {
     pub fn extract(tree: &Tree, source: &str, language: Language) -> Result<Vec<Import>> {
+        Self::extract_with_context(tree, source, language, &ImportContext::default())
+    }
+
+    /// `extract` with the project facts (`go.mod` module path) that refine the
+    /// `ImportKind` classification.
+    pub fn extract_with_context(
+        tree: &Tree,
+        source: &str,
+        language: Language,
+        context: &ImportContext,
+    ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
         let root = tree.root_node();
 
-        Self::extract_recursive(&root, source, language, &mut imports)?;
+        Self::extract_recursive(&root, source, language, context, &mut imports)?;
 
         Ok(imports)
     }
@@ -69,35 +111,43 @@ impl ImportExtractor {
         node: &Node,
         source: &str,
         language: Language,
+        context: &ImportContext,
         imports: &mut Vec<Import>,
     ) -> Result<()> {
-        for import in Self::node_to_import(node, source, language) {
+        for import in Self::node_to_import(node, source, language, context) {
             imports.push(import);
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            Self::extract_recursive(&child, source, language, imports)?;
+            Self::extract_recursive(&child, source, language, context, imports)?;
         }
 
         Ok(())
     }
 
-    fn node_to_import(node: &Node, source: &str, language: Language) -> Vec<Import> {
+    fn node_to_import(
+        node: &Node,
+        source: &str,
+        language: Language,
+        context: &ImportContext,
+    ) -> Vec<Import> {
         match language {
             Language::Rust => Self::extract_rust_import(node, source),
             Language::TypeScript | Language::JavaScript => {
                 Self::extract_ts_import(node, source).into_iter().collect()
             }
             Language::Python => Self::extract_python_import(node, source),
-            Language::Go => Self::extract_go_import(node, source).into_iter().collect(),
+            Language::Go => Self::extract_go_import(node, source, context)
+                .into_iter()
+                .collect(),
             Language::Java => Self::extract_java_import(node, source)
                 .into_iter()
                 .collect(),
             Language::C | Language::Cpp => {
                 Self::extract_c_import(node, source).into_iter().collect()
             }
-            Language::Php => Self::extract_php_import(node, source).into_iter().collect(),
+            Language::Php => Self::extract_php_import(node, source),
             Language::Ruby => Self::extract_ruby_import(node, source)
                 .into_iter()
                 .collect(),
@@ -107,9 +157,7 @@ impl ImportExtractor {
             Language::Kotlin => Self::extract_kotlin_import(node, source)
                 .into_iter()
                 .collect(),
-            Language::Scala => Self::extract_scala_import(node, source)
-                .into_iter()
-                .collect(),
+            Language::Scala => Self::extract_scala_import(node, source),
             // Markup/config languages don't have traditional imports
             Language::Html | Language::Json | Language::Yaml | Language::Toml => Vec::new(),
             Language::Bash => Self::extract_bash_import(node, source)
@@ -129,13 +177,15 @@ impl ImportExtractor {
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
 
-        // Get the full use path text
+        // Get the full use path text, without the comments a brace group may
+        // hold (`use foo::{ // keep\n Bar }`), which are not path segments.
         let Ok(text) = node.utf8_text(source.as_bytes()) else {
             return Vec::new();
         };
+        let text = Self::strip_rust_comments(text);
 
         // Extract the path body from "use path::to::module;" / "pub use ...;"
-        let body = match Self::parse_rust_use_path(text) {
+        let body = match Self::parse_rust_use_path(&text) {
             Some(b) => b,
             None => return Vec::new(),
         };
@@ -159,6 +209,26 @@ impl ImportExtractor {
                 }
             })
             .collect()
+    }
+
+    /// Remove `// ...` (to end of line) and `/* ... */` comments. `use` paths
+    /// hold no string literals, so no delimiter can be mistaken for a comment.
+    fn strip_rust_comments(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while !rest.is_empty() {
+            if let Some(after) = rest.strip_prefix("//") {
+                rest = after.find('\n').map(|i| &after[i..]).unwrap_or("");
+            } else if let Some(after) = rest.strip_prefix("/*") {
+                rest = after.find("*/").map(|i| &after[i + 2..]).unwrap_or("");
+            } else {
+                let mut chars = rest.chars();
+                let c = chars.next().unwrap();
+                out.push(c);
+                rest = chars.as_str();
+            }
+        }
+        out
     }
 
     fn parse_rust_use_path(text: &str) -> Option<String> {
@@ -507,7 +577,7 @@ impl ImportExtractor {
         }
     }
 
-    fn extract_go_import(node: &Node, source: &str) -> Option<Import> {
+    fn extract_go_import(node: &Node, source: &str, context: &ImportContext) -> Option<Import> {
         if node.kind() != "import_spec" {
             return None;
         }
@@ -522,10 +592,17 @@ impl ImportExtractor {
                 let path_text = child.utf8_text(source.as_bytes()).ok()?;
                 let path = path_text.trim_matches('"').to_string();
 
-                let kind = if path.starts_with('.') || path.starts_with('/') {
+                let in_module = context.go_module.as_deref().is_some_and(|module| {
+                    path == module
+                        || path
+                            .strip_prefix(module)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                });
+                let kind = if in_module || path.starts_with('.') || path.starts_with('/') {
                     ImportKind::Local
-                } else if path.contains('.') {
-                    // External packages usually have dots (e.g., github.com/...)
+                } else if path.split('/').next().unwrap_or(&path).contains('.') {
+                    // External packages have a host in their first element
+                    // (github.com/...); standard packages never do.
                     ImportKind::External
                 } else {
                     ImportKind::Std
@@ -626,48 +703,69 @@ impl ImportExtractor {
         None
     }
 
-    fn extract_php_import(node: &Node, source: &str) -> Option<Import> {
-        // Handle "use" statements (namespace imports)
+    /// `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use A\B, C\D;` and the group
+    /// form `use Foo\{A, B as C};`: one `Import` per leaf, the alias (if any)
+    /// as its `name`.
+    fn extract_php_import(node: &Node, source: &str) -> Vec<Import> {
         if node.kind() != "namespace_use_declaration" {
-            return None;
+            return Vec::new();
         }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let src = source.as_bytes();
+        let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
 
-        // Get the full text of the use statement
-        let text = node.utf8_text(source.as_bytes()).ok()?;
+        // Group form: the prefix is the `namespace_name` child, the leaves are
+        // the clauses of the `namespace_use_group` body.
+        let mut prefix: Option<String> = None;
+        let mut clauses: Vec<Node> = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "namespace_name" => prefix = text(child),
+                "namespace_use_clause" => clauses.push(child),
+                "namespace_use_group" => {
+                    let mut group_cursor = child.walk();
+                    clauses.extend(
+                        child
+                            .named_children(&mut group_cursor)
+                            .filter(|c| c.kind() == "namespace_use_clause"),
+                    );
+                }
+                _ => {}
+            }
+        }
 
-        // Parse "use Namespace\Class;" or "use Namespace\Class as Alias;"
-        let path = Self::parse_php_use_path(text)?;
-        let name = path.split('\\').next_back().map(String::from);
-
-        // PHP doesn't have a standard library in the same sense, most are external
-        let kind = ImportKind::External;
-
-        Some(Import {
-            path,
-            name,
-            kind,
-            start_line,
-            end_line,
-        })
-    }
-
-    fn parse_php_use_path(text: &str) -> Option<String> {
-        let text = text.trim();
-        // Remove "use " prefix and ";" suffix
-        let text = text.strip_prefix("use ")?.trim();
-        let text = text.strip_suffix(';').unwrap_or(text).trim();
-
-        // Handle "as Alias" clause
-        let path = if let Some(idx) = text.find(" as ") {
-            &text[..idx]
-        } else {
-            text
-        };
-
-        Some(path.trim().to_string())
+        clauses
+            .into_iter()
+            .filter_map(|clause| {
+                let mut leaf: Option<String> = None;
+                let mut alias: Option<String> = None;
+                let mut clause_cursor = clause.walk();
+                for child in clause.named_children(&mut clause_cursor) {
+                    if clause.child_by_field_name("alias") == Some(child) {
+                        alias = text(child);
+                    } else if leaf.is_none() && matches!(child.kind(), "name" | "qualified_name") {
+                        leaf = text(child);
+                    }
+                }
+                let leaf = leaf?;
+                let path = match &prefix {
+                    Some(prefix) => format!("{}\\{}", prefix.trim_end_matches('\\'), leaf),
+                    None => leaf,
+                };
+                let name = alias.or_else(|| path.split('\\').next_back().map(String::from));
+                Some(Import {
+                    path,
+                    name,
+                    // PHP doesn't have a standard library in the same sense, most are external
+                    kind: ImportKind::External,
+                    start_line,
+                    end_line,
+                })
+            })
+            .collect()
     }
 
     fn extract_ruby_import(node: &Node, source: &str) -> Option<Import> {
@@ -805,36 +903,82 @@ impl ImportExtractor {
         })
     }
 
-    fn extract_scala_import(node: &Node, source: &str) -> Option<Import> {
+    /// `import a.b.C`, `import a.b._` and the selector form
+    /// `import a.b.{C, D => E, _}`: one `Import` per leaf (alias as `name`,
+    /// `None` for a wildcard), like the Rust brace expansion.
+    fn extract_scala_import(node: &Node, source: &str) -> Vec<Import> {
         if node.kind() != "import_declaration" {
-            return None;
+            return Vec::new();
         }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let src = source.as_bytes();
+        let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
 
-        let text = node.utf8_text(source.as_bytes()).ok()?;
-        let path = text
-            .strip_prefix("import ")
-            .unwrap_or(text)
-            .trim()
-            .to_string();
+        let mut cursor = node.walk();
+        let prefix = node
+            .children_by_field_name("path", &mut cursor)
+            .filter(|n| n.is_named())
+            .filter_map(text)
+            .collect::<Vec<_>>()
+            .join(".");
 
-        let kind = if path.starts_with("scala.") || path.starts_with("java.") {
-            ImportKind::Std
-        } else {
-            ImportKind::External
-        };
+        // (path, name) leaves
+        let mut leaves: Vec<(String, Option<String>)> = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "namespace_wildcard" => leaves.push((prefix.clone(), None)),
+                "namespace_selectors" => {
+                    let mut sel_cursor = child.walk();
+                    for selector in child.named_children(&mut sel_cursor) {
+                        let leaf = match selector.kind() {
+                            "namespace_wildcard" => (prefix.clone(), None),
+                            "arrow_renamed_identifier" => {
+                                let Some(name) =
+                                    selector.child_by_field_name("name").and_then(text)
+                                else {
+                                    continue;
+                                };
+                                let alias = selector.child_by_field_name("alias").and_then(text);
+                                (format!("{prefix}.{name}"), alias.or(Some(name)))
+                            }
+                            _ => {
+                                let Some(name) = text(selector) else {
+                                    continue;
+                                };
+                                (format!("{prefix}.{name}"), Some(name))
+                            }
+                        };
+                        leaves.push(leaf);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if leaves.is_empty() && !prefix.is_empty() {
+            let name = prefix.split('.').next_back().map(String::from);
+            leaves.push((prefix.clone(), name));
+        }
 
-        let name = path.split('.').next_back().map(String::from);
-
-        Some(Import {
-            path,
-            name,
-            kind,
-            start_line,
-            end_line,
-        })
+        leaves
+            .into_iter()
+            .map(|(path, name)| {
+                let kind = if path.starts_with("scala.") || path.starts_with("java.") {
+                    ImportKind::Std
+                } else {
+                    ImportKind::External
+                };
+                Import {
+                    path,
+                    name,
+                    kind,
+                    start_line,
+                    end_line,
+                }
+            })
+            .collect()
     }
 
     fn extract_bash_import(node: &Node, source: &str) -> Option<Import> {
@@ -1378,6 +1522,100 @@ use super::parent_module;
                 import("./x", Some("x"), ImportKind::Local),
                 import("./a", Some("a"), ImportKind::Local),
             ]
+        );
+    }
+
+    #[test]
+    fn test_scala_selector_imports() {
+        let source = "import a.b.{C, D => E, _}\nimport scala.collection.mutable\nimport x.y._\n";
+        assert_eq!(
+            imports(Language::Scala, source),
+            vec![
+                import("a.b.C", Some("C"), ImportKind::External),
+                import("a.b.D", Some("E"), ImportKind::External),
+                import("a.b", None, ImportKind::External),
+                import("scala.collection.mutable", Some("mutable"), ImportKind::Std),
+                import("x.y", None, ImportKind::External),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_php_group_and_list_imports() {
+        let source = "<?php\nuse Foo\\{A, B as C};\nuse Foo\\Bar;\nuse function Foo\\baz;\nuse X\\Y, Z\\W as V;\n";
+        assert_eq!(
+            imports(Language::Php, source),
+            vec![
+                import("Foo\\A", Some("A"), ImportKind::External),
+                import("Foo\\B", Some("C"), ImportKind::External),
+                import("Foo\\Bar", Some("Bar"), ImportKind::External),
+                import("Foo\\baz", Some("baz"), ImportKind::External),
+                import("X\\Y", Some("Y"), ImportKind::External),
+                import("Z\\W", Some("V"), ImportKind::External),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rust_use_group_comments_are_dropped() {
+        let source = "use foo::{ // keep\n    Bar, /* c */ Baz,\n};\nuse std::io; // trailing\n";
+        assert_eq!(
+            imports(Language::Rust, source),
+            vec![
+                import("foo::Bar", Some("Bar"), ImportKind::External),
+                import("foo::Baz", Some("Baz"), ImportKind::External),
+                import("std::io", Some("io"), ImportKind::Std),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_go_module_local_imports() {
+        let source = "package main\nimport (\n    \"fmt\"\n    \"myapp/internal/store\"\n    \"myapp\"\n    \"myapplication/x\"\n    s \"github.com/x/y\"\n)\n";
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(Language::Go, source).unwrap();
+        let kinds = |context: &ImportContext| {
+            ImportExtractor::extract_with_context(&tree, source, Language::Go, context)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.path, i.kind))
+                .collect::<Vec<_>>()
+        };
+        let context = ImportContext {
+            go_module: Some("myapp".into()),
+        };
+        assert_eq!(
+            kinds(&context),
+            vec![
+                ("fmt".to_string(), ImportKind::Std),
+                ("myapp/internal/store".to_string(), ImportKind::Local),
+                ("myapp".to_string(), ImportKind::Local),
+                // Not under the module: the old first-segment heuristic.
+                ("myapplication/x".to_string(), ImportKind::Std),
+                ("github.com/x/y".to_string(), ImportKind::External),
+            ]
+        );
+        assert_eq!(kinds(&ImportContext::default())[1].1, ImportKind::Std);
+    }
+
+    #[test]
+    fn test_go_module_path_from_go_mod() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(go_module_path(dir.path()), None);
+        std::fs::write(
+            dir.path().join("go.mod"),
+            "// a comment\nmodule example.com/myapp // v2\n\ngo 1.22\n",
+        )
+        .unwrap();
+        assert_eq!(
+            go_module_path(dir.path()).as_deref(),
+            Some("example.com/myapp")
+        );
+        assert_eq!(
+            ImportContext::from_project_root(dir.path())
+                .go_module
+                .as_deref(),
+            Some("example.com/myapp")
         );
     }
 
