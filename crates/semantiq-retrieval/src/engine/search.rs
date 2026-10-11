@@ -16,48 +16,33 @@ use tracing::{debug, info, warn};
 /// Maximum limit for search results to prevent excessive memory usage.
 const MAX_SEARCH_LIMIT: usize = 1000;
 
-/// Per-strategy weights applied to each strategy's locally-normalized score
-/// before the global merge.
+/// Per-strategy weights applied to each strategy's raw score before the
+/// global merge.
 ///
-/// Rationale: the three strategies produce scores on incompatible scales
-/// (semantic = `1/(1+L2_distance)`, symbol = a hand-tuned `[0,1]` heuristic,
-/// text = ripgrep line heuristic). Sorting them together raw lets, e.g., a
-/// borderline 0.5 semantic hit outrank a 0.49 exact-symbol hit purely because
-/// of scale, not relevance. We rescale each strategy's results to `[0,1]`
-/// (min-max within the strategy) and then apply a fixed weight so that, all
-/// else equal, an exact symbol match outranks a fuzzy semantic match which
-/// outranks a plain text/grep hit. Min-max is intentionally conservative: it
-/// preserves the *intra-strategy* ordering and only makes the *inter-strategy*
-/// comparison meaningful. A single dominant result in a strategy keeps its
-/// weight (we map it to 1.0 rather than 0.0).
+/// Rationale: the three strategies produce scores in `[0, 1]` with different
+/// meanings (semantic = `1/(1+L2_distance)`, symbol = a hand-tuned match
+/// heuristic, text = ripgrep line heuristic). Sorting them together raw lets,
+/// e.g., a borderline 0.5 semantic hit outrank a 0.49 exact-symbol hit purely
+/// because of scale, not relevance. A fixed weight per strategy makes, all
+/// else equal, an exact symbol match outrank a fuzzy semantic match which
+/// outranks a plain text/grep hit.
+///
+/// The raw scores are kept otherwise: an earlier min-max rescaling within
+/// each strategy sent the weakest hit of a strategy to 0 (a prefix match
+/// ranked below every grep line) and inflated a lone weak hit to full
+/// strength (a single 0.45 substring match outranked the best semantic
+/// chunk).
 pub(crate) const WEIGHT_SEMANTIC: f32 = 0.95;
 pub(crate) const WEIGHT_SYMBOL: f32 = 1.0;
 pub(crate) const WEIGHT_TEXT: f32 = 0.75;
 
-/// Min-max normalize the `score` of a strategy's results in place, then scale
-/// by `weight`. Preserves the relative ordering inside the strategy while
-/// making cross-strategy comparison meaningful at merge time.
-pub(crate) fn normalize_and_weight(results: &mut [SearchResult], weight: f32) {
-    if results.is_empty() {
-        return;
-    }
-    let mut min = f32::INFINITY;
-    let mut max = f32::NEG_INFINITY;
-    for r in results.iter() {
-        min = min.min(r.score);
-        max = max.max(r.score);
-    }
-    let span = max - min;
+/// Scale the `score` of a strategy's results by `weight`, in place. Every
+/// strategy already scores in `[0, 1]`, so a hit keeps its own strength: a
+/// single hit stays as meaningful as its raw score and no real hit is sent
+/// to 0.
+pub(crate) fn weight_strategy(results: &mut [SearchResult], weight: f32) {
     for r in results.iter_mut() {
-        // When all scores are equal (span == 0), keep them at full strength
-        // rather than collapsing to 0 — a single strong hit shouldn't be
-        // penalized for lacking a spread to normalize against.
-        let normalized = if span > f32::EPSILON {
-            (r.score - min) / span
-        } else {
-            1.0
-        };
-        r.score = normalized * weight;
+        r.score *= weight;
     }
 }
 
@@ -86,10 +71,8 @@ impl RetrievalEngine {
 
         let mut all_results = Vec::new();
 
-        // `min_score` is an absolute floor on each strategy's RAW score. It must
-        // be applied before `normalize_and_weight`: min-max maps every
-        // strategy's weakest hit to 0.0, so filtering afterwards would always
-        // drop it (and would let a lone weak hit through at 1.0).
+        // `min_score` is an absolute floor on each strategy's RAW score,
+        // applied before the strategy weight.
         let min_score = opts.effective_min_score();
         let above_floor = |results: &mut Vec<SearchResult>| {
             results.retain(|r| r.score >= min_score);
@@ -110,14 +93,14 @@ impl RetrievalEngine {
         if semantic_enabled {
             let mut semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
             above_floor(&mut semantic_results);
-            normalize_and_weight(&mut semantic_results, WEIGHT_SEMANTIC);
+            weight_strategy(&mut semantic_results, WEIGHT_SEMANTIC);
             all_results.extend(semantic_results);
         }
 
         // 2. Symbol search (FTS) - prioritize symbol matches
         let mut symbol_results = self.search_symbols(&query, safe_limit, &opts)?;
         above_floor(&mut symbol_results);
-        normalize_and_weight(&mut symbol_results, WEIGHT_SYMBOL);
+        weight_strategy(&mut symbol_results, WEIGHT_SYMBOL);
         all_results.extend(symbol_results);
 
         // 3. Text search (grep-like) - only if we need more results
@@ -125,13 +108,12 @@ impl RetrievalEngine {
             let mut text_results =
                 self.search_text(&query, safe_limit - all_results.len(), &opts)?;
             above_floor(&mut text_results);
-            normalize_and_weight(&mut text_results, WEIGHT_TEXT);
+            weight_strategy(&mut text_results, WEIGHT_TEXT);
             all_results.extend(text_results);
         }
 
-        // Sort by score (highest first). Scores are now comparable across
-        // strategies because each strategy was min-max normalized and weighted
-        // above before being merged here.
+        // Sort by score (highest first). Scores are comparable across
+        // strategies because each strategy was weighted above.
         all_results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -397,6 +379,13 @@ impl RetrievalEngine {
     /// matched by the user's literal input ranked above synthetic variants.
     const SYMBOL_VARIANT_PENALTY: f32 = 0.9;
 
+    /// Largest kind boost (`function` / `method`) and largest length boost
+    /// (a one-character name) a symbol score can get. Scores are divided by
+    /// their product so the boosts rank symbols inside `[0, 1]`: clamping the
+    /// boosted score to 1.0 instead tied an exact function match (1.0 × 1.15)
+    /// with a boosted prefix match (0.85 × 1.15 × 1.1).
+    const MAX_SYMBOL_BOOST: f32 = 1.15 * (1.0 + 1.0 / 6.0);
+
     /// Search symbols using FTS5 full-text search.
     pub(crate) fn search_symbols(
         &self,
@@ -470,11 +459,11 @@ impl RetrievalEngine {
                     .clone()
                     .unwrap_or_else(|| symbol.name.clone());
 
-                // Improved scoring algorithm
+                // Match tier in [0, 1]: exact > prefix > substring > FTS only.
                 let name_lower = symbol.name.to_lowercase();
                 let term_lower = term.to_lowercase();
 
-                let mut score = if name_lower == term_lower {
+                let mut score: f32 = if name_lower == term_lower {
                     1.0
                 } else if name_lower.starts_with(&term_lower) {
                     0.85
@@ -506,7 +495,10 @@ impl RetrievalEngine {
                     score *= Self::SYMBOL_VARIANT_PENALTY;
                 }
 
-                score = score.min(1.0);
+                // Back into [0, 1] without clamping (see MAX_SYMBOL_BOOST): a
+                // name matching the term exactly is never longer than a name
+                // it is a prefix of, so an exact match keeps the edge.
+                score /= Self::MAX_SYMBOL_BOOST;
 
                 results.push(
                     SearchResult::new(

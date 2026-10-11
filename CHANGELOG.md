@@ -107,6 +107,13 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- Search ranking: each strategy's scores are only weighted (symbol 1.0,
+  semantic 0.95, text 0.75), no longer min-max normalized per strategy. The
+  weakest symbol hit of a query (`parse_configuration` for `parse_config`)
+  no longer scores 0 under every grep line, and a lone weak hit is no longer
+  inflated to full strength above the best semantic chunk. Symbol boosts are
+  rescaled into `[0, 1]` instead of clamped, so an exact function match
+  outranks a boosted prefix match instead of tying with it (#34).
 - Calibrated semantic thresholds (`semantiq calibrate`, auto-calibration) no
   longer drop ~90 % of the candidates: `min_similarity` is derived from the
   same 90th-percentile distance as `max_distance` instead of the 10th

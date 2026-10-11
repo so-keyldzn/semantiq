@@ -1,6 +1,6 @@
 //! Tests for RetrievalEngine.
 
-use super::search::{WEIGHT_SEMANTIC, WEIGHT_SYMBOL, WEIGHT_TEXT, normalize_and_weight};
+use super::search::{WEIGHT_SEMANTIC, WEIGHT_SYMBOL, WEIGHT_TEXT, weight_strategy};
 use super::*;
 use crate::results::{SearchResult, SearchResultKind};
 
@@ -16,54 +16,92 @@ fn mk_result(score: f32) -> SearchResult {
 }
 
 #[test]
-fn test_normalize_and_weight_min_max() {
-    let mut results = vec![mk_result(0.5), mk_result(1.0), mk_result(0.75)];
-    normalize_and_weight(&mut results, 1.0);
+fn test_weight_strategy_two_hits_keep_their_strength() {
+    // Regression for #34: min-max normalization sent the weakest hit of a
+    // strategy to 0.0 (`parse_configuration` below every grep line).
+    let mut results = vec![mk_result(1.0), mk_result(0.8)];
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
 
-    // Min-max: lowest -> 0.0, highest -> 1.0, middle in between.
-    assert!((results[0].score - 0.0).abs() < 1e-6, "min should map to 0");
-    assert!((results[1].score - 1.0).abs() < 1e-6, "max should map to 1");
-    assert!(results[2].score > 0.0 && results[2].score < 1.0);
-
-    // Relative order within the strategy is preserved.
-    assert!(results[1].score > results[2].score);
-    assert!(results[2].score > results[0].score);
-}
-
-#[test]
-fn test_normalize_and_weight_applies_weight() {
-    let mut results = vec![mk_result(0.2), mk_result(0.9)];
-    normalize_and_weight(&mut results, WEIGHT_TEXT);
-
-    // Top result maps to 1.0 * weight; bottom maps to 0.0 * weight.
-    assert!((results[1].score - WEIGHT_TEXT).abs() < 1e-6);
-    assert!((results[0].score - 0.0).abs() < 1e-6);
-}
-
-#[test]
-fn test_normalize_and_weight_single_result_keeps_full_strength() {
-    // A lone result has no spread to normalize against; it must keep full
-    // weight (mapped to 1.0 * weight) rather than collapse to 0.
-    let mut results = vec![mk_result(0.42)];
-    normalize_and_weight(&mut results, WEIGHT_SYMBOL);
     assert!((results[0].score - WEIGHT_SYMBOL).abs() < 1e-6);
+    assert!(
+        (results[1].score - 0.8 * WEIGHT_SYMBOL).abs() < 1e-6,
+        "the weaker hit keeps its raw score: {}",
+        results[1].score
+    );
+    assert!(
+        results[1].score > 0.5 * WEIGHT_TEXT,
+        "a real symbol hit outranks weak grep lines"
+    );
 }
 
 #[test]
-fn test_normalize_and_weight_equal_scores_keep_full_strength() {
-    // All-equal scores (span == 0) must not collapse to 0.
-    let mut results = vec![mk_result(0.6), mk_result(0.6), mk_result(0.6)];
-    normalize_and_weight(&mut results, WEIGHT_SEMANTIC);
-    for r in &results {
-        assert!((r.score - WEIGHT_SEMANTIC).abs() < 1e-6);
-    }
+fn test_weight_strategy_single_hit_is_not_inflated() {
+    // Regression for #34: a lone weak hit used to map to full weight and
+    // outrank the best semantic chunk.
+    let mut results = vec![mk_result(0.45)];
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
+    assert!((results[0].score - 0.45 * WEIGHT_SYMBOL).abs() < 1e-6);
+
+    let mut semantic = vec![mk_result(0.95)];
+    weight_strategy(&mut semantic, WEIGHT_SEMANTIC);
+    assert!(semantic[0].score > results[0].score);
 }
 
 #[test]
-fn test_normalize_and_weight_empty_is_noop() {
+fn test_weight_strategy_applies_weight() {
+    let mut results = vec![mk_result(0.2), mk_result(0.9)];
+    weight_strategy(&mut results, WEIGHT_TEXT);
+    assert!((results[1].score - 0.9 * WEIGHT_TEXT).abs() < 1e-6);
+    assert!((results[0].score - 0.2 * WEIGHT_TEXT).abs() < 1e-6);
+}
+
+#[test]
+fn test_weight_strategy_empty_is_noop() {
     let mut results: Vec<SearchResult> = Vec::new();
-    normalize_and_weight(&mut results, WEIGHT_SYMBOL);
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
     assert!(results.is_empty());
+}
+
+#[test]
+fn test_exact_symbol_match_outranks_boosted_prefix_match() {
+    // Regression for #34: the boosted scores were clamped to 1.0, so an exact
+    // function match tied with a prefix match of a short function name.
+    use semantiq_parser::{Symbol, SymbolKind};
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let file_id = store.insert_file("cfg.rs", Some("rust"), "", 0).unwrap();
+    let mk = |name: &str, line: usize| Symbol {
+        name: name.to_string(),
+        kind: SymbolKind::Function,
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 0,
+        signature: None,
+        doc_comment: None,
+        parent: None,
+    };
+    store
+        .insert_symbols(
+            file_id,
+            &[mk("parse_configuration", 1), mk("parse_config", 2)],
+        )
+        .unwrap();
+    let root = tempfile::TempDir::new().unwrap();
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+
+    let results = engine.search("parse_config", 10, None).unwrap().results;
+    let scored: Vec<(&str, f32)> = results
+        .iter()
+        .map(|r| (r.metadata.symbol_name.as_deref().unwrap_or(""), r.score))
+        .collect();
+    assert_eq!(scored[0].0, "parse_config", "{scored:?}");
+    assert_eq!(scored[1].0, "parse_configuration", "{scored:?}");
+    assert!(scored[0].1 > scored[1].1, "{scored:?}");
+    assert!(
+        scored.iter().all(|(_, s)| *s <= 1.0 && *s > 0.0),
+        "{scored:?}"
+    );
 }
 
 #[test]
