@@ -47,10 +47,13 @@ fn pack_counts(counts: EmbeddingCounts) -> u64 {
     (clamp(counts.total) << 32) | clamp(counts.embedded)
 }
 
+/// `embedded` is clamped to `total`: `add` may push the low half past it
+/// when chunks were inserted after the pass counted them.
 fn unpack_counts(packed: u64) -> EmbeddingCounts {
+    let total = (packed >> 32) as usize;
     EmbeddingCounts {
-        embedded: (packed & u64::from(u32::MAX)) as usize,
-        total: (packed >> 32) as usize,
+        embedded: ((packed & u64::from(u32::MAX)) as usize).min(total),
+        total,
     }
 }
 
@@ -92,17 +95,10 @@ impl EmbeddingProgress {
         self.running.store(true, Ordering::Relaxed);
     }
 
-    /// Only the embedding thread writes the counts, so a load + store is
-    /// race-free; readers see either the old or the new pair.
+    /// One atomic add on the low half; `unpack_counts` clamps it to `total`.
     fn add(&self, embedded: usize) {
-        let counts = self.counts();
-        self.counts.store(
-            pack_counts(EmbeddingCounts {
-                embedded: counts.embedded.saturating_add(embedded).min(counts.total),
-                total: counts.total,
-            }),
-            Ordering::Relaxed,
-        );
+        let embedded = u64::from(u32::try_from(embedded).unwrap_or(u32::MAX));
+        self.counts.fetch_add(embedded, Ordering::Relaxed);
     }
 
     fn finish(&self) {
@@ -210,8 +206,9 @@ fn embed_batch(model: &dyn EmbeddingModel, batch: &[PendingChunk]) -> Vec<Option
 }
 
 /// Loads the embedding model on the background thread, at its first pass.
-/// Called again, after a backoff, when a load fails (download, disk, digest).
-pub type ModelLoader = Box<dyn Fn() -> Result<Box<dyn EmbeddingModel>> + Send>;
+/// Called again, after a backoff, when a load fails (download, disk, digest);
+/// the thread owns it and calls it sequentially.
+pub type ModelLoader = Box<dyn FnMut() -> Result<Box<dyn EmbeddingModel>> + Send>;
 
 /// Timing of the background thread.
 #[derive(Debug, Clone, Copy)]
@@ -389,7 +386,7 @@ impl Shared {
         Wake::Requested
     }
 
-    fn run(&self, store: &IndexStore, load_model: ModelLoader) {
+    fn run(&self, store: &IndexStore, mut load_model: ModelLoader) {
         let mut model: Option<Box<dyn EmbeddingModel>> = None;
         let mut retry = ModelRetry::new(self.config);
         // Pending count the last pass left behind (chunks the model failed
