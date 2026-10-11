@@ -5,11 +5,40 @@ All notable changes to Semantiq will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
+  of calls: `refs foo` shows the definition line, `calls foo` no longer lists
+  `foo` as its own caller nor `def` as a callee, and `alias` / `import` / `use`
+  / `require` arguments are `import` references (#59).
+- Rust calls inside macro arguments (`assert_eq!(compute(1), 1)`,
+  `println!("{}", compute(2))`, `vec![make()]`, `tracing::info!(n = total())`)
+  are `call` references: `calls compute --direction callers` finds functions
+  exercised only through macros, and `impact` follows them beyond depth 1 (#60).
+- Functions named only in attribute strings (`#[serde(default = "f")]`,
+  `deserialize_with`, `with`, `skip_serializing_if`, `validate(custom = ...)`,
+  Python decorator and Java / Kotlin / C# annotation arguments) get a
+  `reference` occurrence, so `dead-code` no longer reports serde helpers with
+  high confidence. Only identifier-shaped values of function-path keys count in
+  Rust (`#[cfg(feature = "x")]`, `#[serde(rename = "x")]` reference nothing),
+  attributes naming JSON properties, columns, routes or warnings are skipped
+  elsewhere, and strings outside attributes still never match (#64).
+- Doc comments are attached to exported TypeScript / JavaScript symbols
+  (`/** Doc */ export function f()`, `export default class`, `declare`),
+  to decorated Python functions (comment above the decorator) and to Rust items
+  behind attributes (`/// Doc` above `#[derive(...)]`); `explain` shows the
+  JSDoc of exported APIs again. Rust doc lines no longer carry their trailing
+  newline (#61).
+- A function larger than twice the chunk size (generated code, big `match`
+  dispatchers, long tests) is split into overlapping windows of about one chunk
+  size, each listing the symbols it overlaps, instead of one chunk whose
+  embedding only covered its first 512 tokens: semantic search can now hit the
+  whole body, and a hit returns a window rather than a 3000-line chunk. The
+  embedding carry-over on edit is per window (#62).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
+- `PARSER_VERSION` 14: existing indexes are rebuilt for the fixes above.
 
 ## [0.11.0] - 2026-10-07
 

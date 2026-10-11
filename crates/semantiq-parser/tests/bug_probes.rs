@@ -1,12 +1,41 @@
 #[cfg(test)]
 mod bug_probes {
     use semantiq_parser::language::{Language, LanguageSupport};
+    use semantiq_parser::references::{Reference, ReferenceExtractor, ReferenceKind};
+    use semantiq_parser::structure::StructureExtractor;
     use semantiq_parser::symbols::{Symbol, SymbolExtractor, SymbolKind};
 
     fn extract(lang: Language, source: &str) -> Vec<Symbol> {
         let mut support = LanguageSupport::new().unwrap();
         let tree = support.parse(lang, source).unwrap();
         SymbolExtractor::extract(&tree, source, lang).unwrap()
+    }
+
+    fn references(lang: Language, source: &str) -> Vec<Reference> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        ReferenceExtractor::extract(&tree, source, lang)
+    }
+
+    /// `(line, kind)` of every reference named `name`.
+    fn kinds_of(refs: &[Reference], name: &str) -> Vec<(usize, ReferenceKind)> {
+        refs.iter()
+            .filter(|r| r.name == name)
+            .map(|r| (r.line, r.kind))
+            .collect()
+    }
+
+    /// `(caller, callee, line)` call edges of `source`.
+    fn call_edges(lang: Language, source: &str) -> Vec<(String, String, usize)> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, lang);
+        StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+            .calls
+            .into_iter()
+            .map(|e| (e.caller, e.callee, e.line))
+            .collect()
     }
 
     // B1: Python decorated method must NOT be duplicated.
@@ -253,5 +282,133 @@ public:
                 );
             }
         }
+    }
+
+    // B11 (#59): Elixir `def` / `defp` heads are definitions, not calls. The
+    // keyword itself is not indexed and no call edge points at `def`/`defp` or
+    // at the function being defined.
+    #[test]
+    fn b11_elixir_def_head_is_definition() {
+        let source =
+            "defmodule M do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\nend\n";
+        let refs = references(Language::Elixir, source);
+        assert_eq!(kinds_of(&refs, "foo"), vec![(2, ReferenceKind::Definition)]);
+        assert_eq!(
+            kinds_of(&refs, "bar"),
+            vec![(3, ReferenceKind::Call), (5, ReferenceKind::Definition)]
+        );
+        assert!(kinds_of(&refs, "def").is_empty());
+        assert!(kinds_of(&refs, "defp").is_empty());
+        assert!(kinds_of(&refs, "defmodule").is_empty());
+
+        let edges = call_edges(Language::Elixir, source);
+        assert_eq!(edges, vec![("foo".to_string(), "bar".to_string(), 3)]);
+    }
+
+    // B12 (#60): Rust calls inside macro arguments (`assert_eq!`, `println!`,
+    // `vec!`, `tracing::info!`) are `call` references with call edges.
+    #[test]
+    fn b12_rust_calls_inside_macros() {
+        let source = "fn compute(x: u32) -> u32 { x }\nfn test_it() {\n    assert_eq!(compute(1), 1);\n    println!(\"{}\", compute(2));\n    let v = vec![compute(3)];\n    tracing::info!(n = compute(4), \"done\");\n}\n";
+        let refs = references(Language::Rust, source);
+        assert_eq!(
+            kinds_of(&refs, "compute"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (3, ReferenceKind::Call),
+                (4, ReferenceKind::Call),
+                (5, ReferenceKind::Call),
+                (6, ReferenceKind::Call),
+            ]
+        );
+        let edges = call_edges(Language::Rust, source);
+        let compute_edges: Vec<usize> = edges
+            .iter()
+            .filter(|(caller, callee, _)| caller == "test_it" && callee == "compute")
+            .map(|(_, _, line)| *line)
+            .collect();
+        assert_eq!(compute_edges, vec![3, 4, 5, 6]);
+    }
+
+    // B13 (#64): a function named in an attribute string (`#[serde(default =
+    // "f")]`, `deserialize_with`, `with`) gets a `reference` occurrence, so
+    // `dead-code` no longer flags serde helpers. Ordinary strings still never
+    // match.
+    #[test]
+    fn b13_attribute_strings_are_references() {
+        let source = "fn default_true() -> bool { true }\nfn parse_level<'de, D>(d: D) -> Result<u8, D::Error> { todo!() }\n#[derive(serde::Deserialize)]\npub struct Cfg {\n    #[serde(default = \"default_true\")]\n    pub on: bool,\n    #[serde(deserialize_with = \"parse_level\")]\n    pub level: u8,\n}\nfn main() { let s = \"default_true\"; }\n";
+        let refs = references(Language::Rust, source);
+        assert_eq!(
+            kinds_of(&refs, "default_true"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (5, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&refs, "parse_level"),
+            vec![
+                (2, ReferenceKind::Definition),
+                (7, ReferenceKind::Reference)
+            ]
+        );
+    }
+
+    // B14 (#61): the doc comment of an exported TS/JS symbol sits above the
+    // `export` wrapper, the comment of a decorated Python function above the
+    // decorator, and a Rust doc comment above `#[derive]`: all are attached.
+    #[test]
+    fn b14_doc_comment_through_wrappers() {
+        let doc = |lang: Language, src: &str, name: &str| -> Option<String> {
+            extract(lang, src)
+                .into_iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.doc_comment)
+        };
+        assert_eq!(
+            doc(
+                Language::TypeScript,
+                "/** Greets. */\nexport function greet(n: string) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc(
+                Language::TypeScript,
+                "/** Doc */\nexport default class Foo {}\n",
+                "Foo"
+            )
+            .as_deref(),
+            Some("/** Doc */")
+        );
+        assert_eq!(
+            doc(
+                Language::JavaScript,
+                "/** Greets. */\nexport function greet(n) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc(
+                Language::Python,
+                "# Handles the route\n@app.route('/')\ndef index():\n    pass\n",
+                "index"
+            )
+            .as_deref(),
+            Some("# Handles the route")
+        );
+        assert_eq!(
+            doc(
+                Language::Rust,
+                "/// Config.\n#[derive(Debug)]\npub struct Cfg {}\n",
+                "Cfg"
+            )
+            .as_deref(),
+            Some("/// Config.")
+        );
     }
 }

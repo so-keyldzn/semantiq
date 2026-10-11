@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 /// Doc
+#[derive(Debug)]
 pub struct User {
     pub name: String,
 }
