@@ -162,6 +162,16 @@ impl IndexStore {
         f(&conn)
     }
 
+    /// SQLite's `PRAGMA data_version`: changes whenever another connection
+    /// commits to this database, never for this connection's own writes. O(1),
+    /// no table access: the cheap way to ask "did another process write?".
+    pub fn data_version(&self) -> Result<i64> {
+        self.with_conn(|conn| {
+            conn.query_row("PRAGMA data_version", [], |row| row.get(0))
+                .map_err(Into::into)
+        })
+    }
+
     /// Get index statistics.
     pub fn get_stats(&self) -> Result<IndexStats> {
         self.with_conn(|conn| {

@@ -68,11 +68,24 @@ fn no_stop() -> bool {
 }
 
 fn phase1(root: &Path) -> Arc<IndexStore> {
-    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    phase1_into(root, Arc::new(IndexStore::open_in_memory().unwrap()))
+}
+
+fn phase1_into(root: &Path, store: Arc<IndexStore>) -> Arc<IndexStore> {
     let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.to_path_buf()).unwrap();
     let result = indexer.initial_index().unwrap();
     assert_eq!(result.errors, 0);
     store
+}
+
+/// The server's store and a second connection to the same file, standing for
+/// another process (CLI refresh, `semantiq index --no-embeddings`).
+fn on_disk_stores(tmp: &TempDir) -> (Arc<IndexStore>, Arc<IndexStore>) {
+    let db = tmp.path().join("index.db");
+    (
+        Arc::new(IndexStore::open(&db).unwrap()),
+        Arc::new(IndexStore::open(&db).unwrap()),
+    )
 }
 
 #[test]
@@ -358,12 +371,14 @@ fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
 
 /// #37: chunks left pending by another process (`semantiq index
 /// --no-embeddings`, a query command's refresh) are embedded without any
-/// `notify`: the thread polls the database on its own.
+/// `notify`: the thread polls `PRAGMA data_version` on its own and counts the
+/// chunks when another connection has committed.
 #[test]
 fn background_embedder_polls_for_chunks_pending_without_a_notification() {
     let tmp = TempDir::new().unwrap();
     build_project(tmp.path(), 2, 8);
-    let store = phase1(tmp.path());
+    let (store, other_process) = on_disk_stores(&tmp);
+    phase1_into(tmp.path(), Arc::clone(&other_process));
     assert!(store.embedding_counts().unwrap().pending() > 0);
 
     let embedder = BackgroundEmbedder::spawn_with(
@@ -378,18 +393,40 @@ fn background_embedder_polls_for_chunks_pending_without_a_notification() {
     }));
     assert!(embedder.progress().in_progress().is_none());
 
-    // Phase 1 run by another indexer (the CLI refresh) while the server is
+    // Phase 1 run by another process (the CLI refresh) while the server is
     // up: still no notify, still embedded.
     write_file(tmp.path(), "src/late.rs", "pub fn late() -> i32 { 7 }\n");
-    AutoIndexer::without_watcher(Arc::clone(&store), tmp.path().to_path_buf())
-        .unwrap()
-        .initial_index()
-        .unwrap();
+    phase1_into(tmp.path(), Arc::clone(&other_process));
     assert!(store.embedding_counts().unwrap().pending() > 0);
     assert!(wait_until(Duration::from_secs(10), || {
         store.embedding_counts().unwrap().pending() == 0
     }));
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// `PRAGMA data_version` moves only on another connection's commit.
+#[test]
+fn data_version_changes_only_when_another_connection_commits() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 2);
+    let (store, other_process) = on_disk_stores(&tmp);
+    let before = store.data_version().unwrap();
+    assert_eq!(store.data_version().unwrap(), before, "stable when idle");
+
+    phase1_into(tmp.path(), Arc::clone(&store));
+    assert_eq!(
+        store.data_version().unwrap(),
+        before,
+        "own writes do not move it"
+    );
+
+    write_file(tmp.path(), "src/more.rs", "pub fn more() -> i32 { 1 }\n");
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    assert_ne!(
+        store.data_version().unwrap(),
+        before,
+        "another connection's commit moves it"
+    );
 }
 
 /// #52: a failed model load is reported through the progress and retried
@@ -453,10 +490,11 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
     }));
 }
 
-/// #52: a poll does not retry the chunks the model keeps failing on; a
-/// notification does.
+/// A poll does not retry the chunks the model keeps failing on while nobody
+/// wrote to the database; a commit from another connection (CLI reindex that
+/// may have replaced them) or a notification does.
 #[test]
-fn background_embedder_poll_leaves_failing_chunks_to_the_next_notification() {
+fn background_embedder_poll_retries_failing_chunks_only_after_another_connection_writes() {
     #[derive(Default)]
     struct FailingModel {
         calls: AtomicUsize,
@@ -479,7 +517,8 @@ fn background_embedder_poll_leaves_failing_chunks_to_the_next_notification() {
 
     let tmp = TempDir::new().unwrap();
     build_project(tmp.path(), 1, 3);
-    let store = phase1(tmp.path());
+    let (store, other_process) = on_disk_stores(&tmp);
+    phase1_into(tmp.path(), Arc::clone(&other_process));
     let pending = store.embedding_counts().unwrap().pending();
     assert!(pending > 0);
 
@@ -500,12 +539,28 @@ fn background_embedder_poll_leaves_failing_chunks_to_the_next_notification() {
     assert_eq!(
         model.calls.load(Ordering::SeqCst),
         pending,
-        "later polls skip the unchanged pending set"
+        "later polls do not touch an unchanged database"
     );
 
+    // Another process reindexes: the pending set may have changed, so the
+    // next poll runs a pass (the old chunks fail again, the new one too).
+    write_file(tmp.path(), "src/extra.rs", "pub fn extra() -> i32 { 1 }\n");
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    let pending_now = store.embedding_counts().unwrap().pending();
+    assert!(pending_now > pending);
+    assert!(wait_until(Duration::from_secs(10), || {
+        model.calls.load(Ordering::SeqCst) >= pending + pending_now
+    }));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(model.calls.load(Ordering::SeqCst), pending + pending_now);
+
+    // A notification always runs a pass.
     embedder.notify();
     assert!(embedder.wait_idle(Duration::from_secs(10)));
-    assert_eq!(model.calls.load(Ordering::SeqCst), 2 * pending);
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        pending + 2 * pending_now
+    );
 }
 
 /// Shares one model between the test and the loader.

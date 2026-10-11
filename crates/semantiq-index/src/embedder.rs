@@ -389,30 +389,47 @@ impl Shared {
     fn run(&self, store: &IndexStore, mut load_model: ModelLoader) {
         let mut model: Option<Box<dyn EmbeddingModel>> = None;
         let mut retry = ModelRetry::new(self.config);
-        // Pending count the last pass left behind (chunks the model failed
-        // on): a poll runs a pass only when that count changed, so failing
-        // chunks are not retried every poll, only on the next notification.
-        let mut left_pending: Option<usize> = None;
+        // `PRAGMA data_version` read before the chunks were last counted or
+        // embedded. It changes only when another connection commits (CLI
+        // refresh, `semantiq index --no-embeddings`): this process's own
+        // writes come with a `notify`. A poll that finds it unchanged touches
+        // no table, so an idle server never scans `chunks` under the lock.
+        let mut seen_version: Option<i64> = None;
 
         loop {
-            match self.wait() {
+            // Read before the pass: a commit landing during the pass changes
+            // the version again and is counted by the next poll.
+            let version = match self.wait() {
                 Wake::Shutdown => return,
-                Wake::Requested => {}
+                Wake::Requested => store.data_version().ok(),
                 Wake::Poll => {
-                    let pending = match store.embedding_counts() {
-                        Ok(counts) => counts.pending(),
+                    let version = match store.data_version() {
+                        Ok(version) => version,
                         Err(e) => {
                             debug!("Embedding poll skipped: {}", e);
                             continue;
                         }
                     };
-                    if pending == 0 || Some(pending) == left_pending {
+                    if seen_version == Some(version) {
                         continue;
                     }
-                    debug!("Embedding poll: {} chunks pending", pending);
+                    match store.embedding_counts() {
+                        Ok(counts) if counts.pending() > 0 => {
+                            debug!("Embedding poll: {} chunks pending", counts.pending());
+                        }
+                        Ok(_) => {
+                            seen_version = Some(version);
+                            continue;
+                        }
+                        Err(e) => {
+                            debug!("Embedding poll skipped: {}", e);
+                            continue;
+                        }
+                    }
                     self.progress.running.store(true, Ordering::Relaxed);
+                    Some(version)
                 }
-            }
+            };
 
             if model.is_none() {
                 if !retry.due() {
@@ -462,7 +479,7 @@ impl Shared {
                 Ok(_) => {}
                 Err(e) => warn!("Embedding pass failed: {}", e),
             }
-            left_pending = store.embedding_counts().ok().map(|c| c.pending());
+            seen_version = version;
         }
     }
 }

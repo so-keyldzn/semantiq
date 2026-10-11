@@ -56,8 +56,9 @@ All notable changes to Semantiq will be documented in this file.
   phase 2 and semantic search. `IndexStore::count_chunks_missing_vectors`
   pins that direction of the invariant (#40).
 - `serve` embeds the chunks another process left pending. The background
-  embedder now checks the database every 30 s on its own, and the watcher
-  wakes it on any file event, not only on a reindex: a CLI refresh
+  embedder now checks every 30 s whether another connection committed
+  (`PRAGMA data_version`, no table scan on an idle server) and embeds what is
+  pending, and the watcher wakes it on any file event, not only on a reindex: a CLI refresh
   (`semantiq refs x` after editing files) or `semantiq index --no-embeddings`
   no longer leaves chunks without an embedding until an unrelated file changes
   (#37).
