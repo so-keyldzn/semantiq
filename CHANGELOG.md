@@ -4,6 +4,13 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-11
+
+Existing indexes are rebuilt on the first run of this version
+(`PARSER_VERSION` 17, schema v10): the parser fixes below change what is
+extracted, stored paths use `/` on every platform, and the symbol score scale
+moves down (see #34 if you pass `--min-score`).
+
 ### Security
 - The HTTP API (`serve --http-port`) rejects requests whose `Host` header is
   not `localhost`, `127.0.0.1`, `[::1]` or the bound address with 403 when
@@ -58,7 +65,7 @@ All notable changes to Semantiq will be documented in this file.
   embedded or returned by search. The initial walk, the query refresh check,
   the text search and the watcher share one walk configuration
   (`project_walker`). Text search still leaves dot-files out, since it reads
-  files of any extension. `PARSER_VERSION` 17: existing indexes are rebuilt.
+  files of any extension.
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
@@ -99,8 +106,7 @@ All notable changes to Semantiq will be documented in this file.
   the outputs) use `/` on every platform: a Windows index held backslashes,
   so `deps src/lib/foo.ts`, `--focus` and `path_prefix` did not match and the
   output differed from the documented contract. Path arguments of the CLI, the
-  MCP tools and the HTTP API accept either separator. `PARSER_VERSION` 15:
-  existing indexes are rebuilt (#68).
+  MCP tools and the HTTP API accept either separator (#68).
 - An older Semantiq binary opening an index written by a newer one (after a
   `semantiq update` rollback, or a plugin binary next to a `cargo run` on a
   branch that bumped the schema) refuses it with an error naming both schema
@@ -203,8 +209,7 @@ All notable changes to Semantiq will be documented in this file.
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
-  are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
-- `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
+  are ignored.
 - npm installer (`npm install -g semantiq-mcp`): release downloads follow
   301/302/303/307/308 redirects (at most 5, each redirect response drained),
   abort after 30 s without data instead of hanging `postinstall`, and retry
@@ -243,8 +248,6 @@ All notable changes to Semantiq will be documented in this file.
   Scala `import a.b.{C, D => E}` and PHP `use Foo\{A, B as C}` yield one import
   per leaf; call edges are attached by a line-sorted sweep instead of a scan
   of every symbol per call (1.2 s → linear on a 32k-line file).
-- `PARSER_VERSION` 16 (once for the parser fixes above): existing indexes are
-  rebuilt.
 
 ## [0.11.0] - 2026-10-07
 
