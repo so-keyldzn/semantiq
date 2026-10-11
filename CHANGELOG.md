@@ -94,6 +94,9 @@ All notable changes to Semantiq will be documented in this file.
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
 - `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
+- `semantiq map --json | head -5` (any query command, `--json` or markdown)
+  ends quietly with exit code 0 when the reader closes the pipe early,
+  instead of panicking with `Broken pipe` and exit code 101 (#49).
 
 ## [0.11.0] - 2026-10-07
 

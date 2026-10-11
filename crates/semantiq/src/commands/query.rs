@@ -30,7 +30,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::common::DEFAULT_DB_NAME;
+use super::common::{DEFAULT_DB_NAME, print_stdout};
 
 /// Index location and freshness options shared by the query commands.
 #[derive(Args, Debug, Clone, Default)]
@@ -243,11 +243,10 @@ fn print_output<T: Serialize>(
     render: impl FnOnce() -> String,
 ) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(output)?);
+        print_stdout(&serde_json::to_string_pretty(output)?)
     } else {
-        println!("{}", render().trim_end());
+        print_stdout(render().trim_end())
     }
-    Ok(())
 }
 
 /// Turn a file argument into the project-relative path stored in the index:

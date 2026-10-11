@@ -7,6 +7,13 @@ use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::process::Stdio;
+
 fn command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_semantiq"));
     cmd.args(args)
@@ -337,6 +344,36 @@ fn empty_index_is_an_error() {
     let output = semantiq(dir.path(), &["explain", "x"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("is empty"), "{}", stderr(&output));
+}
+
+/// `semantiq map --json | head -5`: the reader closes the pipe before the
+/// output is fully written. That is not an error for the command (exit 0, no
+/// panic), for the JSON and the markdown output alike.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_is_not_an_error() {
+    let project = indexed_project();
+    for args in [
+        &["map", "--json"][..],
+        &["map"][..],
+        &["refs", "compute"][..],
+    ] {
+        // A socket whose reading end is already closed: the first write
+        // fails with EPIPE, whatever the output size.
+        let (reader, writer) = UnixStream::pair().unwrap();
+        drop(reader);
+        let output = command(project.path(), args)
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .output()
+            .unwrap();
+        let errors = stderr(&output);
+        assert!(
+            output.status.success(),
+            "{args:?} exited with {:?}: {errors}",
+            output.status.code()
+        );
+        assert!(!errors.contains("Broken pipe"), "{args:?}: {errors}");
+    }
 }
 
 #[test]
