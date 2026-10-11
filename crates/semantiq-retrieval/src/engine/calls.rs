@@ -71,7 +71,8 @@ pub struct CallGraph {
     /// the index: library / standard calls.
     pub external_callees: Vec<String>,
     /// The edge cap was reached, or a name had more call edges than the
-    /// walk examines; the graph is incomplete.
+    /// walk examines and some of them could have been reported; the graph
+    /// is incomplete.
     pub truncated: bool,
 }
 
@@ -177,15 +178,23 @@ impl RetrievalEngine {
         let mut truncated = false;
         while let Some(node) = queue.pop_front() {
             // Capped lookup, the edges from the defining files and from
-            // files importing them first (see `find_callers_near`).
+            // files importing them first (see `find_callers_near`). The cut
+            // is a truncation when the first cut edge could have been
+            // reported: at depth 1 every edge is, deeper only trusted ones
+            // (and the edges come trusted first).
             let cap = max_edges.saturating_mul(5);
             let near_files: Vec<i64> = node.locations.iter().map(|l| l.file_id).collect();
             let mut edges = self
                 .store
                 .find_callers_near(&node.name, &near_files, cap + 1)?;
             if edges.len() > cap {
-                edges.truncate(cap);
-                truncated = true;
+                let first_cut = edges.pop().expect("more than cap edges");
+                let trusted = !node.locations.is_empty()
+                    && resolver.confidence(first_cut.file_id, &node.name, &node.locations)?
+                        > ImpactConfidence::NameOnly;
+                if node.depth == 1 || trusted {
+                    truncated = true;
+                }
             }
             for edge in edges {
                 let confidence = if node.locations.is_empty() {

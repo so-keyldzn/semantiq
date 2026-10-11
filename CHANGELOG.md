@@ -120,7 +120,8 @@ All notable changes to Semantiq will be documented in this file.
   files and in files importing them first instead of plain path order, so
   the cap (5 × the limit) only cuts name-only homonyms; `callees` filters
   the caller's location in SQL before the cap instead of after it; and
-  `truncated` is set whenever a lookup hit its cap. `hierarchy` flags a type
+  `truncated` is set when a lookup hit its cap and a cut occurrence could
+  have been reported (any at depth 1, a trusted one deeper). `hierarchy` flags a type
   with more relations than `--limit` as truncated instead of cutting
   silently (#42).
 - Text search no longer returns the whole line of a minified or generated

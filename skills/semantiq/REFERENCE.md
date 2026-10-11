@@ -149,7 +149,8 @@ those definitions, sorted.
   `call` sites of functions/methods are followed.
 - `truncated`: the site limit (`--limit`, default 200, max 1000) was reached,
   or a name had more occurrences than the analysis examines (5 × the limit,
-  the ones in the defining files and in files importing them first).
+  the ones in the defining files and in files importing them first) and
+  some of the unexamined ones could have been reported.
 
 ## `semantiq map --json`
 
@@ -224,7 +225,8 @@ those definitions, sorted.
   (standard library, dependencies), sorted.
 - `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached,
   or a name had more call edges than the walk examines (5 × the limit, the
-  ones from the defining files and from files importing them first).
+  ones from the defining files and from files importing them first) and
+  some of the unexamined ones could have been reported.
 
 ## `semantiq hierarchy <type> --json`
 

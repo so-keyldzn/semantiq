@@ -83,7 +83,8 @@ pub struct ImpactAnalysis {
     pub definitions: Vec<ImpactDefinition>,
     pub sites: Vec<ImpactSite>,
     /// The site cap was reached, or a name had more occurrences than the
-    /// analysis examines: later sites were not explored.
+    /// analysis examines and some of them could have been reported: later
+    /// sites were not explored.
     pub truncated: bool,
 }
 
@@ -200,15 +201,22 @@ impl RetrievalEngine {
             let unique_name = self.definition_count(&mut caches, &node.name)? <= 1;
             // The lookup is capped: occurrences in the defining files and in
             // files importing them come first, so the cap only cuts
-            // name-only sites, and cutting any is reported as truncation.
+            // name-only sites. The cut is a truncation when the first cut
+            // row could have been reported: at depth 1 every occurrence is,
+            // deeper only trusted ones (and the rows come trusted first).
             let cap = max_sites.saturating_mul(5);
             let near_files: Vec<i64> = node.definitions.iter().map(|(id, _)| *id).collect();
             let mut references =
                 self.store
                     .find_references_by_name_near(&node.name, &near_files, cap + 1)?;
             if references.len() > cap {
-                references.truncate(cap);
-                truncated = true;
+                let first_cut = references.pop().expect("more than cap rows");
+                let trusted = unique_name
+                    || self.confidence(&mut caches, &node, &first_cut)?
+                        > ImpactConfidence::NameOnly;
+                if node.depth == 1 || trusted {
+                    truncated = true;
+                }
             }
 
             for reference in references {

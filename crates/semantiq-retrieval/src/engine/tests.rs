@@ -624,7 +624,27 @@ fn test_impact_depth_two_through_a_common_name_is_not_cut_by_homonyms() {
         impact_sites(&analysis),
         vec![(1, "zz.rs", 3, "same_file"), (2, "zz.rs", 6, "same_file")]
     );
-    // The occurrences of `mid` beyond the cap were not examined.
+    // The occurrences of `mid` beyond the cap are name-only homonyms that
+    // depth 2 would not report: not a truncation.
+    assert!(!analysis.truncated);
+}
+
+#[test]
+fn test_impact_flags_a_cut_of_trusted_occurrences_only() {
+    // 12 same-file non-call references to `mid` after its one real caller:
+    // the cap (10) cuts trusted rows, so the analysis is truncated even
+    // though no reported site was lost.
+    let refs = "    let f = mid;\n".repeat(12);
+    let source = format!(
+        "fn base() {{}}\nfn mid() {{\n    base();\n}}\nfn top() {{\n    mid();\n}}\nfn aliases() {{\n{refs}}}\n"
+    );
+    let (engine, _root) = index_rust_project(&[("zz.rs", source.as_str())]);
+
+    let analysis = engine.analyze_impact("base", None, 2, 2).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![(1, "zz.rs", 3, "same_file"), (2, "zz.rs", 6, "same_file")]
+    );
     assert!(analysis.truncated);
 }
 

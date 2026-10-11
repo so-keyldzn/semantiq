@@ -139,6 +139,41 @@ fn test_callers_of_a_common_name_list_trusted_ones_first_and_flag_the_cut() {
 }
 
 #[test]
+fn test_callers_cut_of_name_only_homonyms_beyond_depth_one_is_not_a_truncation() {
+    // `local` (two definitions) is called by six homonym `new`s sorting
+    // first; at depth 2 those name-only edges are not reported, so cutting
+    // them is not a truncation.
+    let mut files: Vec<(String, String)> = (0..6)
+        .map(|i| {
+            (
+                format!("a{i}.rs"),
+                "fn new() {\n    local();\n}\n".to_string(),
+            )
+        })
+        .collect();
+    files.push(("b.rs".to_string(), "pub fn local() {}\n".to_string()));
+    files.push((
+        "zz.rs".to_string(),
+        "pub fn shared() {}\nfn local() {\n    shared();\n}\n".to_string(),
+    ));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_project(&files);
+    let graph = engine
+        .call_graph("shared", None, CallDirection::Callers, 2, 1)
+        .unwrap();
+    let callers: Vec<_> = graph
+        .callers
+        .iter()
+        .map(|c| (c.depth, c.caller.clone().unwrap_or_default()))
+        .collect();
+    assert_eq!(callers, vec![(1, "local".to_string())]);
+    assert!(!graph.truncated);
+}
+
+#[test]
 fn test_type_hierarchy_flags_a_cut_at_the_edge_cap() {
     // Regression for #42: a lookup limited to `max_edges` could not tell
     // that more relations existed, so the cut went unflagged.
