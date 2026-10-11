@@ -563,7 +563,17 @@ that blocks neither the tools nor the file watcher: until they are complete,
 `semantiq_search` answers with the embeddings available (plus symbol and text
 matches) and starts with `⏳ Semantic index 42% ready`, and `GET /stats`
 reports `"embedding": true`, `embedded_chunks` and
-`semantic_index_ready_percent`.
+`semantic_index_ready_percent`. The embedder also checks every 30 s for chunks
+another process left pending (`semantiq index --no-embeddings`, the refresh run
+by a query command) and embeds them. If the embedding model cannot be loaded
+(download, disk, digest), the load is retried with a backoff; meanwhile
+`semantiq_search` starts with `⚠️ Semantic index unavailable` and `GET /stats`
+reports `"semantic_search": false` with the reason.
+
+If the file watcher cannot be created (for example the inotify watch limit on a
+large tree), `serve` logs a warning, still runs the initial index and the
+embedder, and reports `"watching": false` in `GET /stats`; files edited
+afterwards are reindexed by `semantiq index` or a restart.
 
 The index lives in `.semantiq.db` at the project root, so each git worktree has
 its own index and is indexed separately.

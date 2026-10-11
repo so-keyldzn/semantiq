@@ -5,7 +5,7 @@
 use anyhow::Result;
 use semantiq_embeddings::{EMBEDDING_DIMENSION, EmbeddingModel, StubEmbeddingModel};
 use semantiq_index::{
-    AutoIndexer, BackgroundEmbedder, EmbeddingProgress, IndexStore, embed_pending,
+    AutoIndexer, BackgroundEmbedder, EmbedderConfig, EmbeddingProgress, IndexStore, embed_pending,
 };
 use std::fs;
 use std::path::Path;
@@ -68,11 +68,24 @@ fn no_stop() -> bool {
 }
 
 fn phase1(root: &Path) -> Arc<IndexStore> {
-    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    phase1_into(root, Arc::new(IndexStore::open_in_memory().unwrap()))
+}
+
+fn phase1_into(root: &Path, store: Arc<IndexStore>) -> Arc<IndexStore> {
     let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.to_path_buf()).unwrap();
     let result = indexer.initial_index().unwrap();
     assert_eq!(result.errors, 0);
     store
+}
+
+/// The server's store and a second connection to the same file, standing for
+/// another process (CLI refresh, `semantiq index --no-embeddings`).
+fn on_disk_stores(tmp: &TempDir) -> (Arc<IndexStore>, Arc<IndexStore>) {
+    let db = tmp.path().join("index.db");
+    (
+        Arc::new(IndexStore::open(&db).unwrap()),
+        Arc::new(IndexStore::open(&db).unwrap()),
+    )
 }
 
 #[test]
@@ -333,4 +346,330 @@ fn background_embedder_fills_pending_chunks_when_notified() {
     embedder.notify();
     assert!(embedder.wait_idle(Duration::from_secs(30)));
     assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+}
+
+/// Fast timing for the background thread's own checks.
+fn quick_config() -> EmbedderConfig {
+    EmbedderConfig {
+        poll_interval: Duration::from_millis(50),
+        initial_retry_delay: Duration::from_millis(200),
+        max_retry_delay: Duration::from_secs(1),
+    }
+}
+
+/// Poll `cond` until it holds or `timeout` elapses.
+fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while !cond() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// #37: chunks left pending by another process (`semantiq index
+/// --no-embeddings`, a query command's refresh) are embedded without any
+/// `notify`: the thread polls `PRAGMA data_version` on its own and counts the
+/// chunks when another connection has committed.
+#[test]
+fn background_embedder_polls_for_chunks_pending_without_a_notification() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 2, 8);
+    let (store, other_process) = on_disk_stores(&tmp);
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(|| Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+    // No notify: the startup backlog is picked up by the first poll.
+    assert!(wait_until(Duration::from_secs(10), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert!(embedder.progress().in_progress().is_none());
+
+    // Phase 1 run by another process (the CLI refresh) while the server is
+    // up: still no notify, still embedded.
+    write_file(tmp.path(), "src/late.rs", "pub fn late() -> i32 { 7 }\n");
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+    assert!(wait_until(Duration::from_secs(10), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// `PRAGMA data_version` moves only on another connection's commit.
+#[test]
+fn data_version_changes_only_when_another_connection_commits() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 2);
+    let (store, other_process) = on_disk_stores(&tmp);
+    let before = store.data_version().unwrap();
+    assert_eq!(store.data_version().unwrap(), before, "stable when idle");
+
+    phase1_into(tmp.path(), Arc::clone(&store));
+    assert_eq!(
+        store.data_version().unwrap(),
+        before,
+        "own writes do not move it"
+    );
+
+    write_file(tmp.path(), "src/more.rs", "pub fn more() -> i32 { 1 }\n");
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    assert_ne!(
+        store.data_version().unwrap(),
+        before,
+        "another connection's commit moves it"
+    );
+}
+
+/// #52: a failed model load is reported through the progress, and a
+/// notification within the backoff does not call the loader again.
+#[test]
+fn background_embedder_reports_a_failed_model_load_and_waits_for_the_backoff() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 5);
+    let store = phase1(tmp.path());
+    let total = store.embedding_counts().unwrap().pending();
+    assert!(total > 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            loader_attempts.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("download failed: connection reset")
+        }),
+        // Neither the backoff nor a poll can elapse during the test.
+        EmbedderConfig {
+            poll_interval: Duration::from_secs(60),
+            initial_retry_delay: Duration::from_secs(60),
+            max_retry_delay: Duration::from_secs(60),
+        },
+    )
+    .unwrap();
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let error = embedder
+        .progress()
+        .model_error()
+        .expect("load failure exposed");
+    assert!(error.contains("connection reset"), "{error}");
+    assert!(embedder.progress().in_progress().is_none());
+    assert_eq!(store.embedding_counts().unwrap().pending(), total);
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "retry waits for the backoff"
+    );
+    assert!(embedder.progress().model_error().is_some());
+}
+
+/// #52: once the backoff elapses the polls retry the load (second failure,
+/// then success), the error is cleared and the backlog is embedded, with no
+/// further notification.
+#[test]
+fn background_embedder_retries_a_failed_model_load_with_backoff() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 5);
+    let store = phase1(tmp.path());
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            // The first two loads fail (flaky download), the third succeeds.
+            if loader_attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                anyhow::bail!("download failed: connection reset")
+            }
+            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+        }),
+        quick_config(),
+    )
+    .unwrap();
+
+    embedder.notify();
+    assert!(wait_until(Duration::from_secs(15), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(wait_until(Duration::from_secs(5), || {
+        embedder.progress().model_error().is_none()
+    }));
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A load failure on an already complete index clears itself: the poll
+/// retries the load once the backoff elapsed, with nothing pending and no
+/// `notify` (otherwise the "Semantic index unavailable" notice stayed until
+/// the next watcher event).
+#[test]
+fn background_embedder_clears_a_load_failure_on_a_complete_index_without_notify() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    embed_pending(
+        &store,
+        &StubEmbeddingModel::new(),
+        4,
+        &EmbeddingProgress::new(),
+        &no_stop,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            if loader_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                anyhow::bail!("disk full")
+            }
+            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+        }),
+        quick_config(),
+    )
+    .unwrap();
+
+    assert!(wait_until(Duration::from_secs(10), || {
+        embedder.progress().model_error().is_some()
+    }));
+    assert!(wait_until(Duration::from_secs(10), || {
+        embedder.progress().model_error().is_none()
+    }));
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(embedder.progress().in_progress().is_none());
+}
+
+/// Wait until `value()` has not changed for `window` (several polls), then
+/// return it. Panics after `timeout`.
+fn settled(timeout: Duration, window: Duration, value: impl Fn() -> usize) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last = value();
+    let mut since = std::time::Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = value();
+        if now != last {
+            last = now;
+            since = std::time::Instant::now();
+        } else if since.elapsed() >= window {
+            return now;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "value did not settle within {timeout:?}"
+        );
+    }
+}
+
+/// Polls do not keep retrying the chunks the model fails on while nobody
+/// writes to the database; a commit from another connection (a CLI reindex
+/// that may have replaced them) or a notification runs a pass again.
+///
+/// A poll right after a pass may find `data_version` moved by that pass's own
+/// commit and count once more (harmless, one extra pass), so the assertions
+/// are on the steady state over a window of polls, not on an exact count.
+#[test]
+fn background_embedder_poll_retries_failing_chunks_only_after_another_connection_writes() {
+    #[derive(Default)]
+    struct FailingModel {
+        calls: AtomicUsize,
+    }
+    impl EmbeddingModel for FailingModel {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("bad chunk")
+        }
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            anyhow::bail!("bad batch")
+        }
+        fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+            self.embed(query)
+        }
+        fn dimension(&self) -> usize {
+            EMBEDDING_DIMENSION
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let (store, other_process) = on_disk_stores(&tmp);
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    let pending = store.embedding_counts().unwrap().pending();
+    assert!(pending > 0);
+
+    let model = Arc::new(FailingModel::default());
+    let shared = Arc::clone(&model);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || Ok(Box::new(ArcModel(Arc::clone(&shared))) as Box<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+    let calls = || model.calls.load(Ordering::SeqCst);
+    // Ten polls without a change in the number of attempts.
+    let window = quick_config().poll_interval * 10;
+
+    // First poll(s): one attempt per chunk, all left pending, then nothing.
+    assert!(wait_until(Duration::from_secs(10), || calls() >= pending));
+    let after_first = settled(Duration::from_secs(10), window, calls);
+    assert_eq!(after_first % pending, 0, "whole passes only");
+    assert_eq!(store.embedding_counts().unwrap().pending(), pending);
+    assert_eq!(
+        calls(),
+        after_first,
+        "polls do not touch an unchanged database"
+    );
+
+    // Another process reindexes: the pending set may have changed, so the
+    // next poll runs a pass (the old chunks fail again, the new one too).
+    write_file(tmp.path(), "src/extra.rs", "pub fn extra() -> i32 { 1 }\n");
+    phase1_into(tmp.path(), Arc::clone(&other_process));
+    let pending_now = store.embedding_counts().unwrap().pending();
+    assert!(pending_now > pending);
+    assert!(wait_until(Duration::from_secs(10), || {
+        calls() >= after_first + pending_now
+    }));
+    let after_write = settled(Duration::from_secs(10), window, calls);
+    assert_eq!((after_write - after_first) % pending_now, 0);
+
+    // A notification always runs a pass.
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert!(calls() >= after_write + pending_now);
+}
+
+/// Shares one model between the test and the loader.
+struct ArcModel<M: EmbeddingModel>(Arc<M>);
+
+impl<M: EmbeddingModel> EmbeddingModel for ArcModel<M> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.0.embed(text)
+    }
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.0.embed_batch(texts)
+    }
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        self.0.embed_query(query)
+    }
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
 }

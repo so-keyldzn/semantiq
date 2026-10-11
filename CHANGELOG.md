@@ -55,6 +55,27 @@ All notable changes to Semantiq will be documented in this file.
   longer leave a chunk with an embedding but no vector, invisible to both
   phase 2 and semantic search. `IndexStore::count_chunks_missing_vectors`
   pins that direction of the invariant (#40).
+- `serve` embeds the chunks another process left pending. The background
+  embedder now checks every 30 s whether another connection committed
+  (`PRAGMA data_version`, no table scan on an idle server) and embeds what is
+  pending, and the watcher wakes it on any file event, not only on a reindex: a CLI refresh
+  (`semantiq refs x` after editing files) or `semantiq index --no-embeddings`
+  no longer leaves chunks without an embedding until an unrelated file changes
+  (#37).
+- `serve` still runs the initial index and the embedder when the file watcher
+  cannot be created (inotify watch limit on a large tree): it falls back to an
+  indexer without watcher, logs a WARN that live reindexing is off, says so in
+  the MCP instructions, and `GET /stats` reports `"watching": false` (#47).
+- A failed embedding model load (download, disk, digest) is retried with a
+  backoff (30 s, doubling, up to 15 min) instead of once per server lifetime;
+  until it succeeds `semantiq_search` starts with `⚠️ Semantic index
+  unavailable: the embedding model could not be loaded (...)` and `GET /stats`
+  reports `"semantic_search": false` with the reason. When the search
+  engine's own model copy failed to load at startup (loaded once, not
+  retried), the reason says to restart the server. The progress counters
+  read by the notice and `GET /stats` are stored as one atomic so `pending`
+  can no longer underflow between two passes (#52). `ModelLoader` is now a
+  `Fn`, called again on retry.
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

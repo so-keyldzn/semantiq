@@ -153,6 +153,11 @@ pub(super) struct StatsResponse {
     /// (counts are still growing).
     #[serde(default)]
     pub indexing: bool,
+    /// True when the file watcher reindexes edits made while the server runs;
+    /// false when it could not be created (e.g. inotify watch limit): edits
+    /// are then picked up only by `semantiq index` or a restart.
+    #[serde(default)]
+    pub watching: bool,
     /// Chunks with an embedding, out of `indexed_chunks`.
     #[serde(default)]
     pub embedded_chunks: usize,
@@ -166,7 +171,8 @@ pub(super) struct StatsResponse {
     /// Embedding model recorded in the index (`"stub"` = zero vectors).
     #[serde(default)]
     pub embedding_model: String,
-    /// False when the stub embedding model is selected.
+    /// False when the stub embedding model is selected or the model failed to
+    /// load (the background embedder retries with a backoff).
     #[serde(default)]
     pub semantic_search: bool,
     /// Why semantic search is unavailable, when it is.

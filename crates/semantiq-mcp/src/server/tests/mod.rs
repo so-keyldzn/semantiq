@@ -26,6 +26,7 @@ pub(super) fn create_test_server() -> (SemantiqServer, TempDir) {
         engine,
         store,
         auto_indexer: None,
+        watching: true,
         initial_indexing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         embedder: Arc::new(std::sync::OnceLock::new()),
     };
@@ -132,6 +133,7 @@ impl SemantiqServer {
     }
 }
 
+mod background;
 mod deps;
 mod edge_cases;
 mod explain;

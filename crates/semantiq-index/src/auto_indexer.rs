@@ -236,7 +236,10 @@ impl AutoIndexer {
             return Ok(ProcessResult::default());
         }
 
-        let mut result = ProcessResult::default();
+        let mut result = ProcessResult {
+            events: events.iter().filter(|e| concerns_indexed_file(e)).count(),
+            ..ProcessResult::default()
+        };
 
         for event in events {
             match event {
@@ -467,9 +470,22 @@ impl AutoIndexer {
 
 #[derive(Default, Debug)]
 pub struct ProcessResult {
+    /// File events on files of a supported language, whether or not they led
+    /// to a reindex (a file another process already indexed, a CLI refresh,
+    /// has `indexed == 0`). Saving a README or a lock file counts for nothing.
+    pub events: usize,
     pub indexed: usize,
     pub removed: usize,
     pub errors: usize,
+}
+
+/// Whether an event is about a file the index could contain: the embedder is
+/// woken for these only.
+fn concerns_indexed_file(event: &FileEvent) -> bool {
+    let path = match event {
+        FileEvent::Created(path) | FileEvent::Modified(path) | FileEvent::Deleted(path) => path,
+    };
+    Language::from_path(path).is_some()
 }
 
 #[derive(Default, Debug)]
@@ -479,4 +495,23 @@ pub struct InitialIndexResult {
     pub skipped: usize,
     pub removed: usize,
     pub errors: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_events_on_supported_languages_count() {
+        let events = [
+            FileEvent::Modified(PathBuf::from("/p/README.md")),
+            FileEvent::Modified(PathBuf::from("/p/Cargo.lock")),
+            FileEvent::Created(PathBuf::from("/p/.semantiq.db-wal")),
+            FileEvent::Modified(PathBuf::from("/p/src/lib.rs")),
+            FileEvent::Deleted(PathBuf::from("/p/src/old.ts")),
+            FileEvent::Created(PathBuf::from("/p/config.toml")),
+        ];
+        let counted = events.iter().filter(|e| concerns_indexed_file(e)).count();
+        assert_eq!(counted, 3, "lib.rs, old.ts and config.toml (data language)");
+    }
 }

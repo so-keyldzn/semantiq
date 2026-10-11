@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::version_check::{VersionCheckConfig, check_for_update};
 
@@ -34,6 +34,10 @@ pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
     auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
+    /// False when the file watcher could not be created (e.g. inotify watch
+    /// limit): the initial index and the embedder still run, but edits made
+    /// after startup are not reindexed.
+    watching: bool,
     /// True while the initial index pass (phase 1: structure) started by
     /// `start_auto_indexer` runs.
     initial_indexing: Arc<AtomicBool>,
@@ -56,24 +60,57 @@ impl SemantiqServer {
         let engine = Arc::new(RetrievalEngine::new(Arc::clone(&store), project_root));
 
         // Initialize auto-indexer with the same shared store
-        let auto_indexer = match AutoIndexer::new(Arc::clone(&store), PathBuf::from(project_root)) {
-            Ok(indexer) => {
-                info!("Auto-indexing enabled");
-                Some(Arc::new(Mutex::new(indexer)))
-            }
-            Err(e) => {
-                info!("Auto-indexing disabled: {}", e);
-                None
-            }
-        };
+        let project_root = PathBuf::from(project_root);
+        let (auto_indexer, watching) =
+            match AutoIndexer::new(Arc::clone(&store), project_root.clone()) {
+                Ok(indexer) => {
+                    info!("Auto-indexing enabled");
+                    (Some(Arc::new(Mutex::new(indexer))), true)
+                }
+                Err(e) => Self::indexer_without_watcher(&store, project_root, &e),
+            };
 
         Ok(Self {
             engine,
             store,
             auto_indexer,
+            watching,
             initial_indexing: Arc::new(AtomicBool::new(false)),
             embedder: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Fallback when the file watcher cannot be created (inotify watch limit
+    /// on a large tree, unsupported filesystem): index without one so the
+    /// initial pass and the embedder still run, and say so.
+    fn indexer_without_watcher(
+        store: &Arc<IndexStore>,
+        project_root: PathBuf,
+        cause: &anyhow::Error,
+    ) -> (Option<Arc<Mutex<AutoIndexer>>>, bool) {
+        match AutoIndexer::without_watcher(Arc::clone(store), project_root) {
+            Ok(indexer) => {
+                warn!(
+                    "File watcher unavailable, live reindexing is off (restart the server or \
+                     run `semantiq index` after editing files): {}",
+                    cause
+                );
+                (Some(Arc::new(Mutex::new(indexer))), false)
+            }
+            Err(e) => {
+                error!(
+                    "Auto-indexing disabled: file watcher unavailable ({}) and indexer \
+                     initialization failed ({})",
+                    cause, e
+                );
+                (None, false)
+            }
+        }
+    }
+
+    /// Whether the file watcher reindexes edits made while the server runs.
+    pub fn is_watching(&self) -> bool {
+        self.watching
     }
 
     /// Spawn a background version check that notifies the MCP client if an update is available.
@@ -145,25 +182,48 @@ impl SemantiqServer {
         self.embedder.get()?.progress().in_progress()
     }
 
+    /// Why the background embedder could not load the embedding model (last
+    /// attempt failed; it retries with a backoff), `None` otherwise.
+    pub fn embedding_model_error(&self) -> Option<String> {
+        self.embedder.get()?.progress().model_error()
+    }
+
+    /// Why semantic search is off right now, most permanent first: the stub
+    /// backend; the engine's own model copy missing (`RetrievalEngine::new`
+    /// loads it once at startup and never retries, so `search()` has no
+    /// model until a restart even after the embedder recovers); the
+    /// embedder's last load failed (retried in the background). `None` =
+    /// available.
+    pub fn semantic_search_unavailable_reason(&self) -> Option<String> {
+        unavailable_reason(
+            semantiq_embeddings::semantic_search_unavailable_reason(),
+            self.engine.embedding_model().is_none(),
+            self.embedding_model_error(),
+        )
+    }
+
+    /// The runtime part of `semantic_search_unavailable_reason` (everything
+    /// but the backend), for the search notice.
+    fn runtime_unavailable_reason(&self) -> Option<String> {
+        unavailable_reason(
+            None,
+            self.engine.embedding_model().is_none(),
+            self.embedding_model_error(),
+        )
+    }
+
     /// Like `with_indexing_notice`, plus the share of the semantic index that
     /// is ready while phase 2 runs: only `semantiq_search` uses embeddings.
     fn with_search_notice(&self, output: String) -> String {
         if self.is_initial_indexing() {
             return self.with_indexing_notice(output);
         }
-        match self.embedding_in_progress() {
-            Some(counts) if semantiq_embeddings::semantic_search_unavailable_reason().is_none() => {
-                format!(
-                    "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
-                     matches may be missing; symbol and text matches are complete.\n\n{}",
-                    counts.percent(),
-                    counts.embedded,
-                    counts.total,
-                    output
-                )
-            }
-            _ => output,
-        }
+        search_notice(
+            semantiq_embeddings::semantic_search_unavailable_reason(),
+            self.runtime_unavailable_reason(),
+            self.embedding_in_progress(),
+            output,
+        )
     }
 
     /// Prepend a warning to a tool response while the initial index is incomplete.
@@ -183,11 +243,14 @@ impl SemantiqServer {
     /// Phase 1 (structure) runs first over the whole project; then the
     /// background embedder (phase 2) is woken and fills the chunk embeddings on
     /// its own thread while queries and the watcher go on. Watcher events run
-    /// phase 1 right away and queue their new chunks for the embedder.
+    /// phase 1 right away and queue their new chunks for the embedder. Without
+    /// a watcher (`is_watching() == false`) only the initial pass runs; the
+    /// embedder still polls for chunks left pending by another process.
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
             let initial_indexing = Arc::clone(&self.initial_indexing);
+            let watching = self.watching;
             initial_indexing.store(true, Ordering::Relaxed);
 
             let embedder = match BackgroundEmbedder::spawn(
@@ -241,6 +304,10 @@ impl SemantiqServer {
                     }
                 }
 
+                if !watching {
+                    return;
+                }
+
                 // Then start watching for changes
                 let mut interval = tokio::time::interval(Duration::from_secs(2));
 
@@ -259,7 +326,10 @@ impl SemantiqServer {
 
                     match result {
                         Ok(Ok(result)) => {
-                            if result.indexed > 0 {
+                            // Any event, not only a reindex: a file another
+                            // process just indexed (CLI refresh) has
+                            // `indexed == 0` but its chunks are pending.
+                            if result.events > 0 {
                                 notify_embedder();
                             }
                         }
@@ -275,6 +345,66 @@ impl SemantiqServer {
 
             info!("Auto-indexer background task started");
         }
+    }
+}
+
+/// Reason when the search engine's own model copy is missing: loaded once by
+/// `RetrievalEngine::new`, never retried.
+const ENGINE_MODEL_MISSING_REASON: &str =
+    "the embedding model failed to load at startup; restart the server";
+
+/// Reason semantic search is unavailable, most permanent first; `None` when
+/// the backend is ONNX, the engine has its model and the embedder's last
+/// load succeeded (or has not run yet).
+fn unavailable_reason(
+    backend_reason: Option<&str>,
+    engine_model_missing: bool,
+    model_error: Option<String>,
+) -> Option<String> {
+    backend_reason
+        .map(str::to_string)
+        .or_else(|| engine_model_missing.then(|| ENGINE_MODEL_MISSING_REASON.to_string()))
+        .or_else(|| model_error.map(model_error_reason))
+}
+
+/// Reason shown by the search notice and `GET /stats` when the embedding
+/// model failed to load.
+fn model_error_reason(error: String) -> String {
+    format!(
+        "the embedding model could not be loaded ({error}); loading is retried in the background"
+    )
+}
+
+/// Notice prepended to a `semantiq_search` output. With the stub backend
+/// (`backend_reason`) the instructions already say semantic search is off, so
+/// nothing is added; `unavailable_reason` (model load failure) warns that
+/// only symbol and text matches are returned; `in_progress` says how much of
+/// the semantic index is ready.
+fn search_notice(
+    backend_reason: Option<&str>,
+    unavailable_reason: Option<String>,
+    in_progress: Option<EmbeddingCounts>,
+    output: String,
+) -> String {
+    if backend_reason.is_some() {
+        return output;
+    }
+    if let Some(reason) = unavailable_reason {
+        return format!(
+            "⚠️ Semantic index unavailable: {reason}. Only symbol and text matches are \
+             returned.\n\n{output}"
+        );
+    }
+    match in_progress {
+        Some(counts) => format!(
+            "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
+             matches may be missing; symbol and text matches are complete.\n\n{}",
+            counts.percent(),
+            counts.embedded,
+            counts.total,
+            output
+        ),
+        None => output,
     }
 }
 
@@ -511,6 +641,19 @@ impl ServerHandler for SemantiqServer {
                 " The index is being built: structural tools answer as soon as files are \
                  parsed, while embeddings are computed in the background; until they are \
                  complete, semantiq_search says how much of the semantic index is ready.",
+            );
+        }
+        if self.auto_indexer.is_none() {
+            instructions.push_str(
+                " Note: auto-indexing is off in this session (the indexer could not be \
+                 created); the index is updated only by `semantiq index`, so answers may be \
+                 stale.",
+            );
+        } else if !self.watching {
+            instructions.push_str(
+                " Note: live file watching is off in this session (the watcher could not be \
+                 created); files edited after startup are reindexed only by `semantiq index` \
+                 or a server restart.",
             );
         }
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
