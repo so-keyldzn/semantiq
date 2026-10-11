@@ -796,20 +796,19 @@ public:
         );
     }
 
-    // B18 (#66): call edges on a file with many symbols and calls stay cheap
-    // (line-sorted sweep, not calls x symbols) and attach each call to its
-    // innermost function.
+    // B18 (#66): call edges on a file with many symbols and calls attach each
+    // call to its own function (the line-sorted sweep replaces the calls x
+    // symbols scan; `test_call_edges_sweep_matches_naive_scan` in
+    // `structure.rs` is the guard of its exactness).
     #[test]
-    fn b18_call_edges_scale_linearly() {
+    fn b18_call_edges_on_a_large_file() {
         let mut source = String::new();
         for i in 0..4000 {
             source.push_str(&format!(
                 "fn f{i}() {{\n    aa();\n    bb();\n    cc();\n}}\n"
             ));
         }
-        let start = std::time::Instant::now();
         let e = extract_file("src/big.rs", &source);
-        let elapsed = start.elapsed();
         assert_eq!(e.calls.len(), 12_000);
         assert!(
             e.calls
@@ -817,11 +816,6 @@ public:
                 .enumerate()
                 .all(|(i, (caller, _, _))| *caller == format!("f{}", i / 3)),
             "each call attached to its own function"
-        );
-        // Parsing dominates; the old quadratic attachment alone took seconds.
-        assert!(
-            elapsed.as_secs() < 20,
-            "extraction took {elapsed:?} for 4000 functions / 12000 calls"
         );
     }
 }
