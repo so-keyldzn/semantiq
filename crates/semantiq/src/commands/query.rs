@@ -23,7 +23,7 @@ use semantiq_mcp::server::{
     search_output,
 };
 use semantiq_parser::Language;
-use semantiq_retrieval::RetrievalEngine;
+use semantiq_retrieval::{RetrievalEngine, normalize_input_path};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
@@ -262,8 +262,7 @@ fn normalize_file_arg(file: &str, root: &Path) -> String {
     } else {
         path.to_path_buf()
     };
-    let relative = relative.to_string_lossy().replace('\\', "/");
-    relative.trim_start_matches("./").to_string()
+    normalize_input_path(&relative.to_string_lossy())
 }
 
 /// Pending chunks `search` embeds itself before answering: about what a

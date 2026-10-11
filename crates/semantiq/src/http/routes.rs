@@ -11,7 +11,7 @@ use semantiq_mcp::server::{
     CallsOutput, CallsParams, DeadCodeOutput, DeadCodeParams, HierarchyOutput, HierarchyParams,
     RepoMapParams,
 };
-use semantiq_retrieval::{CallDirection, SearchOptions};
+use semantiq_retrieval::{CallDirection, SearchOptions, normalize_input_path};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error};
@@ -380,7 +380,9 @@ async fn deps(
 
     debug!(file_path = %file_path, "HTTP deps request");
 
-    let owned_path = file_path.to_string();
+    // Echoed in the response: the stored form (`/` separators), whatever was given.
+    let file_path = normalize_input_path(file_path);
+    let owned_path = file_path.clone();
     let (dependencies, dependents) = server
         .run_blocking(move |engine| {
             Ok((
@@ -435,7 +437,7 @@ async fn deps(
     let search_time_ms = start.elapsed().as_millis() as u64;
 
     Ok(Json(DepsResponse {
-        file_path: file_path.to_string(),
+        file_path,
         imports,
         imported_by,
         search_time_ms,
