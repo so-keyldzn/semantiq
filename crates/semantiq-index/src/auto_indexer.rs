@@ -8,6 +8,7 @@ use semantiq_parser::{
     ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
     ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_local_import,
 };
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -101,10 +102,31 @@ impl AutoIndexer {
         info!("Starting initial index of {:?}", self.project_root);
 
         let mut result = InitialIndexResult::default();
-        let mut seen_paths = std::collections::HashSet::new();
+        let mut seen_paths = HashSet::new();
+        // Set when part of the tree could not be walked (unreadable directory,
+        // I/O error): the files under it are then absent from `seen_paths`
+        // without having vanished, and pruning them would throw their rows
+        // (and embeddings) away for nothing.
+        let mut walk_incomplete = false;
 
         // The project walk: `.gitignore` and excluded names (`exclusions.rs`).
-        for entry in project_walker(&self.project_root).build().flatten() {
+        for entry in project_walker(&self.project_root).build() {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // A `.gitignore` the walker could not fully parse: the walk
+                // went on with the rules it could read.
+                Err(e) if e.is_partial() => {
+                    warn!("Ignore rules partially applied: {}", e);
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Walk error, files under it are kept in the index: {}", e);
+                    walk_incomplete = true;
+                    result.errors += 1;
+                    continue;
+                }
+            };
+
             // Skip directories
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
                 continue;
@@ -120,7 +142,6 @@ impl AutoIndexer {
 
             // Get relative path (warns if `path` falls outside project_root).
             let rel_path = to_relative_string(path, &self.project_root);
-            seen_paths.insert(rel_path.clone());
 
             // Files above their size limit are never indexed. Drop a row left
             // by an older version or by a file that grew past the limit:
@@ -134,14 +155,23 @@ impl AutoIndexer {
                 continue;
             }
 
-            // Read file content to check if needs reindex
+            // Read file content to check if needs reindex. A file that can no
+            // longer be read (not UTF-8 any more, unreadable, gone between
+            // the directory listing and here) cannot be verified: its old row
+            // would be stale, so it goes.
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
                 Err(e) => {
                     debug!("Skipping {}: {}", rel_path, e);
+                    if self.store.get_file_by_path(&rel_path)?.is_some() {
+                        self.store.delete_file(&rel_path)?;
+                        debug!("Removed unreadable file from index: {}", rel_path);
+                        result.removed += 1;
+                    }
                     continue;
                 }
             };
+            seen_paths.insert(rel_path.clone());
 
             // Check if file needs to be reindexed
             let needs_reindex = self
@@ -169,34 +199,44 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
-        let stale: Vec<String> = self
-            .store
-            .list_file_paths()?
-            .into_iter()
-            .filter(|path| !seen_paths.contains(path))
-            .collect();
+        // Not when the walk missed part of the tree: a file not seen is then
+        // not necessarily gone, and the next complete walk prunes for real.
+        // The root is recorded only when the walk did reach files of it.
+        if walk_incomplete {
+            warn!("Walk incomplete: files missing from it are kept in the index");
+            if !seen_paths.is_empty() {
+                self.record_project_root(0)?;
+            }
+        } else {
+            let stale: Vec<String> = self
+                .store
+                .list_file_paths()?
+                .into_iter()
+                .filter(|path| !seen_paths.contains(path))
+                .collect();
 
-        // Safety net: a walk that found nothing indexable while the index holds
-        // files means the root is wrong (a database opened from another
-        // directory), not that every file vanished. Pruning would wipe the
-        // index; refuse instead.
-        if seen_paths.is_empty() && !stale.is_empty() {
-            bail!(
-                "no indexable file found under {} while the index holds {} files: wrong \
-                 project root? Pass `--project <root>`, or rebuild with \
-                 `semantiq index <root> --force` (also the way to go if the project really \
-                 has no indexable file left)",
-                self.project_root.display(),
-                stale.len()
-            );
-        }
-        self.record_project_root(stale.len())?;
-        for stale in stale {
-            match self.store.delete_file(&stale) {
-                Ok(()) => result.removed += 1,
-                Err(e) => {
-                    error!("Failed to remove stale {}: {}", stale, e);
-                    result.errors += 1;
+            // Safety net: a walk that found nothing indexable while the index
+            // holds files means the root is wrong (a database opened from
+            // another directory), not that every file vanished. Pruning would
+            // wipe the index; refuse instead.
+            if seen_paths.is_empty() && !stale.is_empty() {
+                bail!(
+                    "no indexable file found under {} while the index holds {} files: wrong \
+                     project root? Pass `--project <root>`, or rebuild with \
+                     `semantiq index <root> --force` (also the way to go if the project really \
+                     has no indexable file left)",
+                    self.project_root.display(),
+                    stale.len()
+                );
+            }
+            self.record_project_root(stale.len())?;
+            for stale in stale {
+                match self.store.delete_file(&stale) {
+                    Ok(()) => result.removed += 1,
+                    Err(e) => {
+                        error!("Failed to remove stale {}: {}", stale, e);
+                        result.errors += 1;
+                    }
                 }
             }
         }
@@ -309,11 +349,16 @@ impl AutoIndexer {
             }
         };
 
-        // Read file content
+        // Read file content. A file that can no longer be read (not UTF-8 any
+        // more, unreadable) cannot keep a row that no longer describes it.
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
                 debug!("Skipping {}: {}", rel_path, e);
+                if self.store.get_file_by_path(&rel_path)?.is_some() {
+                    self.store.delete_file(&rel_path)?;
+                    debug!("Removed unreadable file from index: {}", rel_path);
+                }
                 return Ok(false);
             }
         };

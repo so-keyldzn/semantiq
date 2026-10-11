@@ -454,11 +454,23 @@ fn refresh(store: &Arc<IndexStore>, db_path: &Path, root: &Path) -> Result<()> {
 
 /// Whether `AutoIndexer::initial_index` would change anything: a file it
 /// indexes is new or modified, or an indexed file is gone. Mirrors its walk and
-/// filters, and stops at the first difference.
+/// filters, and stops at the first difference. Like the indexer, a walk that
+/// could not cover the whole tree does not count unseen files as gone.
 fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
     let mut vanished: HashSet<String> = store.list_file_paths()?.into_iter().collect();
+    let mut walk_incomplete = false;
 
-    for entry in project_walker(root).build().flatten() {
+    for entry in project_walker(root).build() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                if !e.is_partial() {
+                    walk_incomplete = true;
+                }
+                tracing::debug!("Walk error while checking the index: {}", e);
+                continue;
+            }
+        };
         if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
             continue;
         }
@@ -487,6 +499,9 @@ fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
         }
     }
 
+    if walk_incomplete {
+        return Ok(false);
+    }
     if let Some(path) = vanished.iter().next() {
         tracing::debug!("Index stale: {} removed", path);
     }

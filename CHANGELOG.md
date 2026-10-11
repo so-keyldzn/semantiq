@@ -168,6 +168,12 @@ All notable changes to Semantiq will be documented in this file.
   instead of the 10th percentile, so the two gates cut at the same point
   (the calibrated `max_distance` can still be stricter than the default
   1.2) (#33).
+- Walk errors no longer prune the index (#53): a directory that cannot be
+  listed (permissions, mount hiccup) is logged and counted in `errors`, and
+  the files under it keep their rows and embeddings, since the walk cannot
+  tell them from files that vanished; the next complete walk prunes for
+  real. The query refresh check does the same. A previously indexed file that
+  can no longer be read (not UTF-8 any more, unreadable) loses its stale row.
 - Indexing writes less (#41): a file's imports are written in one transaction
   (`IndexStore::replace_dependencies`, one commit per file instead of one per
   import), and the partial index `idx_chunks_pending` (`chunks(id) WHERE

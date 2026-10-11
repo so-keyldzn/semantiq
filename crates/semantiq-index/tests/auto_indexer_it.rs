@@ -366,3 +366,108 @@ fn hidden_tooling_dirs_are_indexed_and_excluded_dirs_are_not() {
     assert!(store.find_symbol_by_name("cachedThing").unwrap().is_empty());
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
+
+#[test]
+fn unreadable_file_loses_its_row() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
+
+    // The file is no longer valid UTF-8: `read_to_string` fails.
+    fs::write(root.join("src/util.rs"), b"pub fn helper() {}\n\xff\xfe\n").unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(
+        result.removed, 1,
+        "the stale row of an unreadable file goes"
+    );
+    assert_eq!(result.errors, 0);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert!(store.get_file_by_path("src/lib.rs").unwrap().is_some());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A directory that cannot be listed is a walk error: its files are kept in
+/// the index (they did not vanish) and the error is counted. Needs a
+/// non-root user: root reads a `chmod 000` directory anyway.
+#[cfg(unix)]
+#[test]
+fn walk_error_keeps_files_under_the_unreadable_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Restores the directory's permissions on drop so `TempDir` can clean up.
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(
+        &root,
+        "locked/secret.rs",
+        "pub fn locked_away() -> i32 { 7 }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some()
+    );
+
+    let locked = root.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(locked.clone());
+    if fs::read_dir(&locked).is_ok() {
+        eprintln!("skipped: the directory is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    // Meanwhile a file really was deleted: it is not pruned either, since the
+    // walk cannot tell it apart from the files it could not reach.
+    fs::remove_file(root.join("src/util.rs")).unwrap();
+
+    let result = indexer.initial_index().unwrap();
+    assert!(
+        result.errors >= 1,
+        "the unreadable directory is a walk error"
+    );
+    assert_eq!(
+        result.removed, 0,
+        "nothing is pruned after an incomplete walk"
+    );
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some(),
+        "files under the unreadable directory keep their rows"
+    );
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
+
+    // Once readable again, the next walk prunes what really vanished and
+    // keeps what is there.
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 1);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
