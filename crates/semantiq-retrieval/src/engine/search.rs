@@ -532,15 +532,6 @@ impl RetrievalEngine {
         limit: usize,
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        let mut results = Vec::new();
-        let root = Path::new(&self.root_path);
-
-        if !root.exists() {
-            return Ok(results);
-        }
-
-        let file_paths = self.get_cached_file_list(root)?;
-
         // Compile the matchers for every (deduplicated) query term exactly
         // once for the whole request instead of recompiling them per file.
         let searcher = TextSearcher::new(true);
@@ -553,6 +544,39 @@ impl RetrievalEngine {
                 compiled.push(m);
             }
         }
+        self.search_text_with(&searcher, &compiled, limit, options)
+    }
+
+    /// Lines where `name` occurs as a whole identifier, case-sensitive: the
+    /// text approximation of the `refs` table for names it does not know
+    /// (keys of data files). No case variants, no substrings: `id` does not
+    /// match `uuid`, `width` or `ID`.
+    pub(crate) fn search_identifier_text(
+        &self,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let searcher = TextSearcher::new(false);
+        let compiled = [searcher.compile_word(name)?];
+        self.search_text_with(&searcher, &compiled, limit, &SearchOptions::default())
+    }
+
+    /// Walk the project files and collect the lines matched by `compiled`.
+    fn search_text_with(
+        &self,
+        searcher: &TextSearcher,
+        compiled: &[crate::text_searcher::CompiledMatcher],
+        limit: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        let mut results = Vec::new();
+        let root = Path::new(&self.root_path);
+
+        if !root.exists() {
+            return Ok(results);
+        }
+
+        let file_paths = self.get_cached_file_list(root)?;
 
         for path in file_paths.iter() {
             if results.len() >= limit {
@@ -579,7 +603,7 @@ impl RetrievalEngine {
             }
 
             if let Ok(content) = fs::read_to_string(path) {
-                let matches = Self::find_text_matches_compiled(&searcher, &content, &compiled);
+                let matches = Self::find_text_matches_compiled(searcher, &content, compiled);
                 if matches.is_empty() {
                     continue;
                 }

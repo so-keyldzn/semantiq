@@ -414,6 +414,24 @@ fn test_find_references_falls_back_to_text_for_unknown_names() {
 }
 
 #[test]
+fn test_text_fallback_matches_whole_identifiers_case_sensitively() {
+    // Regression for #43: the fallback expanded case variants and matched
+    // substrings, so `id` hit `uuid`, `width`, `provider` and `IDENTITY`.
+    let (engine, _root) = index_rust_project(&[(
+        "main.rs",
+        "fn main() {\n    let a = \"id\";\n    let b = \"uuid\";\n    let c = \"width\";\n    let d = \"ID\";\n    let e = \"user_id\";\n    let f = \"x.id\";\n}\n",
+    )]);
+
+    let results = engine.find_references("id", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| (r.start_line, r.metadata.match_type.as_deref().unwrap_or("")))
+        .collect();
+    assert_eq!(hits, vec![(2, "text"), (7, "text")], "{hits:?}");
+}
+
+#[test]
 fn test_explain_usage_count_from_ast() {
     let (engine, _root) = index_rust_project(&[(
         "lib.rs",

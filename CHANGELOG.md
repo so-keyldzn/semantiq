@@ -107,6 +107,10 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- The text fallback of `find_refs` / `explain` (names unknown to the syntax
+  index, such as keys of data files) matches the whole identifier,
+  case-sensitive: `id` no longer reports `uuid`, `width`, `provider` or
+  `IDENTITY` lines as usages, nor counts them in `usage_count` (#43).
 - `impact`: the analysed symbol counts as visited from the start, so mutual
   recursion (`a` calls `b`, `b` calls `a`) no longer reports the depth-1
   sites again at depth 3, eating the site budget. `find_refs` no longer

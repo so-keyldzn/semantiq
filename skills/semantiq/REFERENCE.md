@@ -54,8 +54,10 @@ project root and use `/` on every platform (Windows included); a path argument
 ```
 
 - Usage `kind`: `call`, `type`, `import`, `reference`, or `text` (name unknown
-  to the syntax index, found by text search). Definition `kind`: the symbol
-  kind (`function`, `struct`…), or `definition` when unknown.
+  to the syntax index, e.g. a key of a data file: lines holding the whole
+  identifier, case-sensitive, an approximation that includes comments and
+  strings). Definition `kind`: the symbol kind (`function`, `struct`…), or
+  `definition` when unknown.
 - `content`: one line, trimmed and cut to 120 characters (for a definition,
   the line declaring the name).
 - `truncated`: the limit (`--limit`, default 30) was reached.

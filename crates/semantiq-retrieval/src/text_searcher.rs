@@ -56,6 +56,30 @@ impl TextSearcher {
         })
     }
 
+    /// Pre-compile a literal pattern matched as a whole word: `id` matches
+    /// `id` but not `uuid`, `width` or `user_id`. A word boundary is only
+    /// required on the sides where the pattern itself is a word character,
+    /// so `$state` or `@tool` still match.
+    pub fn compile_word(&self, pattern: &str) -> Result<CompiledMatcher> {
+        let is_word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let mut word_pattern = String::new();
+        if is_word(pattern.chars().next()) {
+            word_pattern.push_str(r"\b");
+        }
+        word_pattern.push_str(&regex::escape(pattern));
+        if is_word(pattern.chars().last()) {
+            word_pattern.push_str(r"\b");
+        }
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(self.case_insensitive)
+            .word(false)
+            .build(&word_pattern)?;
+        Ok(CompiledMatcher {
+            matcher,
+            pattern: pattern.to_string(),
+        })
+    }
+
     /// Search `content` using an already-compiled matcher.
     pub fn search_compiled(
         &self,
@@ -63,25 +87,15 @@ impl TextSearcher {
         compiled: &CompiledMatcher,
     ) -> Result<Vec<TextMatch>> {
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, &compiled.pattern);
+        let mut sink = MatchSink::new(&mut matches, &compiled.pattern, self.case_insensitive);
         Searcher::new().search_slice(&compiled.matcher, content.as_bytes(), &mut sink)?;
         Ok(matches)
     }
 
     /// Search with word boundary matching for better precision
     pub fn search_word(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
-        // Build regex matcher with word boundaries
-        let word_pattern = format!(r"\b{}\b", regex::escape(pattern));
-        let matcher = RegexMatcherBuilder::new()
-            .case_insensitive(self.case_insensitive)
-            .build(&word_pattern)?;
-
-        let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern);
-
-        Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
-
-        Ok(matches)
+        let compiled = self.compile_word(pattern)?;
+        self.search_compiled(content, &compiled)
     }
 
     /// Search with a raw regex pattern.
@@ -102,7 +116,7 @@ impl TextSearcher {
             .build(pattern)?;
 
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern);
+        let mut sink = MatchSink::new(&mut matches, pattern, self.case_insensitive);
 
         Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
 
@@ -122,14 +136,27 @@ struct MatchSink<'a> {
     pattern: &'a str,
     /// Pre-computed lowercase pattern to avoid re-allocating on every line.
     pattern_lower: String,
+    /// Whether the matcher ignored case: the match position and the exact
+    /// line check follow the same rule.
+    case_insensitive: bool,
 }
 
 impl<'a> MatchSink<'a> {
-    fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str) -> Self {
+    fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str, case_insensitive: bool) -> Self {
         Self {
             matches,
             pattern_lower: pattern.to_lowercase(),
             pattern,
+            case_insensitive,
+        }
+    }
+
+    /// Byte offset of the first occurrence of the pattern in `line`.
+    fn match_start(&self, line: &str) -> Option<usize> {
+        if self.case_insensitive {
+            line.to_lowercase().find(&self.pattern_lower)
+        } else {
+            line.find(self.pattern)
         }
     }
 
@@ -138,7 +165,9 @@ impl<'a> MatchSink<'a> {
 
         // Use eq_ignore_ascii_case for the common ASCII path, avoiding allocation.
         // Fall back to full Unicode lowercase only when ASCII comparison fails.
-        let is_exact_line = if line_trimmed.is_ascii() && self.pattern.is_ascii() {
+        let is_exact_line = if !self.case_insensitive {
+            line_trimmed == self.pattern
+        } else if line_trimmed.is_ascii() && self.pattern.is_ascii() {
             line_trimmed.eq_ignore_ascii_case(self.pattern)
         } else {
             line_trimmed.to_lowercase() == self.pattern_lower
@@ -186,10 +215,7 @@ impl Sink for MatchSink<'_> {
         }
 
         // Find match position within line for scoring
-        let match_start = line_content
-            .to_lowercase()
-            .find(&self.pattern_lower)
-            .unwrap_or(0);
+        let match_start = self.match_start(&line_content).unwrap_or(0);
 
         let match_end = match_start + self.pattern.len();
 
@@ -253,6 +279,38 @@ mod tests {
         // Should only match "main" as a word, not "mainValue"
         assert_eq!(matches.len(), 1);
         assert!(matches[0].line_content.contains("fn main"));
+    }
+
+    #[test]
+    fn test_word_search_case_sensitive_identifier() {
+        // Regression for #43: the fallback matched `id` inside `uuid`,
+        // `width`, `provider` and `IDENTITY`.
+        let searcher = TextSearcher::new(false);
+        let content =
+            "let id = 1;\nlet uuid = 2;\nlet width = 3;\nlet ID = 4;\nlet user_id = 5;\nx.id\n";
+
+        let compiled = searcher.compile_word("id").unwrap();
+        let lines: Vec<usize> = searcher
+            .search_compiled(content, &compiled)
+            .unwrap()
+            .iter()
+            .map(|m| m.line_number)
+            .collect();
+        assert_eq!(lines, vec![1, 6]);
+    }
+
+    #[test]
+    fn test_word_search_keeps_non_word_edges() {
+        let searcher = TextSearcher::new(false);
+        let content = "$state = 1;\n$states = 2;\nstate\n";
+        let compiled = searcher.compile_word("$state").unwrap();
+        let lines: Vec<usize> = searcher
+            .search_compiled(content, &compiled)
+            .unwrap()
+            .iter()
+            .map(|m| m.line_number)
+            .collect();
+        assert_eq!(lines, vec![1]);
     }
 
     #[test]
