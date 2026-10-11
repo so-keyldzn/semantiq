@@ -670,6 +670,25 @@ public:
         assert_eq!(sig("local"), "function local() {}");
         assert_eq!(sig("v"), "const v = 1;");
 
+        // Decorators are children of the `export_statement`, not of the class:
+        // they stay out of the signature (NestJS `@Injectable()`, a multi-line
+        // Angular `@Component({...})` would otherwise push `export` past the
+        // first `(` and the class name past the 200-char truncation).
+        let decorated = extract_file(
+            "src/c.ts",
+            "@Injectable()\nexport class Service {}\n@Component({\n  selector: 'x',\n})\nexport default class Cmp {}\n",
+        );
+        let sig = |name: &str| {
+            decorated
+                .symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(sig("Service"), "export class Service {}");
+        assert_eq!(sig("Cmp"), "export default class Cmp {}");
+
         let js = extract_file(
             "src/b.js",
             "export function f() {}\nexport default class C {}\n",

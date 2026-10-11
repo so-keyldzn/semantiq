@@ -594,7 +594,9 @@ impl QuerySymbolExtractor {
     }
 
     /// `export` / `export default` quand `node` est la déclaration d'un
-    /// `export_statement` (TS/JS) : le texte du parent avant la déclaration.
+    /// `export_statement` (TS/JS) : les mots-clés anonymes du parent, sans ses
+    /// décorateurs (`@Injectable()\nexport class Service {}` : le décorateur
+    /// est un enfant `decorator` de l'`export_statement`, pas de la classe).
     fn export_prefix(node: &Node, source: &str) -> Option<String> {
         let parent = node.parent()?;
         if parent.kind() != "export_statement"
@@ -602,9 +604,12 @@ impl QuerySymbolExtractor {
         {
             return None;
         }
-        let prefix = source
-            .get(parent.start_byte()..node.start_byte())?
-            .split_whitespace()
+        let mut cursor = parent.walk();
+        let prefix = parent
+            .children(&mut cursor)
+            .take_while(|child| child.start_byte() < node.start_byte())
+            .filter(|child| !child.is_named() && matches!(child.kind(), "export" | "default"))
+            .filter_map(|child| child.utf8_text(source.as_bytes()).ok())
             .collect::<Vec<_>>()
             .join(" ");
         (!prefix.is_empty()).then_some(prefix)
