@@ -6,8 +6,8 @@ All notable changes to Semantiq will be documented in this file.
 
 ### Security
 - The HTTP API (`serve --http-port`) rejects requests whose `Host` header is
-  not `localhost`, `127.0.0.1` or `[::1]` with 403 when bound to loopback, on
-  every endpoint and not only `/mcp`: a page whose DNS name re-resolves to
+  not `localhost`, `127.0.0.1`, `[::1]` or the bound address with 403 when
+  bound to loopback, on every endpoint and not only `/mcp`: a page whose DNS name re-resolves to
   127.0.0.1 can no longer read the indexed code same-origin (DNS rebinding).
   `--http-host` with a non-loopback address disables the check (#38).
 - Dependencies: `anyhow` 1.0.104 (RUSTSEC-2026-0190), `crossbeam-epoch` 0.9.21

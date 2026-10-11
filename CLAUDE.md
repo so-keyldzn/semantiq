@@ -148,7 +148,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 
 ### HTTP API (`--http-port`)
 
-Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp`. The whole router (REST and `/mcp`) rejects a `Host` header that is not `localhost` / `127.0.0.1` / `[::1]` with 403 (DNS rebinding, `http/host.rs`) unless `--http-host` is non-loopback. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp`. The whole router (REST and `/mcp`) rejects a `Host` header that is not `localhost` / `127.0.0.1` / `[::1]` / the bound address with 403 (DNS rebinding, `http/host.rs`, the same `AllowedHosts` list is given to rmcp) unless `--http-host` is non-loopback. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
 
 ### Environment Variables
 

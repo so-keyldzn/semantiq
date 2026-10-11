@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::http::create_router;
-use crate::http::host::require_loopback_host;
+use crate::http::host::{AllowedHosts, require_allowed_host};
 use crate::http::types::*;
 
 /// Create a test router with an in-memory database
@@ -19,10 +19,19 @@ fn test_router() -> axum::Router {
     create_router(Arc::new(server))
 }
 
-/// The test router behind the loopback `Host` guard, as `serve --http-port`
-/// builds it when bound to a loopback address.
+/// The test router behind the `Host` guard, as `serve --http-port` builds it
+/// when bound to the loopback address `bind`.
+fn router_bound_to(bind: &str) -> axum::Router {
+    let allowed = AllowedHosts::for_bind_address(bind.parse().unwrap());
+    test_router().layer(axum::middleware::from_fn_with_state(
+        allowed,
+        require_allowed_host,
+    ))
+}
+
+/// Bound to the default `127.0.0.1`.
 fn guarded_router() -> axum::Router {
-    test_router().layer(axum::middleware::from_fn(require_loopback_host))
+    router_bound_to("127.0.0.1")
 }
 
 async fn response_body(response: axum::http::Response<Body>) -> Vec<u8> {
@@ -592,6 +601,29 @@ async fn test_missing_host_is_rejected_unless_the_uri_carries_it() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_bound_loopback_address_is_accepted() {
+    // `--http-host 127.0.0.2` is loopback too: its clients send its address.
+    for (host, status) in [
+        ("127.0.0.2:3000", StatusCode::OK),
+        ("127.0.0.2", StatusCode::OK),
+        ("localhost:3000", StatusCode::OK),
+        ("127.0.0.3:3000", StatusCode::FORBIDDEN),
+        ("evil.example:3000", StatusCode::FORBIDDEN),
+    ] {
+        let response = router_bound_to("127.0.0.2")
+            .oneshot(
+                Request::get("/health")
+                    .header("host", host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{host}");
+    }
 }
 
 #[tokio::test]
