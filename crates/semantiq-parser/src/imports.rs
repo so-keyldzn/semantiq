@@ -716,39 +716,55 @@ impl ImportExtractor {
         None
     }
 
+    /// `import a.b.C`, `import a.b.C as D`, `import a.b.*` (tree-sitter-kotlin-ng:
+    /// an `import` node holding a `qualified_identifier`, then an optional alias
+    /// `identifier`; the `.*` wildcard is an anonymous token).
     fn extract_kotlin_import(node: &Node, source: &str) -> Option<Import> {
-        if node.kind() != "import_header" {
+        if node.kind() != "import" {
             return None;
         }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let src = source.as_bytes();
 
-        // Find the identifier child
+        let mut path: Option<String> = None;
+        let mut alias: Option<String> = None;
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "identifier" {
-                let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
-
-                let kind = if path.starts_with("kotlin.") || path.starts_with("java.") {
-                    ImportKind::Std
-                } else {
-                    ImportKind::External
-                };
-
-                let name = path.split('.').next_back().map(String::from);
-
-                return Some(Import {
-                    path,
-                    name,
-                    kind,
-                    start_line,
-                    end_line,
-                });
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "qualified_identifier" if path.is_none() => {
+                    path = Some(child.utf8_text(src).ok()?.to_string());
+                }
+                "identifier" => alias = Some(child.utf8_text(src).ok()?.to_string()),
+                _ => {}
             }
         }
+        let path = path?;
+        let wildcard = node.utf8_text(src).ok()?.trim_end().ends_with(".*");
 
-        None
+        let kind = if ["kotlin.", "kotlinx.", "java.", "javax."]
+            .iter()
+            .any(|p| path.starts_with(p))
+        {
+            ImportKind::Std
+        } else {
+            ImportKind::External
+        };
+
+        let name = if wildcard {
+            None
+        } else {
+            alias.or_else(|| path.split('.').next_back().map(String::from))
+        };
+
+        Some(Import {
+            path,
+            name,
+            kind,
+            start_line,
+            end_line,
+        })
     }
 
     fn extract_scala_import(node: &Node, source: &str) -> Option<Import> {
@@ -1248,6 +1264,39 @@ use super::parent_module;
 
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].kind, ImportKind::Local);
+    }
+
+    fn imports(lang: Language, source: &str) -> Vec<(String, Option<String>, ImportKind)> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        ImportExtractor::extract(&tree, source, lang)
+            .unwrap()
+            .into_iter()
+            .map(|i| (i.path, i.name, i.kind))
+            .collect()
+    }
+
+    fn import(
+        path: &str,
+        name: Option<&str>,
+        kind: ImportKind,
+    ) -> (String, Option<String>, ImportKind) {
+        (path.to_string(), name.map(String::from), kind)
+    }
+
+    #[test]
+    fn test_extract_kotlin_imports() {
+        // tree-sitter-kotlin-ng emits `import`, not the old `import_header`.
+        let source = "package a.b\nimport foo.bar.Baz\nimport kotlin.collections.List as KList\nimport foo.*\nimport javax.inject.Inject\n\nclass X {\n    fun f() { Baz() }\n}\n";
+        assert_eq!(
+            imports(Language::Kotlin, source),
+            vec![
+                import("foo.bar.Baz", Some("Baz"), ImportKind::External),
+                import("kotlin.collections.List", Some("KList"), ImportKind::Std),
+                import("foo", None, ImportKind::External),
+                import("javax.inject.Inject", Some("Inject"), ImportKind::Std),
+            ]
+        );
     }
 
     #[test]

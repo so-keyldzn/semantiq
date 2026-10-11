@@ -4,6 +4,8 @@ mod bug_probes {
     use semantiq_parser::references::{Reference, ReferenceExtractor, ReferenceKind};
     use semantiq_parser::structure::StructureExtractor;
     use semantiq_parser::symbols::{Symbol, SymbolExtractor, SymbolKind};
+    use semantiq_parser::{ImportExtractor, ImportKind};
+    use std::path::Path;
 
     fn extract(lang: Language, source: &str) -> Vec<Symbol> {
         let mut support = LanguageSupport::new().unwrap();
@@ -36,6 +38,46 @@ mod bug_probes {
             .into_iter()
             .map(|e| (e.caller, e.callee, e.line))
             .collect()
+    }
+
+    /// Everything the indexer extracts from one file, parsed with the grammar
+    /// its path selects (`.tsx` → TSX).
+    struct Extracted {
+        has_error: bool,
+        symbols: Vec<Symbol>,
+        refs: Vec<Reference>,
+        calls: Vec<(String, String, usize)>,
+        imports: Vec<(String, Option<String>, ImportKind)>,
+    }
+
+    fn extract_file(path: &str, source: &str) -> Extracted {
+        let path = Path::new(path);
+        let lang = Language::from_path(path).unwrap();
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, lang);
+        let calls = StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+            .calls
+            .into_iter()
+            .map(|e| (e.caller, e.callee, e.line))
+            .collect();
+        let imports = ImportExtractor::extract(&tree, source, lang)
+            .unwrap()
+            .into_iter()
+            .map(|i| (i.path, i.name, i.kind))
+            .collect();
+        Extracted {
+            has_error: tree.root_node().has_error(),
+            symbols,
+            refs,
+            calls,
+            imports,
+        }
+    }
+
+    fn reference<'a>(refs: &'a [Reference], name: &str, line: usize) -> Option<&'a Reference> {
+        refs.iter().find(|r| r.name == name && r.line == line)
     }
 
     // B1: Python decorated method must NOT be duplicated.
@@ -410,5 +452,36 @@ public:
             .as_deref(),
             Some("/// Config.")
         );
+    }
+
+    // B12 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).
+    #[test]
+    fn b12_kotlin_imports_extracted() {
+        let source = include_str!("fixtures/kotlin/sample.kt");
+        let e = extract_file("src/Sample.kt", source);
+        assert_eq!(
+            e.imports,
+            vec![(
+                "kotlin.io.println".to_string(),
+                Some("println".to_string()),
+                ImportKind::Std
+            )]
+        );
+        let e = extract_file(
+            "src/X.kt",
+            "package a.b\nimport foo.bar.Baz\nimport kotlin.collections.List as KList\nimport foo.*\n\nclass X {\n    fun f() { Baz() }\n}\n",
+        );
+        assert_eq!(
+            e.imports.len(),
+            3,
+            "one Import per import line: {:?}",
+            e.imports
+        );
+        assert_eq!(
+            e.imports[1].1.as_deref(),
+            Some("KList"),
+            "alias is the name"
+        );
+        assert_eq!(e.imports[2].1, None, "wildcard has no binding name");
     }
 }

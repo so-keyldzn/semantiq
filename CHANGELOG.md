@@ -177,6 +177,9 @@ All notable changes to Semantiq will be documented in this file.
   and `stats` / `calibrate`) ends quietly with exit code 0 when the reader
   closes the pipe early, instead of panicking with `Broken pipe` and exit
   code 101 (#49).
+- Kotlin imports are extracted (#56): the extractor matched the old
+  `import_header` node, so `deps` and the repo map had nothing for Kotlin
+  files. Aliases (`import a.B as C`) and wildcards are handled.
 
 ## [0.11.0] - 2026-10-07
 
