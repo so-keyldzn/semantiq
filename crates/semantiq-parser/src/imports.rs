@@ -492,7 +492,8 @@ impl ImportExtractor {
     /// (an `aliased_import` whose `name` field holds the `dotted_name`) each
     /// yield their own entry, the alias being the binding `name`. A `from`
     /// import yields one entry for its module, except `from . import a, b`
-    /// where the imported names are the modules: one entry per name, path `.`.
+    /// where the imported names are the modules: one entry per name, path `.`
+    /// (`from . import *`: one entry without a name).
     fn extract_python_import(node: &Node, source: &str) -> Vec<Import> {
         let src = source.as_bytes();
         let start_line = node.start_position().row + 1;
@@ -544,11 +545,21 @@ impl ImportExtractor {
                 let bare_relative = path.chars().all(|c| c == '.');
                 let mut cursor = node.walk();
                 let names: Vec<Option<String>> = if bare_relative {
-                    // `from . import a, b`: the imported names are the modules.
-                    node.children_by_field_name("name", &mut cursor)
+                    // `from . import a, b`: the imported names are the modules;
+                    // `from . import *` is a `wildcard_import` child.
+                    let mut names: Vec<Option<String>> = node
+                        .children_by_field_name("name", &mut cursor)
                         .filter_map(target)
                         .map(|(_, name)| name)
-                        .collect()
+                        .collect();
+                    let mut cursor = node.walk();
+                    if node
+                        .named_children(&mut cursor)
+                        .any(|c| c.kind() == "wildcard_import")
+                    {
+                        names.push(None);
+                    }
+                    names
                 } else {
                     vec![path.split('.').next_back().map(String::from)]
                 };
@@ -1483,7 +1494,7 @@ use super::parent_module;
 
     #[test]
     fn test_python_import_alias_and_list() {
-        let source = "import numpy as np\nimport os, sys\nimport os.path as osp\nfrom . import sibling\nfrom .. import a, b\nfrom .mod import x as y\nfrom collections import defaultdict\n";
+        let source = "import numpy as np\nimport os, sys\nimport os.path as osp\nfrom . import sibling\nfrom .. import a, b\nfrom .mod import x as y\nfrom collections import defaultdict\nfrom . import *\nfrom .pkg import *\n";
         assert_eq!(
             imports(Language::Python, source),
             vec![
@@ -1496,6 +1507,8 @@ use super::parent_module;
                 import("..", Some("b"), ImportKind::Local),
                 import(".mod", Some("mod"), ImportKind::Local),
                 import("collections", Some("collections"), ImportKind::Std),
+                import(".", None, ImportKind::Local),
+                import(".pkg", Some("pkg"), ImportKind::Local),
             ]
         );
     }
