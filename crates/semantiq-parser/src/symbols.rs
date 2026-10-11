@@ -341,7 +341,7 @@ impl SymbolExtractor {
             "interface_declaration" => Some(SymbolKind::Interface),
             "enum_class_body" => Some(SymbolKind::Enum),
             "property_declaration" => Some(SymbolKind::Variable),
-            "import_header" => Some(SymbolKind::Import),
+            "import" => Some(SymbolKind::Import),
             _ => None,
         }
     }

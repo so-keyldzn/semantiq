@@ -4,6 +4,8 @@ mod bug_probes {
     use semantiq_parser::references::{Reference, ReferenceExtractor, ReferenceKind};
     use semantiq_parser::structure::StructureExtractor;
     use semantiq_parser::symbols::{Symbol, SymbolExtractor, SymbolKind};
+    use semantiq_parser::{ImportExtractor, ImportKind};
+    use std::path::Path;
 
     fn extract(lang: Language, source: &str) -> Vec<Symbol> {
         let mut support = LanguageSupport::new().unwrap();
@@ -36,6 +38,46 @@ mod bug_probes {
             .into_iter()
             .map(|e| (e.caller, e.callee, e.line))
             .collect()
+    }
+
+    /// Everything the indexer extracts from one file, parsed with the grammar
+    /// its path selects (`.tsx` → TSX).
+    struct Extracted {
+        has_error: bool,
+        symbols: Vec<Symbol>,
+        refs: Vec<Reference>,
+        calls: Vec<(String, String, usize)>,
+        imports: Vec<(String, Option<String>, ImportKind)>,
+    }
+
+    fn extract_file(path: &str, source: &str) -> Extracted {
+        let path = Path::new(path);
+        let lang = Language::from_path(path).unwrap();
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse_path(lang, path, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, lang);
+        let calls = StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+            .calls
+            .into_iter()
+            .map(|e| (e.caller, e.callee, e.line))
+            .collect();
+        let imports = ImportExtractor::extract(&tree, source, lang)
+            .unwrap()
+            .into_iter()
+            .map(|i| (i.path, i.name, i.kind))
+            .collect();
+        Extracted {
+            has_error: tree.root_node().has_error(),
+            symbols,
+            refs,
+            calls,
+            imports,
+        }
+    }
+
+    fn reference<'a>(refs: &'a [Reference], name: &str, line: usize) -> Option<&'a Reference> {
+        refs.iter().find(|r| r.name == name && r.line == line)
     }
 
     // B1: Python decorated method must NOT be duplicated.
@@ -409,6 +451,371 @@ public:
             )
             .as_deref(),
             Some("/// Config.")
+        );
+    }
+
+    // B15 (#54): `.tsx` files are parsed with the TSX grammar. With the plain
+    // TypeScript grammar the JSX yielded ERROR nodes, `format(user)` inside the
+    // markup was a plain reference and tag / attribute names were `type`s.
+    #[test]
+    fn b15_tsx_jsx_parsed_with_tsx_grammar() {
+        let source = include_str!("fixtures/typescript/sample.tsx");
+        let e = extract_file("src/App.tsx", source);
+        assert!(!e.has_error, "TSX fixture must parse without ERROR nodes");
+
+        // Exported components are definitions (their `export` visibility in
+        // the signature is B19), and the declarations after the JSX survive.
+        let app = e.symbols.iter().find(|s| s.name == "App").expect("App");
+        assert_eq!(app.kind, SymbolKind::Function);
+        assert_eq!(
+            reference(&e.refs, "App", 19).map(|r| r.kind),
+            Some(ReferenceKind::Definition)
+        );
+        for name in ["Panel", "Unused"] {
+            assert!(
+                e.symbols
+                    .iter()
+                    .any(|s| s.name == name && s.kind == SymbolKind::Function),
+                "{name} missing after the JSX block: {:?}",
+                e.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+            );
+        }
+
+        // A rendered component is a call: `<Button />` → edge App -> Button,
+        // `<Ui.Card>` → App -> Card, `<App />` → Panel -> App.
+        assert_eq!(
+            reference(&e.refs, "Button", 24).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        for edge in [
+            ("App", "Button", 24),
+            ("App", "Card", 25),
+            ("App", "format", 25),
+            ("App", "setCount", 28),
+            ("Panel", "App", 34),
+        ] {
+            let (caller, callee, line) = edge;
+            assert!(
+                e.calls
+                    .iter()
+                    .any(|(c, k, l)| c == caller && k == callee && *l == line),
+                "missing edge {caller} -> {callee} L{line}: {:?}",
+                e.calls
+            );
+        }
+
+        // Attribute values are references, a call inside the markup is a call.
+        assert_eq!(
+            reference(&e.refs, "handle", 24).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+        assert_eq!(
+            reference(&e.refs, "format", 25).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        assert_eq!(
+            reference(&e.refs, "count", 26).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+
+        // Attribute names, intrinsic tags and closing tags are not symbols.
+        for name in [
+            "className",
+            "onClick",
+            "label",
+            "title",
+            "div",
+            "button",
+            "p",
+        ] {
+            assert!(
+                !e.refs.iter().any(|r| r.name == name),
+                "`{name}` must not be a reference: {:?}",
+                e.refs
+            );
+        }
+        assert!(reference(&e.refs, "Card", 27).is_none(), "closing tag");
+        assert!(reference(&e.refs, "Ui", 27).is_none(), "closing tag");
+
+        // The JavaScript grammar parses JSX too (`.jsx`, `.js`): the same
+        // rules apply, plus namespaced names and lowercase member tags.
+        let jsx = extract_file(
+            "src/App.jsx",
+            "export function App() {\n  return (\n    <svg:rect xlink:href=\"#a\" onClick={go}>\n      <Button label=\"x\" />\n      <Ui.Card />\n      <motion.div />\n    </svg:rect>\n  );\n}\n",
+        );
+        assert!(!jsx.has_error);
+        assert_eq!(
+            reference(&jsx.refs, "Button", 4).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        assert_eq!(
+            reference(&jsx.refs, "Card", 5).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        assert_eq!(
+            reference(&jsx.refs, "go", 3).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+        assert!(
+            jsx.calls
+                .iter()
+                .any(|(c, k, l)| c == "App" && k == "Button" && *l == 4),
+            "{:?}",
+            jsx.calls
+        );
+        for name in ["label", "onClick", "svg", "rect", "xlink", "href", "div"] {
+            assert!(
+                !jsx.refs.iter().any(|r| r.name == name),
+                "`{name}` must not be a reference: {:?}",
+                jsx.refs
+            );
+        }
+        assert_eq!(
+            reference(&jsx.refs, "motion", 6).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+    }
+
+    // B16 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).
+    #[test]
+    fn b16_kotlin_imports_extracted() {
+        let source = include_str!("fixtures/kotlin/sample.kt");
+        let e = extract_file("src/Sample.kt", source);
+        assert_eq!(
+            e.imports,
+            vec![(
+                "kotlin.io.println".to_string(),
+                Some("println".to_string()),
+                ImportKind::Std
+            )]
+        );
+        let e = extract_file(
+            "src/X.kt",
+            "package a.b\nimport foo.bar.Baz\nimport kotlin.collections.List as KList\nimport foo.*\n\nclass X {\n    fun f() { Baz() }\n}\n",
+        );
+        assert_eq!(
+            e.imports.len(),
+            3,
+            "one Import per import line: {:?}",
+            e.imports
+        );
+        assert_eq!(
+            e.imports[1].1.as_deref(),
+            Some("KList"),
+            "alias is the name"
+        );
+        assert_eq!(e.imports[2].1, None, "wildcard has no binding name");
+    }
+
+    // B17 (#57): `import X as Y` and `import a, b`.
+    #[test]
+    fn b17_python_aliased_and_multi_imports() {
+        let e = extract_file(
+            "pkg/mod.py",
+            "import numpy as np\nimport os, sys\nfrom . import sibling\n",
+        );
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "numpy".to_string(),
+                    Some("np".to_string()),
+                    ImportKind::External
+                ),
+                ("os".to_string(), Some("os".to_string()), ImportKind::Std),
+                ("sys".to_string(), Some("sys".to_string()), ImportKind::Std),
+                (
+                    ".".to_string(),
+                    Some("sibling".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+    }
+
+    // B18 (#58): barrel files. Re-exports and `require()` are imports; a
+    // re-exported name is not a definition (it is an import when it has a
+    // source, a plain reference for `export { qux }`).
+    #[test]
+    fn b18_ts_barrel_reexports() {
+        let e = extract_file(
+            "src/index.ts",
+            "export { greet, Foo as Bar } from './foo';\nexport * from './bar';\nexport { qux };\nconst { helper } = require('./util');\n",
+        );
+        assert_eq!(
+            e.imports
+                .iter()
+                .map(|(p, _, k)| (p.as_str(), *k))
+                .collect::<Vec<_>>(),
+            vec![
+                ("./foo", ImportKind::Local),
+                ("./bar", ImportKind::Local),
+                ("./util", ImportKind::Local),
+            ]
+        );
+        assert!(
+            !e.symbols.iter().any(|s| s.kind != SymbolKind::Import
+                && matches!(s.name.as_str(), "greet" | "Foo" | "Bar" | "qux")),
+            "re-exported names are not symbol definitions: {:?}",
+            e.symbols
+        );
+        for (name, kind) in [
+            ("greet", ReferenceKind::Import),
+            ("Foo", ReferenceKind::Import),
+            ("Bar", ReferenceKind::Import),
+        ] {
+            assert_eq!(
+                reference(&e.refs, name, 1).map(|r| r.kind),
+                Some(kind),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            reference(&e.refs, "qux", 3).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+        assert!(
+            !e.refs.iter().any(|r| r.kind == ReferenceKind::Definition
+                && matches!(r.name.as_str(), "greet" | "Foo" | "Bar" | "qux")),
+            "{:?}",
+            e.refs
+        );
+    }
+
+    // B19 (#63): `export` is part of the signature of TS/JS declarations, as
+    // `pub` is for Rust, so `dead-code` sees exported symbols as public.
+    #[test]
+    fn b19_ts_export_in_signature() {
+        let e = extract_file(
+            "src/a.ts",
+            "export default function Panel() { return 1; }\nexport function Unused() { return null; }\nexport const unusedConst = () => 1;\nexport class K {}\nexport interface I {}\nfunction local() {}\nconst v = 1;\n",
+        );
+        let sig = |name: &str| {
+            e.symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            sig("Panel"),
+            "export default function Panel() { return 1; }"
+        );
+        assert_eq!(sig("Unused"), "export function Unused() { return null; }");
+        assert_eq!(sig("unusedConst"), "export const unusedConst = () => 1;");
+        assert_eq!(sig("K"), "export class K {}");
+        assert_eq!(sig("I"), "export interface I {}");
+        assert_eq!(sig("local"), "function local() {}");
+        assert_eq!(sig("v"), "const v = 1;");
+
+        // Decorators are children of the `export_statement`, not of the class:
+        // they stay out of the signature (NestJS `@Injectable()`, a multi-line
+        // Angular `@Component({...})` would otherwise push `export` past the
+        // first `(` and the class name past the 200-char truncation).
+        let decorated = extract_file(
+            "src/c.ts",
+            "@Injectable()\nexport class Service {}\n@Component({\n  selector: 'x',\n})\nexport default class Cmp {}\n",
+        );
+        let sig = |name: &str| {
+            decorated
+                .symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(sig("Service"), "export class Service {}");
+        assert_eq!(sig("Cmp"), "export default class Cmp {}");
+
+        let js = extract_file(
+            "src/b.js",
+            "export function f() {}\nexport default class C {}\n",
+        );
+        let sig = |name: &str| {
+            js.symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(sig("f"), "export function f() {}");
+        assert_eq!(sig("C"), "export default class C {}");
+    }
+
+    // B20 (#66): comments inside a Rust `use` group are not path segments.
+    #[test]
+    fn b20_rust_use_group_comments() {
+        let e = extract_file(
+            "src/lib.rs",
+            "use foo::{ // keep\n    Bar, /* c */ Baz,\n};\n",
+        );
+        assert_eq!(
+            e.imports
+                .iter()
+                .map(|(p, _, _)| p.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo::Bar", "foo::Baz"]
+        );
+    }
+
+    // B21 (#66): Scala selector imports and PHP group imports yield one
+    // import per leaf, like the Rust brace expansion.
+    #[test]
+    fn b21_scala_php_brace_imports() {
+        let e = extract_file("src/A.scala", "import a.b.{C, D => E}\n");
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "a.b.C".to_string(),
+                    Some("C".to_string()),
+                    ImportKind::External
+                ),
+                (
+                    "a.b.D".to_string(),
+                    Some("E".to_string()),
+                    ImportKind::External
+                ),
+            ]
+        );
+        let e = extract_file("src/a.php", "<?php\nuse Foo\\{A, B as C};\n");
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "Foo\\A".to_string(),
+                    Some("A".to_string()),
+                    ImportKind::External
+                ),
+                (
+                    "Foo\\B".to_string(),
+                    Some("C".to_string()),
+                    ImportKind::External
+                ),
+            ]
+        );
+    }
+
+    // B22 (#66): call edges on a file with many symbols and calls attach each
+    // call to its own function (the line-sorted sweep replaces the calls x
+    // symbols scan; `test_call_edges_sweep_matches_naive_scan` in
+    // `structure.rs` is the guard of its exactness).
+    #[test]
+    fn b22_call_edges_on_a_large_file() {
+        let mut source = String::new();
+        for i in 0..4000 {
+            source.push_str(&format!(
+                "fn f{i}() {{\n    aa();\n    bb();\n    cc();\n}}\n"
+            ));
+        }
+        let e = extract_file("src/big.rs", &source);
+        assert_eq!(e.calls.len(), 12_000);
+        assert!(
+            e.calls
+                .iter()
+                .enumerate()
+                .all(|(i, (caller, _, _))| *caller == format!("f{}", i / 3)),
+            "each call attached to its own function"
         );
     }
 }

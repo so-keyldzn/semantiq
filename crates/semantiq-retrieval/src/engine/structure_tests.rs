@@ -5,7 +5,7 @@ use semantiq_parser::{
     Language, LanguageSupport, ReferenceExtractor, StructureExtractor, SymbolExtractor,
 };
 
-/// Index Rust `files` (path, source) under a temp root, with structure.
+/// Index `files` (path, source) under a temp root, with structure.
 fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
     let root = tempfile::Builder::new()
         .prefix("semantiq-structure")
@@ -21,7 +21,9 @@ fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir)
         let file_id = store
             .insert_file(path, Some(language.name()), source, 0)
             .unwrap();
-        let tree = support.parse(language, source).unwrap();
+        let tree = support
+            .parse_path(language, std::path::Path::new(path), source)
+            .unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, language).unwrap();
         store.insert_symbols(file_id, &symbols).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, language);
@@ -361,4 +363,64 @@ fn test_dead_code_filters() {
         })
         .unwrap();
     assert!(none.symbols.is_empty());
+}
+
+/// TS/JS `export` is public (#63): exported but unreferenced declarations are
+/// excluded like Rust `pub`, and reported with low confidence under
+/// `include_public`. Private declarations keep the high confidence.
+#[test]
+fn test_dead_code_typescript_exports_are_public() {
+    let tsx = "export default function Panel() { return <Unused />; }\nexport function Unused() { return null; }\nexport const unusedConst = () => 1;\nfunction localDead() { return 1; }\n";
+    let barrel = "export { Panel } from './components/Panel';\n";
+    // NestJS / Angular: the decorator precedes `export` but is not part of
+    // the class signature, so the class stays public.
+    let service = "@Injectable()\nexport class UnusedService {\n  run() { return 1; }\n}\n";
+    let (engine, _root) = index_project(&[
+        ("src/components/Panel.tsx", tsx),
+        ("src/index.ts", barrel),
+        ("src/service.ts", service),
+    ]);
+    let report = engine
+        .find_dead_code(&DeadCodeOptions {
+            limit: 100,
+            ..Default::default()
+        })
+        .unwrap();
+    let dead: Vec<_> = report
+        .symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.confidence))
+        .collect();
+    assert_eq!(
+        dead,
+        vec![("localDead", DeadCodeConfidence::High)],
+        "{report:?}"
+    );
+    // `Panel` is re-exported by the barrel (a use), `Unused` is rendered by
+    // Panel; `unusedConst` and the decorated `UnusedService` are dead but
+    // public (`run` is a public method of a class nobody uses).
+    assert_eq!(report.excluded.public, 3, "{report:?}");
+
+    let with_public = engine
+        .find_dead_code(&DeadCodeOptions {
+            include_public: true,
+            limit: 100,
+            ..Default::default()
+        })
+        .unwrap();
+    let dead: Vec<_> = with_public
+        .symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.confidence))
+        .collect();
+    assert_eq!(
+        dead,
+        vec![
+            ("localDead", DeadCodeConfidence::High),
+            ("unusedConst", DeadCodeConfidence::Low),
+            ("UnusedService", DeadCodeConfidence::Low),
+            ("run", DeadCodeConfidence::Low),
+        ],
+        "{with_public:?}"
+    );
 }

@@ -4,8 +4,8 @@ use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::{Result, bail};
 use ignore::WalkBuilder;
 use semantiq_parser::{
-    ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
-    StructureExtractor, SymbolExtractor, resolve_local_import,
+    ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
+    ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_local_import,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +23,8 @@ pub struct AutoIndexer {
     project_root: PathBuf,
     language_support: Mutex<LanguageSupport>,
     chunk_extractor: ChunkExtractor,
+    /// Project facts for import classification (`go.mod` module path).
+    import_context: ImportContext,
 }
 
 impl AutoIndexer {
@@ -49,9 +51,10 @@ impl AutoIndexer {
         Ok(Self {
             store,
             watcher: watcher.map(Mutex::new),
-            project_root,
             language_support: Mutex::new(LanguageSupport::new()?),
             chunk_extractor: ChunkExtractor::new(),
+            import_context: ImportContext::from_project_root(&project_root),
+            project_root,
         })
     }
 
@@ -384,7 +387,7 @@ impl AutoIndexer {
             .language_support
             .lock()
             .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
-        match language_support.parse(language, &content) {
+        match language_support.parse_path(language, path, &content) {
             Ok(tree) => {
                 // Extract symbols
                 let symbols = SymbolExtractor::extract(&tree, &content, language)?;
@@ -406,7 +409,12 @@ impl AutoIndexer {
                 self.store.insert_chunks(file_id, &chunks)?;
 
                 // Extract imports and store as dependencies
-                let imports = ImportExtractor::extract(&tree, &content, language)?;
+                let imports = ImportExtractor::extract_with_context(
+                    &tree,
+                    &content,
+                    language,
+                    &self.import_context,
+                )?;
                 self.store.delete_dependencies(file_id)?;
                 for import in &imports {
                     let resolved = if import.kind == ImportKind::Local {

@@ -326,9 +326,16 @@ fn classify(node: Node, text: &str, source: &[u8], language: Language) -> Option
     {
         return kind;
     }
+    // JSX : noms d'attributs, balises intrinsèques et fermantes ne sont pas
+    // des symboles.
+    if is_jsx_noise(node, text) {
+        return None;
+    }
     // Import d'abord : `import { Foo }` a un champ `name` dans un `*_specifier`.
     Some(if in_import(node) {
         ReferenceKind::Import
+    } else if is_jsx_tag_name(node) {
+        ReferenceKind::Call
     } else if is_definition_name(node) {
         ReferenceKind::Definition
     } else if is_callee(node) {
@@ -422,15 +429,72 @@ fn is_field(parent: Node, child: Node, field: &str) -> bool {
     parent.child_by_field_name(field) == Some(child)
 }
 
+/// L'élément JSX (grammaire TSX) dont `node` est la balise : `<Button>`,
+/// `<Ui.Card>` (dernier segment d'un `member_expression`).
+fn jsx_element_of(node: Node) -> Option<Node> {
+    let mut current = node;
+    let mut parent = node.parent();
+    while let Some(p) = parent
+        && p.kind() == "member_expression"
+    {
+        if !is_field(p, current, "property") {
+            return None;
+        }
+        current = p;
+        parent = p.parent();
+    }
+    parent.filter(|p| {
+        matches!(
+            p.kind(),
+            "jsx_opening_element" | "jsx_closing_element" | "jsx_self_closing_element"
+        ) && is_field(*p, current, "name")
+    })
+}
+
+/// JSX (grammaires TSX et JavaScript) : le nom d'un attribut (`onClick=`,
+/// `className=`), un nom à espace de noms (`<svg:rect>`, `xlink:href=`), une
+/// balise intrinsèque (`<div>`, `<motion.div>` : dernier segment en
+/// minuscules) et une balise fermante (`</Button>`, même usage que
+/// l'ouvrante) ne désignent aucun symbole du projet.
+fn is_jsx_noise(node: Node, text: &str) -> bool {
+    if node.parent().is_some_and(|p| {
+        p.kind() == "jsx_namespace_name"
+            || (p.kind() == "jsx_attribute" && p.named_child(0) == Some(node))
+    }) {
+        return true;
+    }
+    // Balise fermante : tout son nom, `Ui` compris dans `</Ui.Card>`.
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor
+        && a.kind() == "member_expression"
+    {
+        ancestor = a.parent();
+    }
+    if ancestor.is_some_and(|a| a.kind() == "jsx_closing_element") {
+        return true;
+    }
+    jsx_element_of(node).is_some() && text.starts_with(|c: char| c.is_lowercase())
+}
+
+/// Balise d'un composant JSX (`<Button />`, `<Ui.Card>`) : rendre le
+/// composant l'appelle (arête `App -> Button`).
+fn is_jsx_tag_name(node: Node) -> bool {
+    jsx_element_of(node).is_some_and(|element| element.kind() != "jsx_closing_element")
+}
+
 /// Le nœud est-il le nom déclaré par une définition (`fn foo`, `class Foo`…) ?
 ///
 /// Le champ `name` existe aussi hors définitions (`Foo::new`, `obj.meth()` en
-/// Java), d'où le filtre sur le type du parent.
+/// Java), d'où le filtre sur le type du parent. Un `export_specifier`
+/// (`export { foo }`) réexporte un nom sans le définir.
 fn is_definition_name(node: Node) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
     let kind = parent.kind();
+    if kind == "export_specifier" {
+        return false;
+    }
 
     // C/C++ : `int foo(...)` → function_declarator(declarator: identifier)
     if kind == "function_declarator" {
@@ -466,6 +530,8 @@ fn in_import(node: Node) -> bool {
                     | "namespace_use_declaration"
                     | "preproc_include"
             )
+            // `export { a } from './a'` : réexport d'un nom importé.
+            || (kind == "export_statement" && n.child_by_field_name("source").is_some())
         {
             return true;
         }

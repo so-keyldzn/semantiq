@@ -177,6 +177,31 @@ All notable changes to Semantiq will be documented in this file.
   and `stats` / `calibrate`) ends quietly with exit code 0 when the reader
   closes the pipe early, instead of panicking with `Broken pipe` and exit
   code 101 (#49).
+- `.tsx` files are parsed with the TSX grammar (#54): JSX no longer yields
+  `ERROR` nodes. In JSX, whether TSX or JavaScript (`.jsx`, `.js`), a rendered
+  component (`<Button />`, `<Ui.Card>`) is a call of the component (an edge in
+  `calls`, a use for `dead-code`), attribute values are references, attribute
+  names, intrinsic tags and closing tags are not.
+- Kotlin imports are extracted (#56): the extractor matched the old
+  `import_header` node, so `deps` and the repo map had nothing for Kotlin
+  files. Aliases (`import a.B as C`) and wildcards are handled.
+- Python `import numpy as np` and `import os, sys` yield one import per module,
+  with the alias as its name; `from . import a, b` yields one import per name
+  with path `.` (#57).
+- TS/JS barrel files (#58): `export * from './x'`, `export { a } from './x'`
+  and `require('./x')` are imports (`deps`, repo map edges), and a re-exported
+  name is an import (or a plain reference for `export { a }`), no longer a
+  definition site in `refs`, `explain`, `impact` and `dead-code`.
+- TS/JS `export` / `export default` is part of the signature of exported
+  declarations, as `pub` is for Rust, so `dead-code` treats them as public:
+  excluded unless `--include-public`, then reported with low confidence (#63).
+- Parser defects (#66): comments inside a Rust `use` group are dropped from
+  the import path; Go imports under the `go.mod` module path are `local`;
+  Scala `import a.b.{C, D => E}` and PHP `use Foo\{A, B as C}` yield one import
+  per leaf; call edges are attached by a line-sorted sweep instead of a scan
+  of every symbol per call (1.2 s → linear on a 32k-line file).
+- `PARSER_VERSION` 16 (once for the parser fixes above): existing indexes are
+  rebuilt.
 
 ## [0.11.0] - 2026-10-07
 

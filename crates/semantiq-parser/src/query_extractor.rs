@@ -1,4 +1,4 @@
-use crate::language::Language;
+use crate::language::{Grammar, Language};
 use crate::symbols::{Symbol, SymbolKind};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -10,8 +10,10 @@ use tree_sitter::{Node, Query, QueryCursor, Tree};
 /// Cette approche remplace la traversée AST récursive par des pattern matching
 /// déclaratifs, ce qui est plus maintenable et extensible.
 pub struct QuerySymbolExtractor {
-    /// Queries compilées par langage. Une query est immutable et thread-safe.
-    queries: HashMap<Language, Query>,
+    /// Queries compilées par grammaire (une query est liée à la grammaire qui
+    /// l'a compilée : la query TypeScript est compilée une seconde fois pour
+    /// TSX). Une query est immutable et thread-safe.
+    queries: HashMap<Grammar, Query>,
 }
 
 impl QuerySymbolExtractor {
@@ -27,15 +29,16 @@ impl QuerySymbolExtractor {
 
         // Macro locale pour compiler une query et accumuler les erreurs.
         macro_rules! load {
-            ($lang:expr, $path:literal, $grammar:expr) => {{
+            ($lang:expr, $path:literal, $grammar:expr) => {{ load!(Grammar::Language($lang), $lang.name(), $path, $grammar) }};
+            ($key:expr, $label:expr, $path:literal, $grammar:expr) => {{
                 let src = include_str!($path);
                 let ts_lang: tree_sitter::Language = $grammar.into();
                 match Query::new(&ts_lang, src) {
                     Ok(q) => {
-                        queries.insert($lang, q);
+                        queries.insert($key, q);
                     }
                     Err(e) => {
-                        errors.push(format!("  - {} ({}): {:?}", $lang.name(), $path, e));
+                        errors.push(format!("  - {} ({}): {:?}", $label, $path, e));
                     }
                 }
             }};
@@ -50,6 +53,12 @@ impl QuerySymbolExtractor {
             Language::TypeScript,
             "../queries/typescript/tags.scm",
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT
+        );
+        load!(
+            Grammar::Tsx,
+            "tsx",
+            "../queries/typescript/tags.scm",
+            tree_sitter_typescript::LANGUAGE_TSX
         );
         load!(
             Language::JavaScript,
@@ -150,7 +159,7 @@ impl QuerySymbolExtractor {
 
     /// Retourne true si une query est disponible pour ce langage.
     pub fn has_query(&self, language: Language) -> bool {
-        self.queries.contains_key(&language)
+        self.queries.contains_key(&Grammar::Language(language))
     }
 
     /// Extrait les symboles d'un arbre syntaxique en utilisant la query du langage.
@@ -160,9 +169,16 @@ impl QuerySymbolExtractor {
     /// 2. Pour chaque match, extrait le nom et le kind depuis les captures
     /// 3. Post-traitement : résolution des parents, signatures, doc comments
     pub fn extract(&self, tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
+        // La query doit venir de la grammaire qui a produit l'arbre (TSX ou
+        // TypeScript pour un fichier TypeScript).
+        let grammar = if Grammar::Tsx.parsed(tree) {
+            Grammar::Tsx
+        } else {
+            Grammar::Language(language)
+        };
         let query = self
             .queries
-            .get(&language)
+            .get(&grammar)
             .context("No query available for language")?;
 
         let mut cursor = QueryCursor::new();
@@ -554,17 +570,49 @@ impl QuerySymbolExtractor {
     }
 
     /// Extrait la signature (première ligne du nœud).
+    ///
+    /// TS/JS : une déclaration exportée est l'enfant `declaration` d'un
+    /// `export_statement`, le mot-clé `export` (ou `export default`) est donc
+    /// hors du nœud ; on le remet en tête, comme `pub` fait partie d'un
+    /// `function_item` Rust, pour que la visibilité se lise dans la signature
+    /// (`dead-code` exclut les symboles publics).
     fn extract_signature(node: &Node, source: &str) -> Option<String> {
         let source_bytes = source.as_bytes();
         let text = node.utf8_text(source_bytes).ok()?;
         let first_line = text.lines().next()?;
+        let first_line = match Self::export_prefix(node, source) {
+            Some(prefix) => format!("{prefix} {}", first_line.trim_start()),
+            None => first_line.to_string(),
+        };
         let sig = if first_line.chars().count() > 200 {
             let truncated: String = first_line.chars().take(200).collect();
             format!("{}...", truncated)
         } else {
-            first_line.to_string()
+            first_line
         };
         Some(sig.trim().to_string())
+    }
+
+    /// `export` / `export default` quand `node` est la déclaration d'un
+    /// `export_statement` (TS/JS) : les mots-clés anonymes du parent, sans ses
+    /// décorateurs (`@Injectable()\nexport class Service {}` : le décorateur
+    /// est un enfant `decorator` de l'`export_statement`, pas de la classe).
+    fn export_prefix(node: &Node, source: &str) -> Option<String> {
+        let parent = node.parent()?;
+        if parent.kind() != "export_statement"
+            || parent.child_by_field_name("declaration") != Some(*node)
+        {
+            return None;
+        }
+        let mut cursor = parent.walk();
+        let prefix = parent
+            .children(&mut cursor)
+            .take_while(|child| child.start_byte() < node.start_byte())
+            .filter(|child| !child.is_named() && matches!(child.kind(), "export" | "default"))
+            .filter_map(|child| child.utf8_text(source.as_bytes()).ok())
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!prefix.is_empty()).then_some(prefix)
     }
 
     /// Extrait les doc comments précédant le nœud (voir [`doc_comment_of`]).
