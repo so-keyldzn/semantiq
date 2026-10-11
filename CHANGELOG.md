@@ -143,11 +143,18 @@ All notable changes to Semantiq will be documented in this file.
   no longer scores 0 under every grep line, and a lone weak hit is no longer
   inflated to full strength above the best semantic chunk. Symbol boosts are
   rescaled into `[0, 1]` instead of clamped, so an exact function match
-  outranks a boosted prefix match instead of tying with it (#34).
-- Calibrated semantic thresholds (`semantiq calibrate`, auto-calibration) no
-  longer drop ~90 % of the candidates: `min_similarity` is derived from the
-  same 90th-percentile distance as `max_distance` instead of the 10th
-  percentile, so the two gates cut at the same point (#33).
+  outranks a boosted prefix match instead of tying with it. The symbol
+  scale moves down: an exact function match scores ~0.87-0.93 for typical
+  names (1.0 only for a one-character function), an exact variable ~0.70,
+  a substring match on a variable ~0.49, so `--min-score 0.5` now drops
+  substring hits on variables it kept before; a line that is exactly the
+  query (text, 0.68) now outranks realistic semantic hits (<= 0.63) (#34).
+- Calibrated semantic thresholds (`semantiq calibrate`, auto-calibration)
+  keep ~90 % of the observed candidates instead of ~10 %: `min_similarity`
+  is derived from the same 90th-percentile distance as `max_distance`
+  instead of the 10th percentile, so the two gates cut at the same point
+  (the calibrated `max_distance` can still be stricter than the default
+  1.2) (#33).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

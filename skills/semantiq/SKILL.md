@@ -69,10 +69,12 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
 - **search**: one hit per entry, `path:start-end kind name (score)` then its
   most relevant line (the declaration, or the line with most query words),
   cut to 120 characters; read the file at those lines, or add `--snippets`
-  for the code. Hits come from three strategies merged together: symbol names
-  (score up to 1.0), semantic similarity (up to 0.95) and plain text (up to
-  0.75). Scores are relative to the query: compare hits within one result
-  list, not across queries. A hit with `symbol_name` points at a definition.
+  for the code. Hits come from three strategies merged together, each on its
+  own scale: symbol names (an exact function match scores ~0.87-0.93, an
+  exact variable ~0.70, a substring match on a variable ~0.49), semantic
+  similarity (realistic hits <= 0.63) and plain text (a line that is exactly
+  the query 0.68, a word match ~0.52). Compare hits within one result list,
+  not across queries. A hit with `symbol_name` points at a definition.
   `(more exist: raise limit)` / `truncated: true` means the list was cut.
   Few or weak hits? Rephrase as what the code *does*, or fall back to grep.
 - **refs**: `definitions` (with the symbol kind and declaration line) vs

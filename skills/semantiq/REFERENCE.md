@@ -27,9 +27,16 @@ project root and use `/` on every platform (Windows included); a path argument
 }
 ```
 
-- `score`: symbol matches up to 1.0, semantic up to 0.95, text up to 0.75,
-  normalized within each strategy (relative to this query only), rounded to
-  2 decimals.
+- `score`: each strategy's own score times its weight (symbol 1.0, semantic
+  0.95, text 0.75), rounded to 2 decimals. Symbol: match tier (exact 1.0,
+  prefix 0.85, substring 0.7) times the kind and name-length boosts, divided
+  by the largest boost, so an exact function match scores ~0.87-0.93 for
+  typical names (1.0 only for a one-character function), an exact variable
+  ~0.70, a substring match on a variable ~0.49. Semantic: `0.95 / (1 +
+  distance)`, realistic hits <= 0.63. Text: 0.68 for a line that is exactly
+  the query, ~0.52 for a word match, ~0.37 for a substring match. The
+  default `--min-score` 0.3 keeps them all; 0.5 drops substring hits on
+  variables and most text hits.
 - `preview`: the most relevant line of the hit (the line declaring
   `symbol_name`, else the line holding most query words), trimmed and cut to
   120 characters.
