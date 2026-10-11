@@ -5,6 +5,11 @@ use tree_sitter::Tree;
 
 const DEFAULT_CHUNK_SIZE: usize = 1500;
 const OVERLAP_LINES: usize = 3;
+/// A span between symbol boundaries larger than this many times `chunk_size`
+/// (one huge function, a big `match` dispatcher) is split into windows of
+/// about `chunk_size` bytes, so no part of it stays beyond the embedding
+/// model's token limit.
+const SPLIT_FACTOR: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
@@ -47,7 +52,7 @@ impl ChunkExtractor {
 
         // Create chunks at semantic boundaries
         let mut current_start = 0;
-        let mut current_symbols = Vec::new();
+        let mut current_symbols: Vec<SemanticBoundary> = Vec::new();
 
         for boundary in boundaries {
             let boundary_line = boundary.start_line;
@@ -60,31 +65,95 @@ impl ChunkExtractor {
                     .sum();
 
                 if content_size >= self.chunk_size && !current_symbols.is_empty() {
-                    // Create a chunk
-                    let chunk = Self::create_chunk(
+                    self.push_span(
                         source,
                         &lines,
                         current_start,
                         boundary_line,
                         &current_symbols,
+                        &mut chunks,
                     );
-                    chunks.push(chunk);
                     current_start = boundary_line.saturating_sub(OVERLAP_LINES);
                     current_symbols.clear();
                 }
             }
 
-            current_symbols.push(boundary.name.clone());
+            current_symbols.push(boundary);
         }
 
         // Handle remaining content
         if current_start < lines.len() {
-            let chunk =
-                Self::create_chunk(source, &lines, current_start, lines.len(), &current_symbols);
-            chunks.push(chunk);
+            self.push_span(
+                source,
+                &lines,
+                current_start,
+                lines.len(),
+                &current_symbols,
+                &mut chunks,
+            );
         }
 
         Ok(chunks)
+    }
+
+    /// Emit the span `start_line..end_line` (0-based, exclusive) as one chunk,
+    /// or as overlapping windows of about `chunk_size` bytes when it is larger
+    /// than `SPLIT_FACTOR * chunk_size`. Each window lists the symbols whose
+    /// definition overlaps it (the enclosing function of a window deep inside
+    /// a long body), falling back to every symbol of the span.
+    fn push_span(
+        &self,
+        source: &str,
+        lines: &[&str],
+        start_line: usize,
+        end_line: usize,
+        symbols: &[SemanticBoundary],
+        chunks: &mut Vec<CodeChunk>,
+    ) {
+        let end_line = end_line.min(lines.len());
+        let names: Vec<String> = symbols.iter().map(|b| b.name.clone()).collect();
+        let size: usize = lines[start_line..end_line]
+            .iter()
+            .map(|l| l.len() + 1)
+            .sum();
+        if size <= SPLIT_FACTOR * self.chunk_size {
+            chunks.push(Self::create_chunk(
+                source, lines, start_line, end_line, &names,
+            ));
+            return;
+        }
+
+        let mut window_start = start_line;
+        while window_start < end_line {
+            let mut window_end = window_start;
+            let mut window_size = 0;
+            while window_end < end_line && window_size < self.chunk_size {
+                window_size += lines[window_end].len() + 1;
+                window_end += 1;
+            }
+            let mut window_symbols: Vec<String> = symbols
+                .iter()
+                .filter(|b| b.start_line < window_end && window_start <= b.end_line)
+                .map(|b| b.name.clone())
+                .collect();
+            if window_symbols.is_empty() {
+                window_symbols = names.clone();
+            }
+            chunks.push(Self::create_chunk(
+                source,
+                lines,
+                window_start,
+                window_end,
+                &window_symbols,
+            ));
+            if window_end >= end_line {
+                break;
+            }
+            // Overlap, but always advance.
+            window_start = window_end
+                .saturating_sub(OVERLAP_LINES)
+                .max(window_start + 1);
+        }
     }
 
     fn find_semantic_boundaries(
@@ -274,8 +343,8 @@ impl Default for ChunkExtractor {
     }
 }
 
+/// A symbol definition, lines 0-based inclusive.
 #[derive(Debug)]
-#[allow(dead_code)]
 struct SemanticBoundary {
     name: String,
     start_line: usize,
@@ -439,6 +508,83 @@ class Calculator:
         assert!(!chunks.is_empty());
         // The chunk content should be a substring of the source
         assert!(source.contains(&chunks[0].content) || chunks[0].content.contains("fn main"));
+    }
+
+    /// #62: a function larger than `chunk_size` is split into overlapping
+    /// windows that keep the symbol metadata, instead of one oversized chunk
+    /// whose embedding would only cover its first 512 tokens.
+    #[test]
+    fn test_oversized_function_is_split_into_windows() {
+        let mut support = LanguageSupport::new().unwrap();
+        let mut source = String::from("fn small() {}\n\nfn huge() {\n");
+        for i in 0..400 {
+            source.push_str(&format!("    let value_{i} = compute({i});\n"));
+        }
+        source.push_str("}\n\nfn after() {}\n");
+        let tree = support.parse(Language::Rust, &source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, &source, Language::Rust).unwrap();
+
+        let limit = SPLIT_FACTOR * extractor.chunk_size;
+        assert!(chunks.len() > 5, "{} chunks", chunks.len());
+        for chunk in &chunks {
+            assert!(
+                chunk.content.len() <= limit,
+                "chunk L{}-{} has {} bytes",
+                chunk.start_line,
+                chunk.end_line,
+                chunk.content.len()
+            );
+        }
+        // Every window inside the body keeps `huge`; `small` only appears in
+        // the first one, `after` only in the last one (whose overlap lines
+        // carry the next span's symbols, as before).
+        let body_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.content.contains("let value_") && !c.content.contains("fn after"))
+            .collect();
+        assert!(body_chunks.len() > 3);
+        assert!(
+            body_chunks
+                .iter()
+                .all(|c| c.symbols.contains(&"huge".to_string()))
+        );
+        assert!(chunks[0].symbols.contains(&"small".to_string()));
+        assert!(!chunks[2].symbols.contains(&"small".to_string()));
+        assert!(
+            chunks
+                .last()
+                .unwrap()
+                .symbols
+                .contains(&"after".to_string())
+        );
+        // Windows are contiguous or overlapping and cover the whole file.
+        assert_eq!(chunks[0].start_line, 1);
+        for pair in chunks.windows(2) {
+            assert!(pair[1].start_line > pair[0].start_line);
+            assert!(pair[1].start_line <= pair[0].end_line + 1);
+        }
+        assert_eq!(chunks.last().unwrap().end_line, source.lines().count());
+        // Chunk keys stay unique for dedup.
+        let mut keys: Vec<_> = chunks.iter().map(|c| (c.start_line, c.end_line)).collect();
+        keys.dedup();
+        assert_eq!(keys.len(), chunks.len());
+    }
+
+    #[test]
+    fn test_span_below_split_threshold_stays_whole() {
+        let mut support = LanguageSupport::new().unwrap();
+        let mut source = String::from("fn first() {\n");
+        for i in 0..20 {
+            source.push_str(&format!("    let v{i} = {i};\n"));
+        }
+        source.push_str("}\nfn second() {}\n");
+        let tree = support.parse(Language::Rust, &source).unwrap();
+        // Larger than chunk_size but below SPLIT_FACTOR * chunk_size: one chunk.
+        let extractor = ChunkExtractor::new().with_chunk_size(source.len() * 2 / 3);
+        let chunks = extractor.extract(&tree, &source, Language::Rust).unwrap();
+        assert_eq!(chunks.len(), 2, "{chunks:#?}");
+        assert_eq!(chunks[0].symbols, vec!["first".to_string()]);
     }
 
     #[test]

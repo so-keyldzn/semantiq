@@ -25,6 +25,12 @@ All notable changes to Semantiq will be documented in this file.
   behind attributes (`/// Doc` above `#[derive(...)]`); `explain` shows the
   JSDoc of exported APIs again. Rust doc lines no longer carry their trailing
   newline (#61).
+- A function larger than twice the chunk size (generated code, big `match`
+  dispatchers, long tests) is split into overlapping windows of about one chunk
+  size, each listing the symbols it overlaps, instead of one chunk whose
+  embedding only covered its first 512 tokens: semantic search can now hit the
+  whole body, and a hit returns a window rather than a 3000-line chunk. The
+  embedding carry-over on edit is per window (#62).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

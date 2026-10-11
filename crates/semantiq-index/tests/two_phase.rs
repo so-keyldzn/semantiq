@@ -262,6 +262,45 @@ fn reindex_keeps_embeddings_of_unchanged_chunks() {
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
+/// #62: a function larger than the chunk size is stored as several windowed
+/// chunks, and editing its tail only re-embeds the windows whose content
+/// changed (the carry-over is keyed by content).
+#[test]
+fn oversized_function_is_stored_as_windows_and_keeps_unchanged_embeddings() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let mut src = String::from("pub fn huge(x: i32) -> i32 {\n    let mut acc = x;\n");
+    for i in 0..400 {
+        src.push_str(&format!("    acc = step_{i}(acc);\n"));
+    }
+    src.push_str("    acc\n}\n");
+    write_file(root, "src/lib.rs", &src);
+    let store = phase1(root);
+    let model = CountingModel::default();
+    let progress = EmbeddingProgress::new();
+    embed_pending(&store, &model, 32, &progress, &no_stop, &mut |_| {}).unwrap();
+    let total = store.embedding_counts().unwrap().total;
+    assert!(total > 4, "{total} chunks for a 400-line function");
+
+    // Edit the last line of the body: only the last window(s) change.
+    fs::write(
+        root.join("src/lib.rs"),
+        src.replace("    acc\n}\n", "    acc + 1\n}\n"),
+    )
+    .unwrap();
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.to_path_buf()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 1);
+    let counts = store.embedding_counts().unwrap();
+    assert_eq!(counts.total, total);
+    assert!(
+        counts.pending() <= 2,
+        "{} of {} windows re-embedded after editing the tail",
+        counts.pending(),
+        total
+    );
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
 #[test]
 fn background_embedder_fills_pending_chunks_when_notified() {
     let tmp = TempDir::new().unwrap();
