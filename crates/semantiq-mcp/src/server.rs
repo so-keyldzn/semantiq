@@ -145,14 +145,39 @@ impl SemantiqServer {
         self.embedder.get()?.progress().in_progress()
     }
 
+    /// Why the background embedder could not load the embedding model (last
+    /// attempt failed; it retries with a backoff), `None` otherwise.
+    pub fn embedding_model_error(&self) -> Option<String> {
+        self.embedder.get()?.progress().model_error()
+    }
+
+    /// Why semantic search is off right now: the stub backend, else a failed
+    /// model load (retried in the background). `None` = available.
+    pub fn semantic_search_unavailable_reason(&self) -> Option<String> {
+        semantiq_embeddings::semantic_search_unavailable_reason()
+            .map(str::to_string)
+            .or_else(|| self.embedding_model_error().map(model_error_reason))
+    }
+
     /// Like `with_indexing_notice`, plus the share of the semantic index that
     /// is ready while phase 2 runs: only `semantiq_search` uses embeddings.
     fn with_search_notice(&self, output: String) -> String {
         if self.is_initial_indexing() {
             return self.with_indexing_notice(output);
         }
+        if semantiq_embeddings::semantic_search_unavailable_reason().is_some() {
+            return output;
+        }
+        if let Some(error) = self.embedding_model_error() {
+            return format!(
+                "⚠️ Semantic index unavailable: {}. Only symbol and text matches are \
+                 returned.\n\n{}",
+                model_error_reason(error),
+                output
+            );
+        }
         match self.embedding_in_progress() {
-            Some(counts) if semantiq_embeddings::semantic_search_unavailable_reason().is_none() => {
+            Some(counts) => {
                 format!(
                     "⏳ Semantic index {}% ready ({}/{} chunks embedded): some meaning-based \
                      matches may be missing; symbol and text matches are complete.\n\n{}",
@@ -162,7 +187,7 @@ impl SemantiqServer {
                     output
                 )
             }
-            _ => output,
+            None => output,
         }
     }
 
@@ -279,6 +304,14 @@ impl SemantiqServer {
             info!("Auto-indexer background task started");
         }
     }
+}
+
+/// Reason shown by the search notice and `GET /stats` when the embedding
+/// model failed to load.
+fn model_error_reason(error: String) -> String {
+    format!(
+        "the embedding model could not be loaded ({error}); loading is retried in the background"
+    )
 }
 
 /// Wrap a tool output as both markdown text (for clients that only read

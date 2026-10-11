@@ -339,6 +339,8 @@ fn background_embedder_fills_pending_chunks_when_notified() {
 fn quick_config() -> EmbedderConfig {
     EmbedderConfig {
         poll_interval: Duration::from_millis(50),
+        initial_retry_delay: Duration::from_millis(200),
+        max_retry_delay: Duration::from_secs(1),
     }
 }
 
@@ -390,7 +392,68 @@ fn background_embedder_polls_for_chunks_pending_without_a_notification() {
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
-/// #37: a poll does not retry the chunks the model keeps failing on; a
+/// #52: a failed model load is reported through the progress and retried
+/// after a backoff; the first successful load clears the error and embeds the
+/// backlog.
+#[test]
+fn background_embedder_retries_a_failed_model_load_with_backoff() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 5);
+    let store = phase1(tmp.path());
+    let total = store.embedding_counts().unwrap().pending();
+    assert!(total > 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            // The first two loads fail (flaky download), the third succeeds.
+            if loader_attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                anyhow::bail!("download failed: connection reset")
+            }
+            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+        }),
+        EmbedderConfig {
+            poll_interval: Duration::from_millis(50),
+            initial_retry_delay: Duration::from_millis(300),
+            max_retry_delay: Duration::from_secs(1),
+        },
+    )
+    .unwrap();
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let error = embedder
+        .progress()
+        .model_error()
+        .expect("load failure exposed");
+    assert!(error.contains("connection reset"), "{error}");
+    assert!(embedder.progress().in_progress().is_none());
+    assert_eq!(store.embedding_counts().unwrap().pending(), total);
+
+    // Within the backoff, a notification does not hammer the loader.
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "retry waits for the backoff"
+    );
+
+    // Once the backoff elapses the polls retry (second failure, then
+    // success) and the pending chunks are embedded.
+    assert!(wait_until(Duration::from_secs(15), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(wait_until(Duration::from_secs(5), || {
+        embedder.progress().model_error().is_none()
+    }));
+}
+
+/// #52: a poll does not retry the chunks the model keeps failing on; a
 /// notification does.
 #[test]
 fn background_embedder_poll_leaves_failing_chunks_to_the_next_notification() {

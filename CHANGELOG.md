@@ -61,6 +61,14 @@ All notable changes to Semantiq will be documented in this file.
   (`semantiq refs x` after editing files) or `semantiq index --no-embeddings`
   no longer leaves chunks without an embedding until an unrelated file changes
   (#37).
+- A failed embedding model load (download, disk, digest) is retried with a
+  backoff (30 s, doubling, up to 15 min) instead of once per server lifetime;
+  until it succeeds `semantiq_search` starts with `⚠️ Semantic index
+  unavailable: the embedding model could not be loaded (...)` and `GET /stats`
+  reports `"semantic_search": false` with the reason. The progress counters
+  read by the notice and `GET /stats` are stored as one atomic so `pending`
+  can no longer underflow between two passes (#52). `ModelLoader` is now a
+  `Fn`, called again on retry.
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

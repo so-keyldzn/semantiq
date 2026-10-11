@@ -39,15 +39,15 @@ pub struct EmbeddingCounts {
 impl EmbeddingCounts {
     /// Chunks still waiting for an embedding.
     pub fn pending(&self) -> usize {
-        self.total - self.embedded
+        self.total.saturating_sub(self.embedded)
     }
 
     /// Share of chunks with an embedding, rounded down (100 when there is
-    /// nothing to embed).
+    /// nothing to embed), never above 100.
     pub fn percent(&self) -> u8 {
         (self.embedded * 100)
             .checked_div(self.total)
-            .map_or(100, |percent| percent as u8)
+            .map_or(100, |percent| percent.min(100) as u8)
     }
 }
 

@@ -132,6 +132,7 @@ impl SemantiqServer {
     }
 }
 
+mod background;
 mod deps;
 mod edge_cases;
 mod explain;

@@ -16,7 +16,7 @@ use crate::IndexStore;
 use crate::store::{EmbeddingCounts, PendingChunk};
 use anyhow::Result;
 use semantiq_embeddings::EmbeddingModel;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,11 +29,29 @@ pub const DEFAULT_BATCH_SIZE: usize = 32;
 const WINDOW_SIZE: usize = 8 * DEFAULT_BATCH_SIZE;
 
 /// Live progress of phase 2, shared with the readers that report it.
+///
+/// `embedded` and `total` are packed into one atomic so a reader never sees
+/// a `total` from one pass next to an `embedded` from another (which made
+/// `pending()` underflow).
 #[derive(Debug, Default)]
 pub struct EmbeddingProgress {
-    embedded: AtomicUsize,
-    total: AtomicUsize,
+    /// `total << 32 | embedded`.
+    counts: AtomicU64,
     running: AtomicBool,
+    /// Why the embedding model could not be loaded, until a load succeeds.
+    model_error: Mutex<Option<String>>,
+}
+
+fn pack_counts(counts: EmbeddingCounts) -> u64 {
+    let clamp = |n: usize| u64::from(u32::try_from(n).unwrap_or(u32::MAX));
+    (clamp(counts.total) << 32) | clamp(counts.embedded)
+}
+
+fn unpack_counts(packed: u64) -> EmbeddingCounts {
+    EmbeddingCounts {
+        embedded: (packed & u64::from(u32::MAX)) as usize,
+        total: (packed >> 32) as usize,
+    }
 }
 
 impl EmbeddingProgress {
@@ -43,10 +61,7 @@ impl EmbeddingProgress {
 
     /// Chunks with an embedding / all chunks, as of the last update.
     pub fn counts(&self) -> EmbeddingCounts {
-        EmbeddingCounts {
-            embedded: self.embedded.load(Ordering::Relaxed),
-            total: self.total.load(Ordering::Relaxed),
-        }
+        unpack_counts(self.counts.load(Ordering::Relaxed))
     }
 
     /// Whether a phase 2 pass is under way.
@@ -60,16 +75,34 @@ impl EmbeddingProgress {
         (self.is_running() && counts.pending() > 0).then_some(counts)
     }
 
+    /// Why the embedding model is unavailable (last load attempt failed),
+    /// `None` once it is loaded or before the first attempt.
+    pub fn model_error(&self) -> Option<String> {
+        self.model_error.lock().ok().and_then(|e| e.clone())
+    }
+
+    fn set_model_error(&self, error: Option<String>) {
+        if let Ok(mut slot) = self.model_error.lock() {
+            *slot = error;
+        }
+    }
+
     fn start(&self, counts: EmbeddingCounts) {
-        self.embedded.store(counts.embedded, Ordering::Relaxed);
-        self.total.store(counts.total, Ordering::Relaxed);
+        self.counts.store(pack_counts(counts), Ordering::Relaxed);
         self.running.store(true, Ordering::Relaxed);
     }
 
+    /// Only the embedding thread writes the counts, so a load + store is
+    /// race-free; readers see either the old or the new pair.
     fn add(&self, embedded: usize) {
-        let total = self.total.load(Ordering::Relaxed);
-        let done = (self.embedded.load(Ordering::Relaxed) + embedded).min(total);
-        self.embedded.store(done, Ordering::Relaxed);
+        let counts = self.counts();
+        self.counts.store(
+            pack_counts(EmbeddingCounts {
+                embedded: counts.embedded.saturating_add(embedded).min(counts.total),
+                total: counts.total,
+            }),
+            Ordering::Relaxed,
+        );
     }
 
     fn finish(&self) {
@@ -177,28 +210,36 @@ fn embed_batch(model: &dyn EmbeddingModel, batch: &[PendingChunk]) -> Vec<Option
 }
 
 /// Loads the embedding model on the background thread, at its first pass.
-pub type ModelLoader = Box<dyn FnOnce() -> Result<Box<dyn EmbeddingModel>> + Send>;
+/// Called again, after a backoff, when a load fails (download, disk, digest).
+pub type ModelLoader = Box<dyn Fn() -> Result<Box<dyn EmbeddingModel>> + Send>;
 
 /// Timing of the background thread.
 #[derive(Debug, Clone, Copy)]
 pub struct EmbedderConfig {
     /// Without a notification, how often the thread checks the database for
     /// chunks left pending by another process (`semantiq index
-    /// --no-embeddings`, a query command's refresh).
+    /// --no-embeddings`, a query command's refresh) and retries a failed
+    /// model load once its backoff has elapsed.
     pub poll_interval: Duration,
+    /// Wait before the first retry of a failed model load; doubles on each
+    /// failure up to `max_retry_delay`.
+    pub initial_retry_delay: Duration,
+    pub max_retry_delay: Duration,
 }
 
 impl Default for EmbedderConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(30),
+            initial_retry_delay: Duration::from_secs(30),
+            max_retry_delay: Duration::from_secs(15 * 60),
         }
     }
 }
 
 /// Runs phase 2 on a dedicated thread, woken by [`BackgroundEmbedder::notify`]
 /// after each phase 1 write and on its own every `poll_interval` (chunks
-/// another process left pending). Stops when dropped.
+/// another process left pending, model load retry). Stops when dropped.
 pub struct BackgroundEmbedder {
     shared: Arc<Shared>,
 }
@@ -277,6 +318,41 @@ impl Drop for BackgroundEmbedder {
     }
 }
 
+/// Backoff of the model load: after a failure, the next attempt waits
+/// `delay`, which doubles on every failure up to the configured maximum.
+struct ModelRetry {
+    next_attempt: Option<Instant>,
+    delay: Duration,
+    config: EmbedderConfig,
+}
+
+impl ModelRetry {
+    fn new(config: EmbedderConfig) -> Self {
+        Self {
+            next_attempt: None,
+            delay: config.initial_retry_delay,
+            config,
+        }
+    }
+
+    fn due(&self) -> bool {
+        self.next_attempt.is_none_or(|at| Instant::now() >= at)
+    }
+
+    /// Record a failure; returns the wait before the next attempt.
+    fn failed(&mut self) -> Duration {
+        let wait = self.delay;
+        self.next_attempt = Some(Instant::now() + wait);
+        self.delay = (self.delay * 2).min(self.config.max_retry_delay);
+        wait
+    }
+
+    fn succeeded(&mut self) {
+        self.next_attempt = None;
+        self.delay = self.config.initial_retry_delay;
+    }
+}
+
 /// Why the thread left its wait.
 enum Wake {
     /// `notify` was called: a pass is due whatever the database says.
@@ -314,8 +390,8 @@ impl Shared {
     }
 
     fn run(&self, store: &IndexStore, load_model: ModelLoader) {
-        let mut load_model = Some(load_model);
         let mut model: Option<Box<dyn EmbeddingModel>> = None;
+        let mut retry = ModelRetry::new(self.config);
         // Pending count the last pass left behind (chunks the model failed
         // on): a poll runs a pass only when that count changed, so failing
         // chunks are not retried every poll, only on the next notification.
@@ -342,17 +418,25 @@ impl Shared {
             }
 
             if model.is_none() {
-                let Some(load) = load_model.take() else {
+                if !retry.due() {
                     self.progress.finish();
                     continue;
-                };
-                match load() {
-                    Ok(loaded) => model = Some(loaded),
+                }
+                match load_model() {
+                    Ok(loaded) => {
+                        model = Some(loaded);
+                        retry.succeeded();
+                        self.progress.set_model_error(None);
+                    }
                     Err(e) => {
+                        let wait = retry.failed();
                         warn!(
-                            "Embedding model unavailable, semantic index not built: {}",
+                            "Embedding model unavailable, semantic index not built \
+                             (next attempt in {}s): {}",
+                            wait.as_secs(),
                             e
                         );
+                        self.progress.set_model_error(Some(e.to_string()));
                         self.progress.finish();
                         continue;
                     }
@@ -383,5 +467,109 @@ impl Shared {
             }
             left_pending = store.embedding_counts().ok().map(|c| c.pending());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_counts_are_read_as_one_unit() {
+        let progress = EmbeddingProgress::new();
+        progress.start(EmbeddingCounts {
+            embedded: 3,
+            total: 10,
+        });
+        assert_eq!(progress.counts().pending(), 7);
+        progress.add(5);
+        assert_eq!(progress.counts().embedded, 8);
+        // Never past the total, even if a batch over-reports.
+        progress.add(50);
+        assert_eq!(progress.counts().embedded, 10);
+        assert_eq!(progress.counts().pending(), 0);
+        assert!(progress.in_progress().is_none());
+    }
+
+    /// Readers between two `start` calls used to see `total` from one pass and
+    /// `embedded` from the other; `pending()` underflowed. The packed counter
+    /// can only be observed in a state some writer stored.
+    #[test]
+    fn progress_never_shows_more_embedded_than_total_under_concurrent_updates() {
+        let progress = Arc::new(EmbeddingProgress::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let progress = Arc::clone(&progress);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                let mut i = 0usize;
+                while !stop.load(Ordering::Relaxed) {
+                    // Alternate a big index with a tiny one: with two
+                    // separate atomics, `embedded = 900` next to `total = 5`
+                    // was observable.
+                    if i.is_multiple_of(2) {
+                        progress.start(EmbeddingCounts {
+                            embedded: 900,
+                            total: 1000,
+                        });
+                    } else {
+                        progress.start(EmbeddingCounts {
+                            embedded: 0,
+                            total: 5,
+                        });
+                    }
+                    progress.add(1);
+                    i += 1;
+                }
+            })
+        };
+        for _ in 0..200_000 {
+            let counts = progress.counts();
+            assert!(
+                counts.embedded <= counts.total,
+                "embedded {} > total {}",
+                counts.embedded,
+                counts.total
+            );
+            assert!(counts.percent() <= 100);
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn pack_round_trips_and_clamps() {
+        let counts = EmbeddingCounts {
+            embedded: 123_456,
+            total: 7_890_123,
+        };
+        let back = unpack_counts(pack_counts(counts));
+        assert_eq!(back.embedded, counts.embedded);
+        assert_eq!(back.total, counts.total);
+        let huge = unpack_counts(pack_counts(EmbeddingCounts {
+            embedded: usize::MAX,
+            total: usize::MAX,
+        }));
+        assert_eq!(huge.embedded, u32::MAX as usize);
+        assert_eq!(huge.total, u32::MAX as usize);
+    }
+
+    #[test]
+    fn model_retry_backs_off_and_resets() {
+        let config = EmbedderConfig {
+            poll_interval: Duration::from_millis(10),
+            initial_retry_delay: Duration::from_millis(100),
+            max_retry_delay: Duration::from_millis(300),
+        };
+        let mut retry = ModelRetry::new(config);
+        assert!(retry.due());
+        assert_eq!(retry.failed(), Duration::from_millis(100));
+        assert!(!retry.due());
+        assert_eq!(retry.failed(), Duration::from_millis(200));
+        assert_eq!(retry.failed(), Duration::from_millis(300));
+        assert_eq!(retry.failed(), Duration::from_millis(300), "capped");
+        retry.succeeded();
+        assert!(retry.due());
+        assert_eq!(retry.failed(), Duration::from_millis(100), "reset");
     }
 }

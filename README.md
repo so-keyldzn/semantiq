@@ -565,7 +565,10 @@ matches) and starts with `⏳ Semantic index 42% ready`, and `GET /stats`
 reports `"embedding": true`, `embedded_chunks` and
 `semantic_index_ready_percent`. The embedder also checks every 30 s for chunks
 another process left pending (`semantiq index --no-embeddings`, the refresh run
-by a query command) and embeds them.
+by a query command) and embeds them. If the embedding model cannot be loaded
+(download, disk, digest), the load is retried with a backoff; meanwhile
+`semantiq_search` starts with `⚠️ Semantic index unavailable` and `GET /stats`
+reports `"semantic_search": false` with the reason.
 
 The index lives in `.semantiq.db` at the project root, so each git worktree has
 its own index and is indexed separately.

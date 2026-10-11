@@ -166,7 +166,8 @@ pub(super) struct StatsResponse {
     /// Embedding model recorded in the index (`"stub"` = zero vectors).
     #[serde(default)]
     pub embedding_model: String,
-    /// False when the stub embedding model is selected.
+    /// False when the stub embedding model is selected or the model failed to
+    /// load (the background embedder retries with a backoff).
     #[serde(default)]
     pub semantic_search: bool,
     /// Why semantic search is unavailable, when it is.

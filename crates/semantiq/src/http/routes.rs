@@ -60,7 +60,7 @@ async fn stats(
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("blocking task failed: {}", e)));
 
-    let unavailable_reason = semantiq_embeddings::semantic_search_unavailable_reason();
+    let unavailable_reason = server.semantic_search_unavailable_reason();
     match stats {
         Ok((stats, embeddings)) => Ok(Json(StatsResponse {
             indexed_files: stats.file_count,
@@ -73,7 +73,7 @@ async fn stats(
             embedding: server.embedding_in_progress().is_some(),
             embedding_model: semantiq_embeddings::embedding_model_id().to_string(),
             semantic_search: unavailable_reason.is_none(),
-            semantic_search_unavailable_reason: unavailable_reason.map(str::to_string),
+            semantic_search_unavailable_reason: unavailable_reason,
         })),
         Err(e) => {
             error!("Failed to get stats: {}", e);

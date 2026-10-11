@@ -8,7 +8,7 @@ pub mod watcher;
 
 pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult};
 pub use embedder::{
-    BackgroundEmbedder, EmbedResult, EmbedderConfig, EmbeddingProgress, embed_pending,
+    BackgroundEmbedder, EmbedResult, EmbedderConfig, EmbeddingProgress, ModelLoader, embed_pending,
 };
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_DATA_FILE_SIZE, MAX_FILE_SIZE, exceeds_indexed_size, max_indexed_size,
