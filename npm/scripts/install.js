@@ -50,6 +50,13 @@ function getPlatform() {
   return { target, isWindows: platform === 'win32' };
 }
 
+// A failure that another attempt cannot fix: thrown through `withRetry`.
+function permanent(message) {
+  const err = new Error(message);
+  err.retryable = false;
+  return err;
+}
+
 // A final non-200 status. A missing asset (404) stays missing: not retried.
 class HttpStatusError extends Error {
   constructor(statusCode, url) {
@@ -79,11 +86,11 @@ function getFollowingRedirects(url, options) {
         response.resume();
         const location = response.headers.location;
         if (!location) {
-          reject(new Error(`Redirect (HTTP ${status}) without a Location header from ${url}`));
+          reject(permanent(`Redirect (HTTP ${status}) without a Location header from ${url}`));
           return;
         }
         if (hops >= MAX_REDIRECTS) {
-          reject(new Error(`Too many redirects (more than ${MAX_REDIRECTS}) downloading ${url}`));
+          reject(permanent(`Too many redirects (more than ${MAX_REDIRECTS}) downloading ${url}`));
           return;
         }
         const next = new URL(location, url).toString();
@@ -164,7 +171,8 @@ function sleep(ms) {
 }
 
 // Run `attempt` up to `attempts` times, waiting baseDelayMs * 2^(n-1) between
-// tries. An error flagged `retryable: false` (a 404) is thrown at once.
+// tries. An error flagged `retryable: false` (a 404, a redirect loop) is
+// thrown at once.
 async function withRetry(label, attempt, options) {
   const opts = options || {};
   const attempts = opts.attempts || RETRY_ATTEMPTS;

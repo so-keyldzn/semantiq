@@ -115,7 +115,10 @@ test('downloadText follows 301, 302, 303, 307 and 308 redirects', async () => {
 test('redirect loops and redirects without Location are errors', async () => {
   const server = await startServer();
   try {
-    await assert.rejects(downloadText(`${server.base}/loop`, opts()), /Too many redirects/);
+    await assert.rejects(
+      downloadText(`${server.base}/loop`, opts()),
+      (err) => /Too many redirects/.test(err.message) && err.retryable === false
+    );
     assert.equal(
       server.requests.filter((u) => u === '/loop').length,
       MAX_REDIRECTS + 1,
@@ -123,8 +126,18 @@ test('redirect loops and redirects without Location are errors', async () => {
     );
     await assert.rejects(
       downloadText(`${server.base}/no-location`, opts()),
+      (err) => /without a Location header/.test(err.message) && err.retryable === false
+    );
+    // Neither is retried.
+    const before = server.requests.length;
+    await assert.rejects(
+      withRetry('Download', () => downloadText(`${server.base}/no-location`, opts()), {
+        baseDelayMs: 1,
+        log: () => {},
+      }),
       /without a Location header/
     );
+    assert.equal(server.requests.length, before + 1);
   } finally {
     await server.close();
   }
