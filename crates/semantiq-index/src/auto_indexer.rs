@@ -12,6 +12,7 @@ use semantiq_parser::{
 };
 use std::collections::HashSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
@@ -29,6 +30,15 @@ pub struct AutoIndexer {
     chunk_extractor: ChunkExtractor,
     /// Project facts for import classification (`go.mod` module path).
     import_context: ImportContext,
+}
+
+/// Whether a read error means the file's row no longer describes anything on
+/// disk: the file is gone, or is not UTF-8 text any more. Any other error
+/// (permissions, interruption, I/O) is transient from the index's point of
+/// view: dropping the row would throw its embeddings away and recompute them
+/// for nothing once the file is readable again.
+fn read_error_is_final(e: &std::io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::InvalidData | ErrorKind::NotFound)
 }
 
 impl AutoIndexer {
@@ -157,19 +167,26 @@ impl AutoIndexer {
                 continue;
             }
 
-            // Read file content to check if needs reindex. A file that can no
-            // longer be read (not UTF-8 any more, unreadable, gone between
-            // the directory listing and here) cannot be verified: its old row
-            // would be stale, so it goes.
+            // Read file content to check if needs reindex. A file that is
+            // gone (between the directory listing and here) or not UTF-8 any
+            // more has a stale row, so it goes. On any other read error
+            // (permissions, interruption) nothing shows the row stale: it is
+            // kept, embeddings included, and must not be pruned either.
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
-                Err(e) => {
+                Err(e) if read_error_is_final(&e) => {
                     debug!("Skipping {}: {}", rel_path, e);
                     if self.store.get_file_by_path(&rel_path)?.is_some() {
                         self.store.delete_file(&rel_path)?;
                         debug!("Removed unreadable file from index: {}", rel_path);
                         result.removed += 1;
                     }
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Cannot read {}, its index entry is kept: {}", rel_path, e);
+                    seen_paths.insert(rel_path.clone());
+                    result.errors += 1;
                     continue;
                 }
             };
@@ -454,11 +471,12 @@ impl AutoIndexer {
             }
         };
 
-        // Read file content. A file that can no longer be read (not UTF-8 any
-        // more, unreadable) cannot keep a row that no longer describes it.
+        // Read file content. A file that is gone or not UTF-8 any more cannot
+        // keep a row that no longer describes it; on any other read error
+        // (permissions, interruption) the row stays, see `initial_index_with`.
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
-            Err(e) => {
+            Err(e) if read_error_is_final(&e) => {
                 debug!("Skipping {}: {}", rel_path, e);
                 if self.store.get_file_by_path(&rel_path)?.is_some() {
                     self.store.delete_file(&rel_path)?;
@@ -466,6 +484,7 @@ impl AutoIndexer {
                 }
                 return Ok(false);
             }
+            Err(e) => return Err(anyhow::Error::from(e).context(format!("reading {}", rel_path))),
         };
 
         // Skip files whose content is unchanged since the last index: watchers

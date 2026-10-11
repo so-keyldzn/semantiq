@@ -188,8 +188,9 @@ All notable changes to Semantiq will be documented in this file.
   mount) does not disable it, and the next walk that lists the directory
   prunes under it for real. A walk error without a path blocks pruning for
   that run. The query refresh check applies the same rule. A previously
-  indexed file that can no longer be read (not UTF-8 any more, unreadable)
-  loses its stale row.
+  indexed file that is gone or not UTF-8 any more loses its stale row; a
+  file that cannot be read for a transient reason (permissions,
+  interruption) keeps its row and embeddings and is counted in `errors`.
 - Indexing writes less (#41): a file's imports are written in one transaction
   (`IndexStore::replace_dependencies`, one commit per file instead of one per
   import), and the partial index `idx_chunks_pending` (`chunks(id) WHERE

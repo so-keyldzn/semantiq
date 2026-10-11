@@ -505,6 +505,59 @@ fn unreadable_file_loses_its_row() {
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
+/// A file that cannot be read for a transient reason (permissions here) is
+/// an error, not a removal: its row and embeddings stay, in the walk and on a
+/// watcher event. Needs a non-root user: root reads a `chmod 000` file.
+#[cfg(unix)]
+#[test]
+fn unreadable_file_keeps_its_row_on_permission_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o644));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let before = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+
+    let util = root.join("src/util.rs");
+    fs::set_permissions(&util, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(util.clone());
+    if fs::read_to_string(&util).is_ok() {
+        eprintln!("skipped: the file is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.removed, 0, "a transient read error is not a removal");
+    assert_eq!(result.errors, 1);
+    let kept = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    assert_eq!(kept.hash, before.hash, "the row is untouched");
+
+    let result = indexer.process_file_events(vec![FileEvent::Modified(util.clone())]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 1);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
+
+    // Readable again and unchanged: nothing to do.
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
 /// A directory that cannot be listed is a walk error: its files are kept in
 /// the index (they did not vanish), the error is counted, and pruning goes
 /// on outside that directory. Needs a non-root user: root reads a
