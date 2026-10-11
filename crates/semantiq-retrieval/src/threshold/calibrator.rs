@@ -439,6 +439,29 @@ mod tests {
     }
 
     #[test]
+    fn test_calibration_at_the_min_samples_boundary() {
+        // Exactly MIN_SAMPLES_FOR_CALIBRATION samples calibrate, one fewer
+        // does not; both gates keep ~90 % of the sample at the boundary.
+        let calibrator = ThresholdCalibrator::new();
+        let distances: Vec<f32> = (0..MIN_SAMPLES_FOR_CALIBRATION)
+            .map(|i| 0.5 + i as f32 * 0.006)
+            .collect();
+        assert_eq!(distances.len(), 100);
+
+        let result = calibrator.calibrate_language("rust", &distances);
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.thresholds.sample_count, MIN_SAMPLES_FOR_CALIBRATION);
+        let t = &result.thresholds;
+        let share = kept_share(&distances, t.max_distance, t.min_similarity);
+        assert!((0.85..=0.95).contains(&share), "kept {share}");
+
+        let result = calibrator.calibrate_language("rust", &distances[1..]);
+        assert!(!result.success);
+        assert!(calibrator.calibrate_global(&distances).success);
+        assert!(!calibrator.calibrate_global(&distances[1..]).success);
+    }
+
+    #[test]
     fn test_get_with_fallback() {
         let mut config = ThresholdConfig::new();
 
