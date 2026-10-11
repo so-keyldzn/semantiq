@@ -21,6 +21,7 @@ class UserService {
 export const fadeIn = (n: number) => n + 1;
 export const config = { debug: true };
 
+/** Greets `name`. */
 export function greet(name: string): string {
     return `Hello, ${name}!`;
 }

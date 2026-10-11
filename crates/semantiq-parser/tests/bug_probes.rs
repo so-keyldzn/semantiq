@@ -353,4 +353,62 @@ public:
             ]
         );
     }
+
+    // B14 (#61): the doc comment of an exported TS/JS symbol sits above the
+    // `export` wrapper, the comment of a decorated Python function above the
+    // decorator, and a Rust doc comment above `#[derive]`: all are attached.
+    #[test]
+    fn b14_doc_comment_through_wrappers() {
+        let doc = |lang: Language, src: &str, name: &str| -> Option<String> {
+            extract(lang, src)
+                .into_iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.doc_comment)
+        };
+        assert_eq!(
+            doc(
+                Language::TypeScript,
+                "/** Greets. */\nexport function greet(n: string) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc(
+                Language::TypeScript,
+                "/** Doc */\nexport default class Foo {}\n",
+                "Foo"
+            )
+            .as_deref(),
+            Some("/** Doc */")
+        );
+        assert_eq!(
+            doc(
+                Language::JavaScript,
+                "/** Greets. */\nexport function greet(n) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc(
+                Language::Python,
+                "# Handles the route\n@app.route('/')\ndef index():\n    pass\n",
+                "index"
+            )
+            .as_deref(),
+            Some("# Handles the route")
+        );
+        assert_eq!(
+            doc(
+                Language::Rust,
+                "/// Config.\n#[derive(Debug)]\npub struct Cfg {}\n",
+                "Cfg"
+            )
+            .as_deref(),
+            Some("/// Config.")
+        );
+    }
 }

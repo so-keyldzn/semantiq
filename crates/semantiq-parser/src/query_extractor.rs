@@ -567,49 +567,80 @@ impl QuerySymbolExtractor {
         Some(sig.trim().to_string())
     }
 
-    /// Extrait les doc comments précédant le nœud.
-    ///
-    /// On remonte les frères-commentaires contigus. Une ligne vide entre deux
-    /// commentaires (écart de `row` > 1) rompt l'agrégation : ça évite d'absorber
-    /// un en-tête de licence séparé du doc du symbole par une ligne blanche, p.ex.
-    /// `// Copyright …\n\n/// Doc du symbole\nfn foo() {}` ne doit pas coller la
-    /// licence au doc.
+    /// Extrait les doc comments précédant le nœud (voir [`doc_comment_of`]).
     fn extract_doc_comment(node: &Node, source: &str) -> Option<String> {
-        let source_bytes = source.as_bytes();
-        let mut prev = node.prev_sibling();
-        let mut comments = Vec::new();
-        // Ligne de début du dernier commentaire accepté. Sert à mesurer l'écart
-        // avec le commentaire précédent (au-dessus). `None` tant qu'on n'a rien
-        // accepté : le premier commentaire (le plus proche du nœud) est toujours
-        // pris, même si une ligne vide le sépare du nœud — c'est bien le doc du
-        // symbole. Le contrôle d'écart ne s'applique qu'entre commentaires.
-        let mut last_start_row: Option<usize> = None;
+        doc_comment_of(node, source)
+    }
+}
 
-        while let Some(sibling) = prev {
-            if sibling.kind().contains("comment") {
-                if let Some(last) = last_start_row {
-                    // Écart de plus d'une ligne entre ce commentaire (au-dessus)
-                    // et le bloc déjà agrégé : ligne vide intercalée → on coupe.
-                    if sibling.end_position().row + 1 < last {
-                        break;
-                    }
+/// Nœuds qui enveloppent une déclaration sans être la déclaration : le
+/// commentaire qui la documente est le frère précédent de l'enveloppe
+/// (`/** doc */ export function f()`, `# doc\n@route def f()`,
+/// `declare function f()`).
+const DECLARATION_WRAPPERS: [&str; 3] = [
+    "export_statement",
+    "decorated_definition",
+    "ambient_declaration",
+];
+
+/// Frères situés entre un symbole et son doc comment : attributs Rust
+/// (`/// doc\n#[derive(Debug)]\nstruct S`).
+const DOC_TRANSPARENT_SIBLINGS: [&str; 1] = ["attribute_item"];
+
+/// Extrait les doc comments précédant le nœud.
+///
+/// Le point de départ est l'enveloppe la plus externe du nœud parmi
+/// [`DECLARATION_WRAPPERS`] (sinon le nœud lui-même) ; les attributs Rust
+/// intercalés sont traversés. On remonte ensuite les frères-commentaires
+/// contigus. Une ligne vide entre deux commentaires (écart de `row` > 1) rompt
+/// l'agrégation : ça évite d'absorber un en-tête de licence séparé du doc du
+/// symbole par une ligne blanche, p.ex. `// Copyright …\n\n/// Doc du
+/// symbole\nfn foo() {}` ne doit pas coller la licence au doc.
+pub(crate) fn doc_comment_of(node: &Node, source: &str) -> Option<String> {
+    let source_bytes = source.as_bytes();
+    let mut start = *node;
+    while let Some(parent) = start.parent() {
+        if !DECLARATION_WRAPPERS.contains(&parent.kind()) {
+            break;
+        }
+        start = parent;
+    }
+    let mut prev = start.prev_sibling();
+    let mut comments = Vec::new();
+    // Ligne de début du dernier commentaire accepté. Sert à mesurer l'écart
+    // avec le commentaire précédent (au-dessus). `None` tant qu'on n'a rien
+    // accepté : le premier commentaire (le plus proche du nœud) est toujours
+    // pris, même si une ligne vide le sépare du nœud — c'est bien le doc du
+    // symbole. Le contrôle d'écart ne s'applique qu'entre commentaires.
+    let mut last_start_row: Option<usize> = None;
+
+    while let Some(sibling) = prev {
+        if sibling.kind().contains("comment") {
+            if let Some(last) = last_start_row {
+                // Écart de plus d'une ligne entre ce commentaire (au-dessus)
+                // et le bloc déjà agrégé : ligne vide intercalée → on coupe.
+                if sibling.end_position().row + 1 < last {
+                    break;
                 }
-                if let Ok(comment) = sibling.utf8_text(source_bytes) {
-                    comments.push(comment.to_string());
-                }
-                last_start_row = Some(sibling.start_position().row);
-                prev = sibling.prev_sibling();
-            } else {
-                break;
             }
-        }
-
-        if comments.is_empty() {
-            None
+            if let Ok(comment) = sibling.utf8_text(source_bytes) {
+                // tree-sitter-rust includes the newline in `line_comment`.
+                comments.push(comment.trim_end().to_string());
+            }
+            last_start_row = Some(sibling.start_position().row);
+            prev = sibling.prev_sibling();
+        } else if comments.is_empty() && DOC_TRANSPARENT_SIBLINGS.contains(&sibling.kind()) {
+            prev = sibling.prev_sibling();
         } else {
-            comments.reverse();
-            Some(comments.join("\n"))
+            break;
         }
+    }
+
+    if comments.is_empty() {
+        None
+    } else {
+        comments.reverse();
+        Some(comments.join("\n"))
     }
 }
 
@@ -829,6 +860,75 @@ const MAX_SIZE: usize = 100;
         assert!(
             !doc.contains("Copyright") && !doc.contains("Licensed"),
             "license header across a blank line must NOT be absorbed, got: {doc:?}"
+        );
+    }
+
+    #[test]
+    fn test_query_doc_comment_through_export_and_decorator_wrappers() {
+        let doc_of = |lang: Language, src: &str, name: &str| -> Option<String> {
+            extract_via_query(lang, src)
+                .into_iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.doc_comment)
+        };
+        assert_eq!(
+            doc_of(
+                Language::TypeScript,
+                "/** Greets. */\nexport function greet(n: string) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc_of(
+                Language::TypeScript,
+                "/** Doc */\nexport default class Foo {}\n",
+                "Foo"
+            )
+            .as_deref(),
+            Some("/** Doc */")
+        );
+        assert_eq!(
+            doc_of(
+                Language::TypeScript,
+                "/** Ambient */\ndeclare function amb(): void;\n",
+                "amb"
+            )
+            .as_deref(),
+            Some("/** Ambient */")
+        );
+        assert_eq!(
+            doc_of(
+                Language::JavaScript,
+                "/** Greets. */\nexport function greet(n) { return n; }\n",
+                "greet"
+            )
+            .as_deref(),
+            Some("/** Greets. */")
+        );
+        assert_eq!(
+            doc_of(
+                Language::Python,
+                "# Handles the route\n@app.route('/')\ndef index():\n    pass\n",
+                "index"
+            )
+            .as_deref(),
+            Some("# Handles the route")
+        );
+        assert_eq!(
+            doc_of(
+                Language::Rust,
+                "/// Config.\n#[derive(Debug)]\n#[serde(default)]\npub struct Cfg {}\n",
+                "Cfg"
+            )
+            .as_deref(),
+            Some("/// Config.")
+        );
+        // An attribute without a comment above it is not a doc comment.
+        assert_eq!(
+            doc_of(Language::Rust, "fn a() {}\n#[inline]\nfn b() {}\n", "b"),
+            None
         );
     }
 

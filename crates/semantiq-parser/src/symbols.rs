@@ -514,30 +514,9 @@ impl SymbolExtractor {
         Some(sig.trim().to_string())
     }
 
+    /// Même règle que l'extracteur par query (`doc_comment_of`).
     fn extract_doc_comment(node: &Node, source: &str) -> Option<String> {
-        let source_bytes = source.as_bytes();
-
-        // Look for preceding comment siblings
-        let mut prev = node.prev_sibling();
-        let mut comments = Vec::new();
-
-        while let Some(sibling) = prev {
-            if sibling.kind().contains("comment") {
-                if let Ok(comment) = sibling.utf8_text(source_bytes) {
-                    comments.push(comment.to_string());
-                }
-                prev = sibling.prev_sibling();
-            } else {
-                break;
-            }
-        }
-
-        if comments.is_empty() {
-            None
-        } else {
-            comments.reverse();
-            Some(comments.join("\n"))
-        }
+        crate::query_extractor::doc_comment_of(node, source)
     }
 }
 

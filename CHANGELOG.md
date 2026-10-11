@@ -19,6 +19,12 @@ All notable changes to Semantiq will be documented in this file.
   `dead-code` no longer reports serde helpers with high confidence. Only
   identifier-shaped strings inside attribute arguments count: strings elsewhere
   still never match (#64).
+- Doc comments are attached to exported TypeScript / JavaScript symbols
+  (`/** Doc */ export function f()`, `export default class`, `declare`),
+  to decorated Python functions (comment above the decorator) and to Rust items
+  behind attributes (`/// Doc` above `#[derive(...)]`); `explain` shows the
+  JSDoc of exported APIs again. Rust doc lines no longer carry their trailing
+  newline (#61).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
