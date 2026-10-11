@@ -105,6 +105,15 @@ fn query_commands_print_json() {
     assert_eq!(deps["file_path"], "src/lib.rs");
     assert!(deps["imports"].is_array());
     assert!(deps["imported_by"].is_array());
+    // #68: either separator is accepted and the stored form always uses `/`.
+    let deps_backslash = query_json(dir, &["deps", r"src\lib.rs"]);
+    assert_eq!(deps_backslash["file_path"], "src/lib.rs");
+    assert_eq!(deps_backslash["imports"], deps["imports"]);
+    let dead = query_json(dir, &["dead-code", "--path-prefix", r"src\"]);
+    assert_eq!(
+        dead,
+        query_json(dir, &["dead-code", "--path-prefix", "src/"])
+    );
 
     let search = query_json(dir, &["search", "compute", "--limit", "5"]);
     assert_eq!(search["query"], "compute");
@@ -436,4 +445,74 @@ fn init_global_installs_skill_in_home() {
     // Nothing project-level is written.
     assert!(!home.path().join("CLAUDE.md").exists());
     assert!(!home.path().join(".semantiq.db").exists());
+}
+
+/// #32: with `--database` alone, the project root comes from the database
+/// (recorded by `index`), not from the directory the command runs in or the
+/// database's parent. A wrong `--project` is refused before anything is pruned.
+#[test]
+fn database_without_project_uses_the_recorded_root() {
+    let project = indexed_project();
+    let dir = project.path();
+    let store_dir = tempfile::Builder::new()
+        .prefix("semantiq-idx")
+        .tempdir()
+        .unwrap();
+    let db = store_dir.path().join("app.db");
+    let db = db.to_str().unwrap();
+    let output = semantiq(dir, &["index", ".", "--database", db, "--no-embeddings"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // From the database's own directory (the directory the old code walked):
+    // the recorded root is used and nothing is removed.
+    let output = semantiq(
+        store_dir.path(),
+        &["refs", "compute", "--database", db, "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("removed"),
+        "no refresh should prune anything: {}",
+        stderr(&output)
+    );
+    let refs: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+    assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
+
+    // An explicit root other than the recorded one is refused before the
+    // refresh walks anything, and the index survives.
+    let empty = tempfile::tempdir().unwrap();
+    let output = semantiq(
+        dir,
+        &[
+            "refs",
+            "compute",
+            "--database",
+            db,
+            "--project",
+            empty.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("was built from"),
+        "{}",
+        stderr(&output)
+    );
+    let refs = query_json(dir, &["refs", "compute", "--database", db]);
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+
+    // A wrong root that does hold indexable files (a subdirectory of the
+    // project) would re-point the index: a query command refuses that too.
+    let output = semantiq(
+        dir,
+        &["refs", "compute", "--database", db, "--project", "src"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("was built from"), "{err}");
+    assert!(err.contains("--project"), "{err}");
+    let refs = query_json(dir, &["refs", "compute", "--database", db]);
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+    assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
 }

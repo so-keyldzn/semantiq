@@ -1,7 +1,7 @@
 use crate::IndexStore;
 use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
 use crate::watcher::{FileEvent, FileWatcher};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ignore::WalkBuilder;
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
@@ -53,6 +53,33 @@ impl AutoIndexer {
             language_support: Mutex::new(LanguageSupport::new()?),
             chunk_extractor: ChunkExtractor::new(),
         })
+    }
+
+    /// Stamp `project_root` in the index metadata (read back by the query
+    /// commands when only `--database` is given). Called once a walk from
+    /// that root proved consistent with the index, never from the
+    /// constructor: a wrong root refused by `initial_index` must not be
+    /// recorded. Indexing a different directory into a populated index is
+    /// allowed (`semantiq index <other> --database <db>`) but worth a
+    /// warning when `stale` rows of the previous root are about to be
+    /// pruned (none after `--force` or a parser-version clear).
+    fn record_project_root(&self, stale: usize) -> Result<()> {
+        let canonical = self
+            .project_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.project_root.clone());
+        if stale > 0
+            && let Some(previous) = self.store.get_project_root()?
+            && previous != canonical
+        {
+            warn!(
+                "Index built from {} now indexed from {}: {} files of the previous root will be removed",
+                previous.display(),
+                canonical.display(),
+                stale
+            );
+        }
+        self.store.set_project_root(&canonical)
     }
 
     /// Perform initial indexing of all files in the project
@@ -153,10 +180,29 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
-        for stale in self.store.list_file_paths()? {
-            if seen_paths.contains(&stale) {
-                continue;
-            }
+        let stale: Vec<String> = self
+            .store
+            .list_file_paths()?
+            .into_iter()
+            .filter(|path| !seen_paths.contains(path))
+            .collect();
+
+        // Safety net: a walk that found nothing indexable while the index holds
+        // files means the root is wrong (a database opened from another
+        // directory), not that every file vanished. Pruning would wipe the
+        // index; refuse instead.
+        if seen_paths.is_empty() && !stale.is_empty() {
+            bail!(
+                "no indexable file found under {} while the index holds {} files: wrong \
+                 project root? Pass `--project <root>`, or rebuild with \
+                 `semantiq index <root> --force` (also the way to go if the project really \
+                 has no indexable file left)",
+                self.project_root.display(),
+                stale.len()
+            );
+        }
+        self.record_project_root(stale.len())?;
+        for stale in stale {
             match self.store.delete_file(&stale) {
                 Ok(()) => result.removed += 1,
                 Err(e) => {

@@ -8,7 +8,7 @@
 
 use semantiq_retrieval::{
     DEFAULT_IMPACT_DEPTH, DEFAULT_IMPACT_SITES, DEFAULT_REPO_MAP_TOKENS, RepoMapOptions,
-    RetrievalEngine, SearchOptions,
+    RetrievalEngine, SearchOptions, normalize_input_path,
 };
 use tracing::{debug, error};
 
@@ -255,7 +255,8 @@ pub fn find_refs_output(
 pub fn deps_output(engine: &RetrievalEngine, params: DepsParams) -> Result<DepsOutput, String> {
     debug!(file = %params.file_path, "semantiq_deps called");
 
-    let file_path = validate_file_path(&params.file_path)?;
+    // Echoed in the output: the stored form (`/` separators), whatever was given.
+    let file_path = normalize_input_path(&validate_file_path(&params.file_path)?);
 
     let imports = engine
         .get_dependencies(&file_path)

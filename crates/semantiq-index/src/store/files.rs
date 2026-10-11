@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use semantiq_parser::PARSER_VERSION;
+use std::path::{Path, PathBuf};
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -96,23 +97,41 @@ impl IndexStore {
     /// Also purges the corresponding `chunks_vec` rows: sqlite-vec virtual tables
     /// don't honor FK / ON DELETE CASCADE, so without this purge old embeddings
     /// linger as orphans and pollute KNN results.
+    ///
+    /// Both statements run in one transaction. Committing the purge alone (a
+    /// crash or `SQLITE_BUSY` before the second statement) would leave chunks
+    /// whose `embedding` BLOB is set but whose vector is gone: neither pending
+    /// for phase 2 nor searchable, and carried over as "already embedded" by
+    /// `insert_chunks` for unchanged content.
     pub fn delete_file(&self, path: &str) -> Result<()> {
         self.with_conn(|conn| {
-            // Purge vec0 rows BEFORE the FK cascade fires — once `files` is
-            // deleted the dependent `chunks` rows are gone and the subquery
-            // would see nothing.
-            conn.execute(
-                "DELETE FROM chunks_vec
-                 WHERE chunk_id IN (
-                     SELECT c.id FROM chunks c
-                     JOIN files f ON f.id = c.file_id
-                     WHERE f.path = ?1
-                 )",
-                [path],
-            )?;
-
-            conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
-            Ok(())
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<()> {
+                // Purge vec0 rows BEFORE the FK cascade fires — once `files` is
+                // deleted the dependent `chunks` rows are gone and the subquery
+                // would see nothing.
+                conn.execute(
+                    "DELETE FROM chunks_vec
+                     WHERE chunk_id IN (
+                         SELECT c.id FROM chunks c
+                         JOIN files f ON f.id = c.file_id
+                         WHERE f.path = ?1
+                     )",
+                    [path],
+                )?;
+                conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", [])?;
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -136,6 +155,38 @@ impl IndexStore {
                 })
                 .optional()?;
             Ok(result)
+        })
+    }
+
+    // Project root
+
+    /// Record the project root this index is built from (`metadata` key
+    /// `project_root`, absolute and canonical when the directory exists).
+    /// The query commands derive the root from it when only `--database` is
+    /// given, so a refresh never walks the wrong directory.
+    pub fn set_project_root(&self, root: &Path) -> Result<()> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('project_root', ?1)",
+                [root.to_string_lossy().as_ref()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The project root recorded by [`Self::set_project_root`], if any (an
+    /// index built by an older version has none).
+    pub fn get_project_root(&self) -> Result<Option<PathBuf>> {
+        self.with_conn(|conn| {
+            let root: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'project_root'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(root.map(PathBuf::from))
         })
     }
 

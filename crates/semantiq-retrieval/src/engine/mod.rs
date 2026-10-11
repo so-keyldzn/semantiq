@@ -21,6 +21,18 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tracing::{debug, warn};
 
+/// Accept a project-relative path argument written with either separator
+/// (`src/a.rs`, `src\\a.rs`, `./src/a.rs`) and return the form the index
+/// stores: `/` separators, no leading `./`, trimmed.
+///
+/// Every engine entry point taking a file path or a path prefix (`deps`,
+/// `impact`, `calls`, `dead_code`, the repo map focus and prefix) goes through
+/// this, so the CLI, the MCP tools and the HTTP API accept both styles.
+pub fn normalize_input_path(value: &str) -> String {
+    let value = value.trim().replace('\\', "/");
+    value.trim_start_matches("./").to_string()
+}
+
 // Re-export types
 pub use analysis::{DependencyInfo, SymbolDefinition, SymbolExplanation};
 pub use calls::{
@@ -131,6 +143,17 @@ impl RetrievalEngine {
             ),
             Err(e) => warn!("could not count orphan chunk vectors: {e}"),
         }
+        // The opposite direction: chunks marked embedded without a vector are
+        // skipped by phase 2 and absent from semantic search.
+        match store.count_chunks_missing_vectors() {
+            Ok(0) => {}
+            Ok(n) => warn!(
+                chunks_missing_vectors = n,
+                "chunks have an embedding but no chunks_vec row; they are missing from \
+                 semantic search. Run `semantiq index --force` to repair."
+            ),
+            Err(e) => warn!("could not count chunks missing vectors: {e}"),
+        }
 
         // Create distance collector if enabled, initialized with existing count
         let distance_collector = if enable_collection {
@@ -184,3 +207,19 @@ impl RetrievalEngine {
 mod structure_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod input_path_tests {
+    use super::normalize_input_path;
+
+    /// #68: a path argument is accepted with either separator.
+    #[test]
+    fn accepts_both_separators() {
+        assert_eq!(normalize_input_path("src/lib/foo.ts"), "src/lib/foo.ts");
+        assert_eq!(normalize_input_path(r"src\lib\foo.ts"), "src/lib/foo.ts");
+        assert_eq!(normalize_input_path(r".\src\foo.ts"), "src/foo.ts");
+        assert_eq!(normalize_input_path(" ./src/foo.ts "), "src/foo.ts");
+        assert_eq!(normalize_input_path(r"crates\"), "crates/");
+        assert_eq!(normalize_input_path(""), "");
+    }
+}

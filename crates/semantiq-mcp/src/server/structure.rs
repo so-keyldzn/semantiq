@@ -9,7 +9,7 @@ use super::{
 use semantiq_retrieval::{
     CallDirection, CallSite, DEFAULT_CALL_DEPTH, DEFAULT_CALL_EDGES, DEFAULT_DEAD_CODE_LIMIT,
     DEFAULT_HIERARCHY_DEPTH, DEFAULT_HIERARCHY_EDGES, DeadCodeOptions, ImpactDefinition,
-    RetrievalEngine, TypeEdge,
+    RetrievalEngine, TypeEdge, normalize_input_path,
 };
 use tracing::{debug, error};
 
@@ -141,7 +141,9 @@ pub fn dead_code_output(
 ) -> Result<DeadCodeOutput, String> {
     debug!(prefix = ?params.path_prefix, language = ?params.language, "semantiq_dead_code called");
 
-    let path_prefix = validate_path(params.path_prefix.as_deref(), "Path prefix")?;
+    // Echoed in the output: the stored form (`/` separators), whatever was given.
+    let path_prefix = validate_path(params.path_prefix.as_deref(), "Path prefix")?
+        .map(|prefix| normalize_input_path(&prefix));
     let language = match params.language.as_deref() {
         Some(language) => Some(validate_input(language, "Language")?.to_ascii_lowercase()),
         None => None,

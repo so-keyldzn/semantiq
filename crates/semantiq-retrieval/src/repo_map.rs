@@ -205,8 +205,7 @@ struct Candidate {
 }
 
 fn normalize_path(value: &str) -> String {
-    let value = value.trim().replace('\\', "/");
-    value.trim_start_matches("./").to_string()
+    crate::engine::normalize_input_path(value)
 }
 
 fn is_code_file(language: Option<&str>) -> bool {

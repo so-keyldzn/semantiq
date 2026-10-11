@@ -312,6 +312,10 @@ Dependencies: 142
 
 ## MCP Tools
 
+Every `path` / `file_path` in the outputs is relative to the project root and
+uses `/` on every platform (Windows included); path parameters (`file_path`,
+`focus`, `path_prefix`) accept either `/` or `\`.
+
 ### `semantiq_search`
 
 Semantic + lexical code search combining 3 strategies. Returns, per hit,

@@ -33,12 +33,34 @@ All notable changes to Semantiq will be documented in this file.
   embedding only covered its first 512 tokens: semantic search can now hit the
   whole body, and a hit returns a window rather than a 3000-line chunk. The
   embedding carry-over on edit is per window (#62).
+- A query command given `--database` without `--project` no longer walks the
+  database's directory and prunes every indexed file as vanished: `index` and
+  `serve` record the project root in the database, the query commands read it
+  back (the current directory for an index built by an older version), and a
+  refresh that finds no indexable file under its root while the index holds
+  files refuses to prune, with a "wrong project root?" hint (#32).
+- Stored paths (`files.path`, `resolved_path`, every `path` / `file_path` in
+  the outputs) use `/` on every platform: a Windows index held backslashes,
+  so `deps src/lib/foo.ts`, `--focus` and `path_prefix` did not match and the
+  output differed from the documented contract. Path arguments of the CLI, the
+  MCP tools and the HTTP API accept either separator. `PARSER_VERSION` 15:
+  existing indexes are rebuilt (#68).
+- An older Semantiq binary opening an index written by a newer one (after a
+  `semantiq update` rollback, or a plugin binary next to a `cargo run` on a
+  branch that bumped the schema) refuses it with an error naming both schema
+  versions, instead of writing its lower version back and making the newer
+  binary fail on every start (#35).
+- `delete_file` purges the `chunks_vec` rows and deletes the file in one
+  transaction: a crash or `SQLITE_BUSY` between the two statements can no
+  longer leave a chunk with an embedding but no vector, invisible to both
+  phase 2 and semantic search. `IndexStore::count_chunks_missing_vectors`
+  pins that direction of the invariant (#40).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
-- `PARSER_VERSION` 14: existing indexes are rebuilt for the fixes above.
+- `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
 
 ## [0.11.0] - 2026-10-07
 

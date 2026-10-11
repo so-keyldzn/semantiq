@@ -1,6 +1,6 @@
 //! Code analysis functionality for RetrievalEngine.
 
-use super::RetrievalEngine;
+use super::{RetrievalEngine, normalize_input_path};
 use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use anyhow::Result;
@@ -170,9 +170,10 @@ impl RetrievalEngine {
 
     /// Get dependencies for a file (what it imports).
     pub fn get_dependencies(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let file_path = normalize_input_path(file_path);
         let mut deps = Vec::new();
 
-        if let Some(file) = self.store.get_file_by_path(file_path)? {
+        if let Some(file) = self.store.get_file_by_path(&file_path)? {
             let records = self.store.get_dependencies(file.id)?;
 
             for record in records {
@@ -195,7 +196,8 @@ impl RetrievalEngine {
     /// resolved as part of the same query (single JOIN), avoiding the
     /// previous N+1 lookup pattern.
     pub fn get_dependents(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
-        let records = self.store.get_dependents_with_source_path(file_path)?;
+        let file_path = normalize_input_path(file_path);
+        let records = self.store.get_dependents_with_source_path(&file_path)?;
 
         let deps = records
             .into_iter()
