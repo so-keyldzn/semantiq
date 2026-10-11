@@ -1,7 +1,9 @@
 //! Chunk operations for IndexStore.
 
 use super::IndexStore;
-use crate::schema::{ChunkRecord, EMBEDDING_DIMENSION};
+#[cfg(any(test, feature = "test-support"))]
+use crate::schema::ChunkRecord;
+use crate::schema::EMBEDDING_DIMENSION;
 use anyhow::{Result, anyhow, bail};
 use rusqlite::Connection;
 use rusqlite::params;
@@ -51,6 +53,7 @@ impl EmbeddingCounts {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
     if !bytes.len().is_multiple_of(4) {
         warn!(
@@ -309,10 +312,12 @@ impl IndexStore {
         })
     }
 
-    /// Get chunk records by IDs (useful after vector search).
+    /// Get chunk records by IDs, embeddings included. Test support only:
+    /// production resolves a KNN result list with `get_chunk_hits`.
     ///
     /// Results come back in the order of `chunk_ids` (missing IDs are skipped),
     /// so callers can pass a KNN result list and keep its nearest-first order.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn get_chunks_by_ids(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
         let mut by_id: std::collections::HashMap<i64, ChunkRecord> = self
             .get_chunks_by_ids_unordered(chunk_ids)?
@@ -322,21 +327,16 @@ impl IndexStore {
         Ok(chunk_ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
-    /// Fetch chunk records by IDs in rowid order.
-    ///
-    /// If more than 900 IDs are provided, the query is split into batches
-    /// to stay within SQLite's `SQLITE_MAX_VARIABLE_NUMBER` limit (default 999).
+    /// Fetch chunk records by IDs in rowid order, `SQL_IN_BATCH` ids per query.
+    #[cfg(any(test, feature = "test-support"))]
     fn get_chunks_by_ids_unordered(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkRecord>> {
         if chunk_ids.is_empty() {
             return Ok(Vec::new());
         }
 
-        // SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999.
-        // Process in batches to avoid exceeding the limit.
-        const BATCH_SIZE: usize = 900;
-        if chunk_ids.len() > BATCH_SIZE {
+        if chunk_ids.len() > SQL_IN_BATCH {
             let mut all_results = Vec::new();
-            for batch in chunk_ids.chunks(BATCH_SIZE) {
+            for batch in chunk_ids.chunks(SQL_IN_BATCH) {
                 all_results.extend(self.get_chunks_by_ids_unordered(batch)?);
             }
             return Ok(all_results);
