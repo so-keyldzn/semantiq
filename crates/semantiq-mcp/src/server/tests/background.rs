@@ -2,7 +2,7 @@
 //! file watcher (#47) and the embedding model's availability (#52).
 
 use super::SemantiqServer;
-use crate::server::{model_error_reason, search_notice};
+use crate::server::{model_error_reason, search_notice, unavailable_reason};
 use rmcp::ServerHandler;
 use semantiq_index::{BackgroundEmbedder, EmbedderConfig, EmbeddingCounts, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
@@ -197,4 +197,53 @@ fn search_notice_has_three_cases() {
 
     // Nothing to say.
     assert_eq!(search_notice(None, None, None, output.clone()), output);
+}
+
+/// The engine's own model copy is loaded once at startup: when it is missing
+/// the reason says to restart, whatever the embedder reports afterwards.
+#[test]
+fn unavailable_reason_orders_backend_engine_then_embedder() {
+    assert_eq!(
+        unavailable_reason(Some("stub selected"), true, Some("x".into())),
+        Some("stub selected".to_string())
+    );
+
+    let restart = unavailable_reason(None, true, Some("download failed".into())).unwrap();
+    assert!(restart.contains("failed to load at startup"), "{restart}");
+    assert!(restart.contains("restart the server"), "{restart}");
+    assert!(!restart.contains("retried"), "{restart}");
+    assert_eq!(unavailable_reason(None, true, None), Some(restart));
+
+    let retried = unavailable_reason(None, false, Some("download failed".into())).unwrap();
+    assert!(retried.contains("download failed"), "{retried}");
+    assert!(retried.contains("retried in the background"), "{retried}");
+
+    assert_eq!(unavailable_reason(None, false, None), None);
+}
+
+/// A server whose engine has no model reports it (stub build: the backend
+/// reason comes first in `semantic_search_unavailable_reason`, so the engine
+/// check is observed through the runtime reason).
+#[test]
+fn server_reports_a_missing_engine_model() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join(".semantiq.db");
+    let store = Arc::new(IndexStore::open(&db_path).unwrap());
+    let engine = Arc::new(RetrievalEngine::without_embeddings(
+        Arc::clone(&store),
+        temp.path().to_str().unwrap(),
+    ));
+    let (server, _temp) = super::create_test_server();
+    let server = SemantiqServer { engine, ..server };
+    assert!(server.engine().embedding_model().is_none());
+    let reason = server.runtime_unavailable_reason().unwrap();
+    assert!(reason.contains("restart the server"), "{reason}");
+    assert!(server.semantic_search_unavailable_reason().is_some());
+
+    let (server, _temp) = super::create_test_server();
+    assert!(
+        server.engine().embedding_model().is_some(),
+        "the stub model counts as loaded"
+    );
+    assert!(server.runtime_unavailable_reason().is_none());
 }

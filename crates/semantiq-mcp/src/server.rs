@@ -188,12 +188,28 @@ impl SemantiqServer {
         self.embedder.get()?.progress().model_error()
     }
 
-    /// Why semantic search is off right now: the stub backend, else a failed
-    /// model load (retried in the background). `None` = available.
+    /// Why semantic search is off right now, most permanent first: the stub
+    /// backend; the engine's own model copy missing (`RetrievalEngine::new`
+    /// loads it once at startup and never retries, so `search()` has no
+    /// model until a restart even after the embedder recovers); the
+    /// embedder's last load failed (retried in the background). `None` =
+    /// available.
     pub fn semantic_search_unavailable_reason(&self) -> Option<String> {
-        semantiq_embeddings::semantic_search_unavailable_reason()
-            .map(str::to_string)
-            .or_else(|| self.embedding_model_error().map(model_error_reason))
+        unavailable_reason(
+            semantiq_embeddings::semantic_search_unavailable_reason(),
+            self.engine.embedding_model().is_none(),
+            self.embedding_model_error(),
+        )
+    }
+
+    /// The runtime part of `semantic_search_unavailable_reason` (everything
+    /// but the backend), for the search notice.
+    fn runtime_unavailable_reason(&self) -> Option<String> {
+        unavailable_reason(
+            None,
+            self.engine.embedding_model().is_none(),
+            self.embedding_model_error(),
+        )
     }
 
     /// Like `with_indexing_notice`, plus the share of the semantic index that
@@ -204,7 +220,7 @@ impl SemantiqServer {
         }
         search_notice(
             semantiq_embeddings::semantic_search_unavailable_reason(),
-            self.embedding_model_error().map(model_error_reason),
+            self.runtime_unavailable_reason(),
             self.embedding_in_progress(),
             output,
         )
@@ -330,6 +346,25 @@ impl SemantiqServer {
             info!("Auto-indexer background task started");
         }
     }
+}
+
+/// Reason when the search engine's own model copy is missing: loaded once by
+/// `RetrievalEngine::new`, never retried.
+const ENGINE_MODEL_MISSING_REASON: &str =
+    "the embedding model failed to load at startup; restart the server";
+
+/// Reason semantic search is unavailable, most permanent first; `None` when
+/// the backend is ONNX, the engine has its model and the embedder's last
+/// load succeeded (or has not run yet).
+fn unavailable_reason(
+    backend_reason: Option<&str>,
+    engine_model_missing: bool,
+    model_error: Option<String>,
+) -> Option<String> {
+    backend_reason
+        .map(str::to_string)
+        .or_else(|| engine_model_missing.then(|| ENGINE_MODEL_MISSING_REASON.to_string()))
+        .or_else(|| model_error.map(model_error_reason))
 }
 
 /// Reason shown by the search notice and `GET /stats` when the embedding

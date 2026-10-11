@@ -70,7 +70,9 @@ All notable changes to Semantiq will be documented in this file.
   backoff (30 s, doubling, up to 15 min) instead of once per server lifetime;
   until it succeeds `semantiq_search` starts with `⚠️ Semantic index
   unavailable: the embedding model could not be loaded (...)` and `GET /stats`
-  reports `"semantic_search": false` with the reason. The progress counters
+  reports `"semantic_search": false` with the reason. When the search
+  engine's own model copy failed to load at startup (loaded once, not
+  retried), the reason says to restart the server. The progress counters
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
