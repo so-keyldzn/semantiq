@@ -1,4 +1,5 @@
 use anyhow::Result;
+use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use std::io;
@@ -112,7 +113,12 @@ impl TextSearcher {
         compiled: &CompiledMatcher,
     ) -> Result<Vec<TextMatch>> {
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, &compiled.pattern, self.case_insensitive);
+        let mut sink = MatchSink::new(
+            &mut matches,
+            &compiled.matcher,
+            &compiled.pattern,
+            self.case_insensitive,
+        );
         Searcher::new().search_slice(&compiled.matcher, content.as_bytes(), &mut sink)?;
         Ok(matches)
     }
@@ -141,7 +147,7 @@ impl TextSearcher {
             .build(pattern)?;
 
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern, self.case_insensitive);
+        let mut sink = MatchSink::new(&mut matches, &matcher, pattern, self.case_insensitive);
 
         Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
 
@@ -158,31 +164,38 @@ impl Default for TextSearcher {
 /// Sink implementation to collect matches
 struct MatchSink<'a> {
     matches: &'a mut Vec<TextMatch>,
+    /// The matcher that selected the line, re-run on the trimmed line to
+    /// locate the match itself (a substring search for the pattern would
+    /// find `id` inside `uuid` before the whole-word match).
+    matcher: &'a RegexMatcher,
     pattern: &'a str,
-    /// Pre-computed lowercase pattern to avoid re-allocating on every line.
-    pattern_lower: String,
-    /// Whether the matcher ignored case: the match position and the exact
-    /// line check follow the same rule.
+    /// Whether the matcher ignored case: the exact-line check follows the
+    /// same rule.
     case_insensitive: bool,
 }
 
 impl<'a> MatchSink<'a> {
-    fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str, case_insensitive: bool) -> Self {
+    fn new(
+        matches: &'a mut Vec<TextMatch>,
+        matcher: &'a RegexMatcher,
+        pattern: &'a str,
+        case_insensitive: bool,
+    ) -> Self {
         Self {
             matches,
-            pattern_lower: pattern.to_lowercase(),
+            matcher,
             pattern,
             case_insensitive,
         }
     }
 
-    /// Byte offset of the first occurrence of the pattern in `line`.
-    fn match_start(&self, line: &str) -> Option<usize> {
-        if self.case_insensitive {
-            line.to_lowercase().find(&self.pattern_lower)
-        } else {
-            line.find(self.pattern)
-        }
+    /// Byte range of the first match in `line`.
+    fn match_range(&self, line: &str) -> Option<(usize, usize)> {
+        self.matcher
+            .find(line.as_bytes())
+            .ok()
+            .flatten()
+            .map(|m| (m.start(), m.end()))
     }
 
     fn calculate_score(&self, line: &str, match_start: usize) -> f32 {
@@ -195,16 +208,16 @@ impl<'a> MatchSink<'a> {
         } else if line_trimmed.is_ascii() && self.pattern.is_ascii() {
             line_trimmed.eq_ignore_ascii_case(self.pattern)
         } else {
-            line_trimmed.to_lowercase() == self.pattern_lower
+            line_trimmed.to_lowercase() == self.pattern.to_lowercase()
         };
 
         // Base score
         let mut score = if is_exact_line {
             0.9 // Exact line match
         } else if match_start == 0
-            || line
+            || line[..match_start]
                 .chars()
-                .nth(match_start.saturating_sub(1))
+                .next_back()
                 .map(|c| !c.is_alphanumeric())
                 .unwrap_or(true)
         {
@@ -239,13 +252,13 @@ impl Sink for MatchSink<'_> {
             return Ok(true);
         }
 
-        // Find match position within line for scoring
-        let match_start = self.match_start(&line_content).unwrap_or(0);
+        // Locate the match within the line for scoring and the snippet.
+        let (match_start, match_end) = self.match_range(&line_content).unwrap_or((0, 0));
 
         // Scored on the whole line, then cut around the match if too long.
         let score = self.calculate_score(&line_content, match_start);
-        let (line_content, match_start) = snippet_around(line_content, match_start);
-        let match_end = match_start + self.pattern.len();
+        let (line_content, match_start, match_end) =
+            snippet_around(line_content, match_start, match_end);
 
         self.matches.push(TextMatch {
             line_number,
@@ -259,15 +272,16 @@ impl Sink for MatchSink<'_> {
     }
 }
 
-/// Cut `line` to [`MAX_LINE_CHARS`] characters around the match starting at
-/// byte `match_start`, with a quarter of the window before the match.
-/// Returns the snippet and the match's byte offset in it.
-fn snippet_around(line: String, match_start: usize) -> (String, usize) {
+/// Cut `line` to [`MAX_LINE_CHARS`] characters around the match at byte
+/// range `match_start..match_end` (on char boundaries), with a quarter of
+/// the window before the match. Returns the snippet and the match's byte
+/// range in it.
+fn snippet_around(line: String, match_start: usize, match_end: usize) -> (String, usize, usize) {
     let total = line.chars().count();
     if total <= MAX_LINE_CHARS {
-        return (line, match_start);
+        return (line, match_start, match_end);
     }
-    let match_char = line[..match_start.min(line.len())].chars().count();
+    let match_char = line[..match_start].chars().count();
     let start = match_char
         .saturating_sub(MAX_LINE_CHARS / 4)
         .min(total - MAX_LINE_CHARS);
@@ -278,17 +292,22 @@ fn snippet_around(line: String, match_start: usize) -> (String, usize) {
         snippet.push('…');
     }
     let prefix_len = snippet.len();
-    snippet.extend(line.chars().skip(start).take(MAX_LINE_CHARS));
+    // Byte offset of the match start, then of the match end, in the window.
+    let window_start_byte = line
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let new_start = prefix_len + match_start.saturating_sub(window_start_byte);
+    let window: String = line.chars().skip(start).take(MAX_LINE_CHARS).collect();
+    let window_end_byte = window_start_byte + window.len();
+    let new_end =
+        prefix_len + match_end.clamp(window_start_byte, window_end_byte) - window_start_byte;
+    snippet.push_str(&window);
     if end < total {
         snippet.push('…');
     }
-    let offset: usize = line
-        .chars()
-        .skip(start)
-        .take(match_char - start)
-        .map(char::len_utf8)
-        .sum();
-    (snippet, prefix_len + offset)
+    (snippet, new_start, new_end)
 }
 
 #[cfg(test)]
@@ -355,6 +374,37 @@ mod tests {
             .map(|m| m.line_number)
             .collect();
         assert_eq!(lines, vec![1, 6]);
+    }
+
+    #[test]
+    fn test_match_offset_is_the_matcher_match_not_the_first_substring() {
+        // `find("id")` located `id` inside `uuid` (col 6) and scored the
+        // whole-word match at col 11 as a substring.
+        let searcher = TextSearcher::new(false);
+        let compiled = searcher.compile_word("id").unwrap();
+        let m = &searcher
+            .search_compiled("let uuid = id;", &compiled)
+            .unwrap()[0];
+        assert_eq!((m.match_start, m.match_end), (11, 13));
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "id");
+        assert!(m.score > 0.6, "word-boundary score, got {}", m.score);
+    }
+
+    #[test]
+    fn test_long_line_with_multibyte_case_folding_before_the_match() {
+        // `İ` lowercases to two chars (3 bytes instead of 2): offsets taken
+        // from `to_lowercase()` did not fit the line and the snippet slice
+        // could panic on a non-char boundary.
+        let searcher = TextSearcher::new(true);
+        let line = format!(
+            "{}{}é_needle{}",
+            "İ".repeat(300),
+            "x".repeat(300),
+            "y".repeat(300)
+        );
+        let m = &searcher.search(&line, "É_NEEDLE").unwrap()[0];
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "é_needle");
+        assert!(m.line_content.chars().count() <= MAX_LINE_CHARS + 2);
     }
 
     #[test]
