@@ -99,18 +99,16 @@ fn instructions_say_when_live_watching_is_off() {
         "{instructions}"
     );
 
-    let (watching, _temp) = super::create_test_server();
-    let server = SemantiqServer {
-        watching: true,
-        ..watching
-    };
+    // No indexer at all (watcher and fallback both failed): the note says
+    // auto-indexing is off, not merely live watching.
+    let (server, _temp) = super::create_test_server();
+    assert!(server.auto_indexer.is_none());
+    let instructions = server.get_info().instructions.unwrap();
     assert!(
-        !server
-            .get_info()
-            .instructions
-            .unwrap()
-            .contains("live file watching is off")
+        instructions.contains("auto-indexing is off"),
+        "{instructions}"
     );
+    assert!(!instructions.contains("live file watching is off"));
 }
 
 /// #52: a model that fails to load is reported as the reason semantic search

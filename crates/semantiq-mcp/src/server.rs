@@ -593,7 +593,13 @@ impl ServerHandler for SemantiqServer {
                  complete, semantiq_search says how much of the semantic index is ready.",
             );
         }
-        if !self.watching {
+        if self.auto_indexer.is_none() {
+            instructions.push_str(
+                " Note: auto-indexing is off in this session (the indexer could not be \
+                 created); the index is updated only by `semantiq index`, so answers may be \
+                 stale.",
+            );
+        } else if !self.watching {
             instructions.push_str(
                 " Note: live file watching is off in this session (the watcher could not be \
                  created); files edited after startup are reindexed only by `semantiq index` \
