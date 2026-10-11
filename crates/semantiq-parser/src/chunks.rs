@@ -123,14 +123,7 @@ impl ChunkExtractor {
             return;
         }
 
-        let mut window_start = start_line;
-        while window_start < end_line {
-            let mut window_end = window_start;
-            let mut window_size = 0;
-            while window_end < end_line && window_size < self.chunk_size {
-                window_size += lines[window_end].len() + 1;
-                window_end += 1;
-            }
+        for (window_start, window_end) in self.windows(lines, start_line, end_line) {
             let mut window_symbols: Vec<String> = symbols
                 .iter()
                 .filter(|b| b.start_line < window_end && window_start <= b.end_line)
@@ -146,14 +139,33 @@ impl ChunkExtractor {
                 window_end,
                 &window_symbols,
             ));
+        }
+    }
+
+    /// Windows of about `chunk_size` bytes over `lines[start_line..end_line]`
+    /// (0-based, exclusive), as `(start, end)` pairs. Consecutive windows
+    /// overlap by `OVERLAP_LINES`, capped at half the window so that long
+    /// lines (minified JS, generated tables, long literals: windows of 1–4
+    /// lines) do not duplicate most of the content and its embeddings.
+    fn windows(&self, lines: &[&str], start_line: usize, end_line: usize) -> Vec<(usize, usize)> {
+        let end_line = end_line.min(lines.len());
+        let mut windows = Vec::new();
+        let mut window_start = start_line;
+        while window_start < end_line {
+            let mut window_end = window_start;
+            let mut window_size = 0;
+            while window_end < end_line && window_size < self.chunk_size {
+                window_size += lines[window_end].len() + 1;
+                window_end += 1;
+            }
+            windows.push((window_start, window_end));
             if window_end >= end_line {
                 break;
             }
-            // Overlap, but always advance.
-            window_start = window_end
-                .saturating_sub(OVERLAP_LINES)
-                .max(window_start + 1);
+            let overlap = OVERLAP_LINES.min((window_end - window_start) / 2);
+            window_start = window_end - overlap;
         }
+        windows
     }
 
     fn find_semantic_boundaries(
@@ -312,28 +324,10 @@ impl ChunkExtractor {
     }
 
     fn line_based_chunks(&self, source: &str, lines: &[&str]) -> Vec<CodeChunk> {
-        let mut chunks = Vec::new();
-        let mut current_start = 0;
-
-        while current_start < lines.len() {
-            let mut current_size = 0;
-            let mut current_end = current_start;
-
-            while current_end < lines.len() && current_size < self.chunk_size {
-                current_size += lines[current_end].len() + 1;
-                current_end += 1;
-            }
-
-            let chunk = Self::create_chunk(source, lines, current_start, current_end, &[]);
-            chunks.push(chunk);
-
-            current_start = current_end.saturating_sub(OVERLAP_LINES);
-            if current_start <= chunks.last().map(|c| c.start_line - 1).unwrap_or(0) {
-                current_start = current_end;
-            }
-        }
-
-        chunks
+        self.windows(lines, 0, lines.len())
+            .into_iter()
+            .map(|(start, end)| Self::create_chunk(source, lines, start, end, &[]))
+            .collect()
     }
 }
 
@@ -569,6 +563,57 @@ class Calculator:
         let mut keys: Vec<_> = chunks.iter().map(|c| (c.start_line, c.end_line)).collect();
         keys.dedup();
         assert_eq!(keys.len(), chunks.len());
+    }
+
+    /// Long lines (minified JS, generated tables): windows of a few lines
+    /// must not overlap by more than half their size, or the content and its
+    /// embeddings are duplicated several times over the span.
+    #[test]
+    fn test_long_lines_do_not_duplicate_content_through_overlap() {
+        let mut support = LanguageSupport::new().unwrap();
+        let mut source = String::from("fn table() {\n");
+        let long_line = format!("    let row = \"{}\";\n", "x".repeat(580));
+        for _ in 0..200 {
+            source.push_str(&long_line);
+        }
+        source.push_str("}\n");
+        let tree = support.parse(Language::Rust, &source).unwrap();
+        let extractor = ChunkExtractor::new();
+        let chunks = extractor.extract(&tree, &source, Language::Rust).unwrap();
+
+        let lines = source.lines().count();
+        // 3 lines of ~600 bytes per window, overlap capped at 1: ~2 new lines
+        // per window instead of 1 (overlap 3 would advance one line at a time).
+        assert!(chunks.len() <= lines / 2 + 2, "{} chunks", chunks.len());
+        let stored: usize = chunks.iter().map(|c| c.content.len()).sum();
+        assert!(
+            stored <= 2 * source.len(),
+            "{stored} bytes stored for {}",
+            source.len()
+        );
+        assert_eq!(chunks.last().unwrap().end_line, lines);
+        for pair in chunks.windows(2) {
+            assert!(pair[1].start_line > pair[0].start_line);
+            assert!(pair[1].start_line <= pair[0].end_line + 1);
+        }
+    }
+
+    #[test]
+    fn test_line_based_chunks_overlap() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source: String = (0..40).map(|i| format!("// line {i}\n")).collect();
+        let tree = support.parse(Language::Rust, &source).unwrap();
+        let chunks = ChunkExtractor::new()
+            .with_chunk_size(100)
+            .extract(&tree, &source, Language::Rust)
+            .unwrap();
+        assert!(chunks.len() > 3);
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks.last().unwrap().end_line, 40);
+        for pair in chunks.windows(2) {
+            let overlap = pair[0].end_line + 1 - pair[1].start_line;
+            assert!((1..=OVERLAP_LINES).contains(&overlap), "overlap {overlap}");
+        }
     }
 
     #[test]
