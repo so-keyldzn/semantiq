@@ -22,6 +22,19 @@ All notable changes to Semantiq will be documented in this file.
   `calls` and `hierarchy`); `GET /stats` gains `indexed_refs`,
   `indexed_call_edges` and `indexed_type_relations` (#50).
 
+### Changed
+- The release workflow fails before building anything when the `v*` tag does
+  not match the version in `Cargo.toml`, `npm/package.json`,
+  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`: a
+  release whose binary reports another version made every MCP session log
+  `Update available` and `semantiq update` reinstall it forever (#51).
+- `semantiq update` checks before downloading that the binary can be
+  replaced: a Homebrew (`Cellar`) or npm (`node_modules`) install is refused
+  with the matching `brew upgrade semantiq` / `npm update -g semantiq-mcp`
+  command, and an unwritable install directory fails right away. Without a
+  platform data directory (sandboxed launch without HOME / XDG), the version
+  check no longer writes its cache into the current project (#51).
+
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
   of calls: `refs foo` shows the definition line, `calls foo` no longer lists
