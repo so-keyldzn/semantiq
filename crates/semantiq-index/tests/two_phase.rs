@@ -557,9 +557,35 @@ fn background_embedder_clears_a_load_failure_on_a_complete_index_without_notify(
     assert!(embedder.progress().in_progress().is_none());
 }
 
-/// A poll does not retry the chunks the model keeps failing on while nobody
-/// wrote to the database; a commit from another connection (CLI reindex that
-/// may have replaced them) or a notification does.
+/// Wait until `value()` has not changed for `window` (several polls), then
+/// return it. Panics after `timeout`.
+fn settled(timeout: Duration, window: Duration, value: impl Fn() -> usize) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last = value();
+    let mut since = std::time::Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = value();
+        if now != last {
+            last = now;
+            since = std::time::Instant::now();
+        } else if since.elapsed() >= window {
+            return now;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "value did not settle within {timeout:?}"
+        );
+    }
+}
+
+/// Polls do not keep retrying the chunks the model fails on while nobody
+/// writes to the database; a commit from another connection (a CLI reindex
+/// that may have replaced them) or a notification runs a pass again.
+///
+/// A poll right after a pass may find `data_version` moved by that pass's own
+/// commit and count once more (harmless, one extra pass), so the assertions
+/// are on the steady state over a window of polls, not on an exact count.
 #[test]
 fn background_embedder_poll_retries_failing_chunks_only_after_another_connection_writes() {
     #[derive(Default)]
@@ -597,16 +623,19 @@ fn background_embedder_poll_retries_failing_chunks_only_after_another_connection
         quick_config(),
     )
     .unwrap();
+    let calls = || model.calls.load(Ordering::SeqCst);
+    // Ten polls without a change in the number of attempts.
+    let window = quick_config().poll_interval * 10;
 
-    // First poll: one attempt per chunk, all left pending.
-    assert!(wait_until(Duration::from_secs(10), || {
-        model.calls.load(Ordering::SeqCst) >= pending
-    }));
-    std::thread::sleep(Duration::from_millis(300));
+    // First poll(s): one attempt per chunk, all left pending, then nothing.
+    assert!(wait_until(Duration::from_secs(10), || calls() >= pending));
+    let after_first = settled(Duration::from_secs(10), window, calls);
+    assert_eq!(after_first % pending, 0, "whole passes only");
+    assert_eq!(store.embedding_counts().unwrap().pending(), pending);
     assert_eq!(
-        model.calls.load(Ordering::SeqCst),
-        pending,
-        "later polls do not touch an unchanged database"
+        calls(),
+        after_first,
+        "polls do not touch an unchanged database"
     );
 
     // Another process reindexes: the pending set may have changed, so the
@@ -616,18 +645,15 @@ fn background_embedder_poll_retries_failing_chunks_only_after_another_connection
     let pending_now = store.embedding_counts().unwrap().pending();
     assert!(pending_now > pending);
     assert!(wait_until(Duration::from_secs(10), || {
-        model.calls.load(Ordering::SeqCst) >= pending + pending_now
+        calls() >= after_first + pending_now
     }));
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(model.calls.load(Ordering::SeqCst), pending + pending_now);
+    let after_write = settled(Duration::from_secs(10), window, calls);
+    assert_eq!((after_write - after_first) % pending_now, 0);
 
     // A notification always runs a pass.
     embedder.notify();
     assert!(embedder.wait_idle(Duration::from_secs(10)));
-    assert_eq!(
-        model.calls.load(Ordering::SeqCst),
-        pending + 2 * pending_now
-    );
+    assert!(calls() >= after_write + pending_now);
 }
 
 /// Shares one model between the test and the loader.
