@@ -113,6 +113,13 @@ All notable changes to Semantiq will be documented in this file.
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
 - `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
+- npm installer (`npm install -g semantiq-mcp`): release downloads follow
+  301/302/303/307/308 redirects (at most 5, each redirect response drained),
+  abort after 30 s without data instead of hanging `postinstall`, and retry
+  transient failures (network errors, timeouts, 429/5xx) three times with
+  backoff before printing the fallback instructions; a 404 is final. The
+  helpers are covered by `npm test` (`node --test`, Node 18+) against a local
+  HTTP server (#48).
 - `semantiq stats` finds the index the way the query commands do:
   `.semantiq.db` in the current directory or a parent, or `--database`. From
   a subdirectory of an indexed project it no longer fails with a hint that
