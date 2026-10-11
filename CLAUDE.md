@@ -108,7 +108,7 @@ crates/
 - **DB access**: Always use `IndexStore::with_conn(|conn| { ... })` — never lock the mutex directly. Exception: `check_and_prepare_for_reindex()` for multi-step transactions.
 - **FTS5 queries**: Always use `IndexStore::escape_fts5_query()` when passing user input to `symbols_fts MATCH`.
 - **Parameterized SQL**: Use `params![]` with positional `?1`, `?2` — never string interpolation.
-- **File paths in DB**: Always stored as relative paths from project root (via `strip_prefix`).
+- **File paths in DB**: Always stored relative to the project root, with `/` on every platform: `files.path` comes from `to_relative_string` (`semantiq-index/src/paths.rs`), `resolved_path` from `resolve_local_import`, both through `semantiq_parser::slash_path`. Path inputs (`deps`, `impact`/`calls` `file_path`, `path_prefix`, repo map focus) are normalized once by `semantiq_retrieval::normalize_input_path` at the engine entry points, so the CLI, MCP and HTTP front-ends accept either separator; the output builders echo that normalized form.
 - **MCP stdout is reserved** for protocol messages. All logs go to stderr (`tracing` with `.with_writer(std::io::stderr)`). JSON log format is automatic in serve mode.
 - **Error handling**: `anyhow::Result` internally. MCP tool handlers return `Result<String, String>` — `Err` strings are deliberately opaque to avoid leaking internals.
 - **Output contract**: the `--json` output of a CLI command is the `structuredContent` of the matching MCP tool. Any change to those shapes is documented in three places: `skills/semantiq/REFERENCE.md` (the examples agents read), `CHANGELOG.md` under `[Unreleased]` (a **Breaking** entry when a field is removed or renamed) and the README's MCP Tools section.
