@@ -4,11 +4,12 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
-
 ### Fixed
-- Resolve dotted local import paths (such as ./user.service) without
-  discarding the dotted suffix, while preserving explicit JavaScript-to-TypeScript
-  extension resolution and consistent paths on Windows.
+- Local import resolution keeps dotted module names: `./user.service` resolves to
+  `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
+  `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
+  accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
+  are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
 
 ## [0.11.0] - 2026-10-07
 

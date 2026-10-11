@@ -33,16 +33,19 @@ pub fn resolve_local_import(
 
         // Try exact match
         if abs.is_file() {
-            return Some(normalized.to_string_lossy().replace('\\', "/"));
+            return Some(normalized.to_string_lossy().to_string());
         }
 
-        // Try with language-specific extensions
-        for ext in extensions_for_language(language) {
-            let with_ext =
-                abs.with_file_name(format!("{}.{}", abs.file_name()?.to_string_lossy(), ext));
-            if with_ext.is_file() {
-                let rel = with_ext.strip_prefix(project_root).ok()?;
-                return Some(rel.to_string_lossy().replace('\\', "/"));
+        // Try with language-specific extensions, appended to the full file name so
+        // `./user.service` looks for `user.service.ts`, not `user.ts`.
+        if let Some(file_name) = abs.file_name() {
+            let file_name = file_name.to_string_lossy();
+            for ext in extensions_for_language(language) {
+                let with_ext = abs.with_file_name(format!("{file_name}.{ext}"));
+                if with_ext.is_file() {
+                    let rel = with_ext.strip_prefix(project_root).ok()?;
+                    return Some(rel.to_string_lossy().to_string());
+                }
             }
         }
 
@@ -57,7 +60,7 @@ pub fn resolve_local_import(
                 let swapped = abs.with_extension(ext);
                 if swapped.is_file() {
                     let rel = swapped.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().replace('\\', "/"));
+                    return Some(rel.to_string_lossy().to_string());
                 }
             }
         }
@@ -67,7 +70,7 @@ pub fn resolve_local_import(
                 let index_path = abs.join(index_name);
                 if index_path.is_file() {
                     let rel = index_path.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().replace('\\', "/"));
+                    return Some(rel.to_string_lossy().to_string());
                 }
             }
         }
@@ -77,7 +80,7 @@ pub fn resolve_local_import(
             let init_path = abs.join("__init__.py");
             if init_path.is_file() {
                 let rel = init_path.strip_prefix(project_root).ok()?;
-                return Some(rel.to_string_lossy().replace('\\', "/"));
+                return Some(rel.to_string_lossy().to_string());
             }
         }
     }
@@ -176,6 +179,8 @@ fn find_rust_src_dir(source_rel_path: &str) -> Option<String> {
 }
 
 fn resolve_js_import(source_dir: &Path, import_path: &str) -> Option<Vec<PathBuf>> {
+    // Bundler suffixes (`./x.ts?raw`, `./a.css?url`, `./b#frag`) are not part of the file name.
+    let import_path = import_path.split(['?', '#']).next().unwrap_or(import_path);
     if import_path.starts_with('.') {
         let file_path = source_dir.join(import_path);
         Some(vec![file_path])
@@ -298,6 +303,33 @@ mod tests {
         );
         assert_eq!(resolved.as_deref(), Some("src/user.service.ts"));
     }
+
+    #[test]
+    fn test_resolve_js_query_suffix_is_ignored() {
+        let dir = setup_project(&["src/app.ts", "src/registry.ts", "src/styles.css"]);
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "./registry.ts?raw",
+            Language::TypeScript,
+            dir.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some("src/registry.ts"));
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "./styles.css?url",
+            Language::TypeScript,
+            dir.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some("src/styles.css"));
+        let resolved = resolve_local_import(
+            "src/app.ts",
+            "./registry#x",
+            Language::TypeScript,
+            dir.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some("src/registry.ts"));
+    }
+
     #[test]
     fn test_resolve_js_index_import() {
         let dir = setup_project(&["src/components/index.ts", "src/app.ts"]);
