@@ -538,10 +538,10 @@ public:
         assert!(reference(&e.refs, "Ui", 27).is_none(), "closing tag");
 
         // The JavaScript grammar parses JSX too (`.jsx`, `.js`): the same
-        // rules apply.
+        // rules apply, plus namespaced names and lowercase member tags.
         let jsx = extract_file(
             "src/App.jsx",
-            "export function App() {\n  return (\n    <div className=\"a\" onClick={go}>\n      <Button label=\"x\" />\n      <Ui.Card />\n    </div>\n  );\n}\n",
+            "export function App() {\n  return (\n    <svg:rect xlink:href=\"#a\" onClick={go}>\n      <Button label=\"x\" />\n      <Ui.Card />\n      <motion.div />\n    </svg:rect>\n  );\n}\n",
         );
         assert!(!jsx.has_error);
         assert_eq!(
@@ -563,13 +563,17 @@ public:
             "{:?}",
             jsx.calls
         );
-        for name in ["label", "onClick", "className", "div"] {
+        for name in ["label", "onClick", "svg", "rect", "xlink", "href", "div"] {
             assert!(
                 !jsx.refs.iter().any(|r| r.name == name),
                 "`{name}` must not be a reference: {:?}",
                 jsx.refs
             );
         }
+        assert_eq!(
+            reference(&jsx.refs, "motion", 6).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
     }
 
     // B12 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).

@@ -451,14 +451,16 @@ fn jsx_element_of(node: Node) -> Option<Node> {
     })
 }
 
-/// JSX : le nom d'un attribut (`onClick=`, `className=`), une balise
-/// intrinsèque (`<div>`, en minuscules) et une balise fermante (`</Button>`,
-/// même usage que l'ouvrante) ne désignent aucun symbole du projet.
+/// JSX (grammaires TSX et JavaScript) : le nom d'un attribut (`onClick=`,
+/// `className=`), un nom à espace de noms (`<svg:rect>`, `xlink:href=`), une
+/// balise intrinsèque (`<div>`, `<motion.div>` : dernier segment en
+/// minuscules) et une balise fermante (`</Button>`, même usage que
+/// l'ouvrante) ne désignent aucun symbole du projet.
 fn is_jsx_noise(node: Node, text: &str) -> bool {
-    if node
-        .parent()
-        .is_some_and(|p| p.kind() == "jsx_attribute" && p.named_child(0) == Some(node))
-    {
+    if node.parent().is_some_and(|p| {
+        p.kind() == "jsx_namespace_name"
+            || (p.kind() == "jsx_attribute" && p.named_child(0) == Some(node))
+    }) {
         return true;
     }
     // Balise fermante : tout son nom, `Ui` compris dans `</Ui.Card>`.
@@ -471,10 +473,7 @@ fn is_jsx_noise(node: Node, text: &str) -> bool {
     if ancestor.is_some_and(|a| a.kind() == "jsx_closing_element") {
         return true;
     }
-    jsx_element_of(node).is_some_and(|element| {
-        element.child_by_field_name("name") == Some(node)
-            && text.starts_with(|c: char| c.is_lowercase())
-    })
+    jsx_element_of(node).is_some() && text.starts_with(|c: char| c.is_lowercase())
 }
 
 /// Balise d'un composant JSX (`<Button />`, `<Ui.Card>`) : rendre le
