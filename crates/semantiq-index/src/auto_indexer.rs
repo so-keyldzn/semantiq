@@ -1,6 +1,6 @@
 use crate::IndexStore;
 use crate::exclusions::{
-    is_file_too_large, project_walker, project_walker_with, should_exclude_path,
+    WalkFailures, is_file_too_large, project_walker, project_walker_with, should_exclude_path,
 };
 use crate::paths::to_relative_string;
 use crate::store::DependencyInsert;
@@ -105,11 +105,11 @@ impl AutoIndexer {
 
         let mut result = InitialIndexResult::default();
         let mut seen_paths = HashSet::new();
-        // Set when part of the tree could not be walked (unreadable directory,
-        // I/O error): the files under it are then absent from `seen_paths`
-        // without having vanished, and pruning them would throw their rows
-        // (and embeddings) away for nothing.
-        let mut walk_incomplete = false;
+        // Where the walk failed (unreadable directory, I/O error): the files
+        // under a failed directory are absent from `seen_paths` without having
+        // vanished, and pruning them would throw their rows (and embeddings)
+        // away for nothing.
+        let mut failures = WalkFailures::default();
 
         // The project walk: `.gitignore` and excluded names (`exclusions.rs`).
         for entry in project_walker(&self.project_root).build() {
@@ -123,7 +123,7 @@ impl AutoIndexer {
                 }
                 Err(e) => {
                     warn!("Walk error, files under it are kept in the index: {}", e);
-                    walk_incomplete = true;
+                    failures.record(&e, &self.project_root);
                     result.errors += 1;
                     continue;
                 }
@@ -201,11 +201,17 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
-        // Not when the walk missed part of the tree: a file not seen is then
-        // not necessarily gone, and the next complete walk prunes for real.
-        // The root is recorded only when the walk did reach files of it.
-        if walk_incomplete {
-            warn!("Walk incomplete: files missing from it are kept in the index");
+        // Not under a directory the walk could not list: a file not seen there
+        // is not necessarily gone, and the next walk that lists it prunes for
+        // real. Elsewhere pruning goes on, so that a permanently unreadable
+        // directory does not pile stale rows up forever.
+        if !failures.is_empty() {
+            warn!("Walk incomplete: files under the directories it could not list are kept");
+        }
+        if failures.covers_root() {
+            // The walk failed at the root itself, or without saying where:
+            // nothing can be told stale. The root is recorded only when the
+            // walk did reach files of it.
             if !seen_paths.is_empty() {
                 self.record_project_root(0)?;
             }
@@ -214,7 +220,7 @@ impl AutoIndexer {
                 .store
                 .list_file_paths()?
                 .into_iter()
-                .filter(|path| !seen_paths.contains(path))
+                .filter(|path| !seen_paths.contains(path) && !failures.covers(path))
                 .collect();
 
             // Safety net: a walk that found nothing indexable while the index

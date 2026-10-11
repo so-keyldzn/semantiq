@@ -475,8 +475,9 @@ fn unreadable_file_loses_its_row() {
 }
 
 /// A directory that cannot be listed is a walk error: its files are kept in
-/// the index (they did not vanish) and the error is counted. Needs a
-/// non-root user: root reads a `chmod 000` directory anyway.
+/// the index (they did not vanish), the error is counted, and pruning goes
+/// on outside that directory. Needs a non-root user: root reads a
+/// `chmod 000` directory anyway.
 #[cfg(unix)]
 #[test]
 fn walk_error_keeps_files_under_the_unreadable_dir() {
@@ -517,8 +518,8 @@ fn walk_error_keeps_files_under_the_unreadable_dir() {
         return;
     }
 
-    // Meanwhile a file really was deleted: it is not pruned either, since the
-    // walk cannot tell it apart from the files it could not reach.
+    // Meanwhile a file really was deleted outside the locked directory: the
+    // walk did list its directory, so it is pruned as usual.
     fs::remove_file(root.join("src/util.rs")).unwrap();
 
     let result = indexer.initial_index().unwrap();
@@ -527,9 +528,10 @@ fn walk_error_keeps_files_under_the_unreadable_dir() {
         "the unreadable directory is a walk error"
     );
     assert_eq!(
-        result.removed, 0,
-        "nothing is pruned after an incomplete walk"
+        result.removed, 1,
+        "a file that vanished outside the unlisted directory is pruned"
     );
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
     assert!(
         store
             .get_file_by_path("locked/secret.rs")
@@ -537,20 +539,83 @@ fn walk_error_keeps_files_under_the_unreadable_dir() {
             .is_some(),
         "files under the unreadable directory keep their rows"
     );
-    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
 
-    // Once readable again, the next walk prunes what really vanished and
-    // keeps what is there.
+    // Once readable again, the next walk keeps what is there...
     drop(_restore);
     let result = indexer.initial_index().unwrap();
     assert_eq!(result.errors, 0);
-    assert_eq!(result.removed, 1);
-    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert_eq!(result.removed, 0);
     assert!(
         store
             .get_file_by_path("locked/secret.rs")
             .unwrap()
             .is_some()
     );
+
+    // ...and prunes under it what really vanished.
+    fs::remove_file(root.join("locked/secret.rs")).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 1);
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// The project root itself cannot be listed: the walk fails at depth 0 and
+/// sees nothing, which must read as "could not look", not as "every file
+/// vanished" nor as a wrong project root. Nothing is pruned, the index is
+/// untouched and `initial_index` returns `Ok`. Needs a non-root user.
+#[cfg(unix)]
+#[test]
+fn unreadable_root_keeps_the_index() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("project");
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(root.clone());
+    if fs::read_dir(&root).is_ok() {
+        eprintln!("skipped: the root is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    let result = indexer
+        .initial_index()
+        .expect("an unlistable root is not a wrong root");
+    assert!(result.errors >= 1, "the unlistable root is a walk error");
+    assert_eq!(result.removed, 0, "nothing is pruned");
+    assert_eq!(result.indexed, 0);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
+    assert_eq!(
+        store.get_project_root().unwrap(),
+        Some(root.canonicalize().unwrap()),
+        "the root recorded by the first walk is left alone"
+    );
+
+    // Readable again: everything is still there and nothing is reindexed.
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
 }

@@ -174,12 +174,16 @@ All notable changes to Semantiq will be documented in this file.
   prunes it; a file that became ignored since it was indexed is dropped on
   save. `AutoIndexer::process_file_events` applies a batch of events and is
   what `process_events` calls.
-- Walk errors no longer prune the index (#53): a directory that cannot be
-  listed (permissions, mount hiccup) is logged and counted in `errors`, and
-  the files under it keep their rows and embeddings, since the walk cannot
-  tell them from files that vanished; the next complete walk prunes for
-  real. The query refresh check does the same. A previously indexed file that
-  can no longer be read (not UTF-8 any more, unreadable) loses its stale row.
+- Walk errors no longer prune the files they hid (#53): a directory that
+  cannot be listed (permissions, mount hiccup) is logged and counted in
+  `errors`, and the files under it keep their rows and embeddings, since the
+  walk cannot tell them from files that vanished; pruning goes on everywhere
+  else, so a permanently unreadable directory (root-owned volume, restrictive
+  mount) does not disable it, and the next walk that lists the directory
+  prunes under it for real. A walk error without a path blocks pruning for
+  that run. The query refresh check applies the same rule. A previously
+  indexed file that can no longer be read (not UTF-8 any more, unreadable)
+  loses its stale row.
 - Indexing writes less (#41): a file's imports are written in one transaction
   (`IndexStore::replace_dependencies`, one commit per file instead of one per
   import), and the partial index `idx_chunks_pending` (`chunks(id) WHERE

@@ -7,6 +7,7 @@
 //! query-side staleness check, the text search and the watcher agree on what
 //! belongs to the project.
 
+use crate::paths::to_relative_string;
 use ignore::{DirEntry, WalkBuilder};
 use semantiq_parser::Language;
 use std::path::Path;
@@ -189,6 +190,69 @@ where
     builder
 }
 
+/// Where a project walk failed: the directories it could not list, relative
+/// to the root, and whether it failed somewhere it could not name.
+///
+/// A walk only ever adds or updates rows; what turns a directory the walk
+/// could not list into lost rows (and embeddings) is pruning the files it did
+/// not reach. A failure under `locked/` therefore keeps every row under
+/// `locked/` and nothing else: a permanently unreadable directory (root-owned
+/// volume, restrictive mount) must not disable pruning for the whole project
+/// forever. A failure without a path keeps every row.
+#[derive(Debug, Default)]
+pub struct WalkFailures {
+    dirs: Vec<String>,
+    unlocated: bool,
+}
+
+impl WalkFailures {
+    /// Records a walk error. Partial errors (a `.gitignore` the walker could
+    /// only partly parse) are not failures: the walk went on.
+    pub fn record(&mut self, err: &ignore::Error, root: &Path) {
+        if err.is_partial() {
+            return;
+        }
+        match walk_error_path(err) {
+            Some(path) => self.dirs.push(to_relative_string(path, root)),
+            None => self.unlocated = true,
+        }
+    }
+
+    /// Whether the walk failed nowhere.
+    pub fn is_empty(&self) -> bool {
+        self.dirs.is_empty() && !self.unlocated
+    }
+
+    /// Whether the failure covers the whole project: the root itself could
+    /// not be listed, or the walk failed without saying where. No row can
+    /// then be told stale.
+    pub fn covers_root(&self) -> bool {
+        self.unlocated || self.dirs.iter().any(|dir| dir.is_empty())
+    }
+
+    /// Whether the walk may have missed `rel_path`: it lies under a directory
+    /// that could not be listed, or the walk failed without saying where.
+    /// Such a row is not provably stale and is kept.
+    pub fn covers(&self, rel_path: &str) -> bool {
+        self.unlocated
+            || self
+                .dirs
+                .iter()
+                .any(|dir| Path::new(rel_path).starts_with(dir))
+    }
+}
+
+/// The path an `ignore` walk error carries (`WithPath`, possibly wrapped in
+/// `WithDepth`): the directory that could not be listed, or the entry whose
+/// metadata could not be read. `None` for errors without one.
+pub fn walk_error_path(err: &ignore::Error) -> Option<&Path> {
+    match err {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::WithDepth { err, .. } => walk_error_path(err),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +331,62 @@ mod tests {
         assert!(!should_exclude_entry(".github"));
         assert!(!should_exclude_entry(".storybook"));
         assert!(!should_exclude_entry(".env"));
+    }
+
+    fn io_walk_error(path: Option<&Path>, depth: Option<usize>) -> ignore::Error {
+        let mut err = ignore::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        if let Some(path) = path {
+            err = ignore::Error::WithPath {
+                path: path.to_path_buf(),
+                err: Box::new(err),
+            };
+        }
+        if let Some(depth) = depth {
+            err = ignore::Error::WithDepth {
+                depth,
+                err: Box::new(err),
+            };
+        }
+        err
+    }
+
+    /// A failed directory covers its own subtree only; a failure without a
+    /// path, or on the root itself, covers everything; a partial error nothing.
+    #[test]
+    fn test_walk_failures_cover_the_failed_subtree() {
+        let root = Path::new("/proj");
+
+        let mut none = WalkFailures::default();
+        none.record(&ignore::Error::Partial(vec![]), root);
+        assert!(none.is_empty());
+        assert!(!none.covers_root());
+        assert!(!none.covers("src/main.rs"));
+
+        let mut locked = WalkFailures::default();
+        locked.record(&io_walk_error(Some(&root.join("locked")), Some(1)), root);
+        locked.record(&io_walk_error(Some(&root.join("a/b")), None), root);
+        assert!(!locked.is_empty());
+        assert!(!locked.covers_root());
+        assert!(locked.covers("locked/secret.rs"));
+        assert!(locked.covers("locked/deep/er.rs"));
+        assert!(locked.covers("a/b/c.rs"));
+        assert!(!locked.covers("locked.rs"));
+        assert!(!locked.covers("lockedfoo/x.rs"));
+        assert!(!locked.covers("a/x.rs"));
+        assert!(!locked.covers("src/main.rs"));
+
+        let mut at_root = WalkFailures::default();
+        at_root.record(&io_walk_error(Some(root), Some(0)), root);
+        assert!(at_root.covers_root());
+        assert!(at_root.covers("src/main.rs"));
+
+        let mut unlocated = WalkFailures::default();
+        unlocated.record(&io_walk_error(None, Some(2)), root);
+        assert!(unlocated.covers_root());
+        assert!(unlocated.covers("src/main.rs"));
     }
 
     /// The shared walk: hidden tooling directories are walked, excluded names
