@@ -449,9 +449,12 @@ fn watcher_events_follow_gitignore_and_excluded_names() {
         "export function storybookRenamed(): number { return 1; }\n",
     );
     write_file(&root, "src/new.rs", "pub fn brand_new() -> i32 { 6 }\n");
+    // Editors report several events per save: a file is indexed once.
     let result = indexer.process_file_events(vec![
         FileEvent::Modified(root.join(".storybook/main.ts")),
         FileEvent::Created(root.join("src/new.rs")),
+        FileEvent::Modified(root.join("src/new.rs")),
+        FileEvent::Modified(root.join(".storybook/main.ts")),
     ]);
     assert_eq!(result.indexed, 2);
     assert_eq!(result.errors, 0);

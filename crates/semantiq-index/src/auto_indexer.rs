@@ -315,6 +315,11 @@ impl AutoIndexer {
             }
         }
 
+        // The watcher reports several events per save (and per file on a
+        // branch switch): one walk and one index pass per file.
+        changed.sort();
+        changed.dedup();
+
         if !changed.is_empty() {
             let (walked, walk_complete) = self.walked_subset(&changed);
             for path in changed {
@@ -365,10 +370,23 @@ impl AutoIndexer {
     /// files, without a matcher to keep in sync with them.
     fn walked_subset(&self, candidates: &[PathBuf]) -> (HashSet<String>, bool) {
         let root = self.project_root.clone();
-        let wanted: HashSet<String> = candidates
-            .iter()
-            .map(|path| to_relative_string(path, &root))
-            .collect();
+        // The candidates and every directory above them, so that the filter
+        // is one hash lookup per entry: a branch switch hands over thousands
+        // of paths in one batch.
+        let mut wanted: HashSet<String> = HashSet::with_capacity(candidates.len());
+        let mut ancestors: HashSet<String> = HashSet::new();
+        for path in candidates {
+            let rel = to_relative_string(path, &root);
+            let mut dir = Path::new(&rel).parent();
+            while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
+                // An ancestor already there brought its own ancestors along.
+                if !ancestors.insert(d.to_string_lossy().into_owned()) {
+                    break;
+                }
+                dir = d.parent();
+            }
+            wanted.insert(rel);
+        }
         let keep_root = root.clone();
         let walker = project_walker_with(&root, move |entry| {
             if entry.depth() == 0 {
@@ -376,9 +394,7 @@ impl AutoIndexer {
             }
             let rel = to_relative_string(entry.path(), &keep_root);
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                wanted
-                    .iter()
-                    .any(|wanted| Path::new(wanted).starts_with(&rel))
+                ancestors.contains(&rel)
             } else {
                 wanted.contains(&rel)
             }

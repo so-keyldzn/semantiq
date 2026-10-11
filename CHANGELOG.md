@@ -177,8 +177,9 @@ All notable changes to Semantiq will be documented in this file.
   by `.gitignore`, the global git excludes or `.git/info/exclude` (nested
   `.gitignore` files included) no longer indexes it until the next refresh
   prunes it; a file that became ignored since it was indexed is dropped on
-  save. `AutoIndexer::process_file_events` applies a batch of events and is
-  what `process_events` calls.
+  save. `AutoIndexer::process_file_events` applies a batch of events (one
+  restricted walk per batch, duplicate events collapsed) and is what
+  `process_events` calls.
 - Walk errors no longer prune the files they hid (#53): a directory that
   cannot be listed (permissions, mount hiccup) is logged and counted in
   `errors`, and the files under it keep their rows and embeddings, since the
