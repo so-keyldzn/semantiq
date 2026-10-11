@@ -33,6 +33,11 @@ All notable changes to Semantiq will be documented in this file.
   embedding only covered its first 512 tokens: semantic search can now hit the
   whole body, and a hit returns a window rather than a 3000-line chunk. The
   embedding carry-over on edit is per window (#62).
+- An older Semantiq binary opening an index written by a newer one (after a
+  `semantiq update` rollback, or a plugin binary next to a `cargo run` on a
+  branch that bumped the schema) refuses it with an error naming both schema
+  versions, instead of writing its lower version back and making the newer
+  binary fail on every start (#35).
 - `delete_file` purges the `chunks_vec` rows and deletes the file in one
   transaction: a crash or `SQLITE_BUSY` between the two statements can no
   longer leave a chunk with an embedding but no vector, invisible to both

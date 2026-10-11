@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
@@ -33,18 +34,41 @@ fn get_stored_schema_version(conn: &Connection) -> SqliteResult<i32> {
     }
 }
 
+/// Refuse a database written by a newer Semantiq (its `schema_version` is
+/// above this binary's).
+///
+/// Writing the lower version back, as `init_schema` used to, made the newer
+/// binary re-run its migrations on an already migrated database (`duplicate
+/// column name`) and fail on every start, while the older binary's writes
+/// into dropped columns failed per file. Nothing is touched: the user updates
+/// Semantiq or deletes the database.
+fn ensure_schema_not_newer(stored: i32) -> Result<()> {
+    if stored > SCHEMA_VERSION {
+        bail!(
+            "this index was written by a newer Semantiq (schema version {stored}, this \
+             binary supports {SCHEMA_VERSION}): update Semantiq (`semantiq update`) or \
+             delete the database and run `semantiq index` again"
+        );
+    }
+    Ok(())
+}
+
 /// Apply incremental migrations to bring an existing database up to the current schema.
 /// This must be called BEFORE `init_schema()` on existing databases.
-pub fn migrate_schema(conn: &Connection) -> SqliteResult<()> {
+///
+/// Fails without touching the database when it was written by a newer
+/// Semantiq (see [`ensure_schema_not_newer`]).
+pub fn migrate_schema(conn: &Connection) -> Result<()> {
     migrate_schema_to(conn, SCHEMA_VERSION)
 }
 
 /// Like [`migrate_schema`] but stops at `target` (clamped to `SCHEMA_VERSION`).
 /// Lets tests pin the effect of one migration step in isolation.
 #[doc(hidden)]
-pub fn migrate_schema_to(conn: &Connection, target: i32) -> SqliteResult<()> {
+pub fn migrate_schema_to(conn: &Connection, target: i32) -> Result<()> {
     let target = target.min(SCHEMA_VERSION);
     let stored = get_stored_schema_version(conn)?;
+    ensure_schema_not_newer(stored)?;
 
     if stored == 0 || stored >= target {
         // Fresh database or already up to date — nothing to migrate
@@ -67,7 +91,7 @@ pub fn migrate_schema_to(conn: &Connection, target: i32) -> SqliteResult<()> {
             let _ = conn.execute("ROLLBACK", []);
         }
     }
-    result
+    result.with_context(|| format!("schema migration from version {stored} to {target} failed"))
 }
 
 fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteResult<()> {
@@ -319,7 +343,14 @@ fn reconcile_embedding_space(conn: &Connection) -> SqliteResult<()> {
     }
 }
 
-pub fn init_schema(conn: &Connection) -> SqliteResult<()> {
+/// Create the tables in their final shape (`CREATE TABLE IF NOT EXISTS`) and
+/// stamp `schema_version` / the embedding model. Run after [`migrate_schema`].
+///
+/// A database stamped with a newer schema version is refused before anything
+/// is created or written, so the stamp is never lowered.
+pub fn init_schema(conn: &Connection) -> Result<()> {
+    ensure_schema_not_newer(get_stored_schema_version(conn)?)?;
+
     conn.execute_batch(
         r#"
         -- Metadata table for schema versioning
@@ -856,6 +887,81 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    /// #35: an older binary opening a database stamped with a newer schema
+    /// version must refuse it and leave the stamp alone, instead of writing
+    /// its own (lower) version back and breaking the newer binary's next
+    /// migration.
+    #[test]
+    fn test_newer_schema_is_refused_and_stamp_survives() {
+        crate::store::init_sqlite_vec();
+        let conn = Connection::open_in_memory().unwrap();
+        let newer = SCHEMA_VERSION + 1;
+        conn.execute_batch(&format!(
+            "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO metadata (key, value) VALUES ('schema_version', '{newer}');"
+        ))
+        .unwrap();
+
+        let stamp = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        let err = migrate_schema(&conn).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("schema version {newer}"))
+                && err.contains(&format!("supports {SCHEMA_VERSION}")),
+            "error must name both versions: {err}"
+        );
+        assert_eq!(stamp(&conn), newer.to_string());
+
+        // `init_schema` on its own must not lower the stamp either, nor create
+        // anything.
+        let err = init_schema(&conn).unwrap_err().to_string();
+        assert!(err.contains("newer Semantiq"), "{err}");
+        assert_eq!(stamp(&conn), newer.to_string());
+        assert!(!table_exists(&conn, "files").unwrap());
+        assert!(conn.is_autocommit(), "no transaction left open");
+    }
+
+    /// Same scenario through the production entry point, on disk: `open`
+    /// fails, names the database, and the stamp survives for the newer binary.
+    #[test]
+    fn test_open_refuses_newer_database_on_disk() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join(".semantiq.db");
+        let newer = SCHEMA_VERSION + 1;
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO metadata (key, value) VALUES ('schema_version', '{newer}');"
+            ))
+            .unwrap();
+        }
+
+        let err = match IndexStore::open(&db_path) {
+            Ok(_) => panic!("opening a newer database must fail"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(err.contains(".semantiq.db"), "{err}");
+        assert!(err.contains(&format!("schema version {newer}")), "{err}");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let stamp: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stamp, newer.to_string());
     }
 
     #[test]

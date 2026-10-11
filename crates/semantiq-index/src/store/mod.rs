@@ -118,8 +118,9 @@ impl IndexStore {
 
         Self::apply_pragmas(&conn)?;
 
-        migrate_schema(&conn)?;
-        init_schema(&conn)?;
+        migrate_schema(&conn)
+            .and_then(|()| init_schema(&conn))
+            .with_context(|| format!("Cannot open the index at {}", path.display()))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
