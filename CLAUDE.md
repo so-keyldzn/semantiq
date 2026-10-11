@@ -12,6 +12,7 @@ cargo test                           # Run all tests (stub embeddings, never dow
 cargo test -p semantiq-parser        # Tests for one crate
 cargo test -p semantiq-parser test_language_from_extension  # Single test
 cargo test -p semantiq --test cli    # CLI integration tests (spawn the built binary on a temp project)
+cd npm && npm test                   # npm installer tests (node --test, Node 18+)
 cargo check                          # Type-check without building
 cargo fmt --all --check              # Format check, as CI runs it
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # Lint, as CI runs it (warnings fail)
