@@ -5,11 +5,16 @@ All notable changes to Semantiq will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
+  of calls: `refs foo` shows the definition line, `calls foo` no longer lists
+  `foo` as its own caller nor `def` as a callee, and `alias` / `import` / `use`
+  / `require` arguments are `import` references (#59).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
+- `PARSER_VERSION` 14: existing indexes are rebuilt for the fixes above.
 
 ## [0.11.0] - 2026-10-07
 

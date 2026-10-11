@@ -666,6 +666,15 @@ mod tests {
     }
 
     #[test]
+    fn test_elixir_call_edges_skip_definition_heads() {
+        let e = edges(
+            Language::Elixir,
+            "defmodule M do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\nend\n",
+        );
+        assert_eq!(e, vec![edge("foo", "bar", 3)]);
+    }
+
+    #[test]
     fn test_python_call_edges_top_level() {
         let e = edges(
             Language::Python,

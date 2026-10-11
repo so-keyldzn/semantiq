@@ -8,6 +8,12 @@ defmodule MyApp.User do
   end
 
   defmacro guarded(x), do: x
+
+  def positive?(x) when is_integer(x), do: x > 0
+
+  def greet(name) do
+    hello(name)
+  end
 end
 
 defmodule MyApp.Outer do

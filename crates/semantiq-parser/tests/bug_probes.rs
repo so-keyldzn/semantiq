@@ -1,12 +1,41 @@
 #[cfg(test)]
 mod bug_probes {
     use semantiq_parser::language::{Language, LanguageSupport};
+    use semantiq_parser::references::{Reference, ReferenceExtractor, ReferenceKind};
+    use semantiq_parser::structure::StructureExtractor;
     use semantiq_parser::symbols::{Symbol, SymbolExtractor, SymbolKind};
 
     fn extract(lang: Language, source: &str) -> Vec<Symbol> {
         let mut support = LanguageSupport::new().unwrap();
         let tree = support.parse(lang, source).unwrap();
         SymbolExtractor::extract(&tree, source, lang).unwrap()
+    }
+
+    fn references(lang: Language, source: &str) -> Vec<Reference> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        ReferenceExtractor::extract(&tree, source, lang)
+    }
+
+    /// `(line, kind)` of every reference named `name`.
+    fn kinds_of(refs: &[Reference], name: &str) -> Vec<(usize, ReferenceKind)> {
+        refs.iter()
+            .filter(|r| r.name == name)
+            .map(|r| (r.line, r.kind))
+            .collect()
+    }
+
+    /// `(caller, callee, line)` call edges of `source`.
+    fn call_edges(lang: Language, source: &str) -> Vec<(String, String, usize)> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, lang);
+        StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+            .calls
+            .into_iter()
+            .map(|e| (e.caller, e.callee, e.line))
+            .collect()
     }
 
     // B1: Python decorated method must NOT be duplicated.
@@ -253,5 +282,26 @@ public:
                 );
             }
         }
+    }
+
+    // B11 (#59): Elixir `def` / `defp` heads are definitions, not calls. The
+    // keyword itself is not indexed and no call edge points at `def`/`defp` or
+    // at the function being defined.
+    #[test]
+    fn b11_elixir_def_head_is_definition() {
+        let source =
+            "defmodule M do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\nend\n";
+        let refs = references(Language::Elixir, source);
+        assert_eq!(kinds_of(&refs, "foo"), vec![(2, ReferenceKind::Definition)]);
+        assert_eq!(
+            kinds_of(&refs, "bar"),
+            vec![(3, ReferenceKind::Call), (5, ReferenceKind::Definition)]
+        );
+        assert!(kinds_of(&refs, "def").is_empty());
+        assert!(kinds_of(&refs, "defp").is_empty());
+        assert!(kinds_of(&refs, "defmodule").is_empty());
+
+        let edges = call_edges(Language::Elixir, source);
+        assert_eq!(edges, vec![("foo".to_string(), "bar".to_string(), 3)]);
     }
 }

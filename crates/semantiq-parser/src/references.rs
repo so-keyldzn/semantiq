@@ -90,9 +90,9 @@ impl ReferenceExtractor {
             if node.named_child_count() == 0 {
                 if is_identifier(node)
                     && let Ok(text) = node.utf8_text(source.as_bytes())
+                    && let Some(kind) = classify(node, text, source.as_bytes(), language)
                 {
                     let line = node.start_position().row + 1;
-                    let kind = classify(node);
                     for name in names_of(text) {
                         if name.chars().count() >= MIN_NAME_LEN {
                             by_line
@@ -158,9 +158,15 @@ fn names_of(text: &str) -> impl Iterator<Item = &str> {
     std::iter::once(text).chain(last)
 }
 
-fn classify(node: Node) -> ReferenceKind {
+/// Classe une occurrence ; `None` = mot-clé à ne pas indexer (Elixir `def`).
+fn classify(node: Node, text: &str, source: &[u8], language: Language) -> Option<ReferenceKind> {
+    if language == Language::Elixir
+        && let Some(kind) = classify_elixir(node, text, source)
+    {
+        return kind;
+    }
     // Import d'abord : `import { Foo }` a un champ `name` dans un `*_specifier`.
-    if in_import(node) {
+    Some(if in_import(node) {
         ReferenceKind::Import
     } else if is_definition_name(node) {
         ReferenceKind::Definition
@@ -170,6 +176,81 @@ fn classify(node: Node) -> ReferenceKind {
         ReferenceKind::Type
     } else {
         ReferenceKind::Reference
+    })
+}
+
+/// Mots-clés Elixir qui déclarent un symbole : `def foo(x)` est un `call` dont
+/// le `target` est `def` et dont le premier argument porte le nom déclaré.
+/// Même liste que `queries/elixir/tags.scm`, plus `defimpl`.
+const ELIXIR_DEFINERS: [&str; 13] = [
+    "defmodule",
+    "defprotocol",
+    "defimpl",
+    "def",
+    "defp",
+    "defmacro",
+    "defmacrop",
+    "defguard",
+    "defguardp",
+    "defdelegate",
+    "defn",
+    "defnp",
+    "defstruct",
+];
+
+/// Directives Elixir : leurs arguments sont des imports, pas des appels.
+const ELIXIR_DIRECTIVES: [&str; 4] = ["alias", "import", "use", "require"];
+
+/// Elixir : les mots-clés `def*` / `alias` / `import`… sont des `call` dans
+/// l'AST. Retourne `Some(None)` pour le mot-clé lui-même (pas indexé),
+/// `Some(Some(Definition))` pour le nom qu'il déclare, `Some(Some(Import))`
+/// pour l'argument d'une directive, et `None` quand le classement générique
+/// s'applique.
+fn classify_elixir(node: Node, text: &str, source: &[u8]) -> Option<Option<ReferenceKind>> {
+    let parent = node.parent()?;
+    // Le mot-clé : `def` dans `(call target: (identifier))`.
+    if node.kind() == "identifier"
+        && parent.kind() == "call"
+        && is_field(parent, node, "target")
+        && (ELIXIR_DEFINERS.contains(&text) || ELIXIR_DIRECTIVES.contains(&text))
+    {
+        return Some(None);
+    }
+    // Le nom déclaré : premier argument du mot-clé, directement (`def foo`,
+    // `defmodule M`), comme cible d'un appel (`def foo(x)`) ou à gauche d'un
+    // `when` (`def foo(x) when ...`).
+    let head = if parent.kind() == "arguments" {
+        node
+    } else if parent.kind() == "call" && is_field(parent, node, "target") {
+        let mut head = parent;
+        if let Some(op) = head.parent()
+            && op.kind() == "binary_operator"
+            && is_field(op, head, "left")
+        {
+            head = op;
+        }
+        head
+    } else {
+        return None;
+    };
+    let arguments = head.parent()?;
+    if arguments.kind() != "arguments" || arguments.named_child(0) != Some(head) {
+        return None;
+    }
+    let keyword = arguments.parent()?;
+    if keyword.kind() != "call" {
+        return None;
+    }
+    let keyword_text = keyword
+        .child_by_field_name("target")
+        .and_then(|t| t.utf8_text(source).ok())?;
+    // `defimpl Proto, for: T` ne déclare ni `Proto` ni `T`.
+    if ELIXIR_DEFINERS.contains(&keyword_text) && keyword_text != "defimpl" {
+        Some(Some(ReferenceKind::Definition))
+    } else if ELIXIR_DIRECTIVES.contains(&keyword_text) {
+        Some(Some(ReferenceKind::Import))
+    } else {
+        None
     }
 }
 
@@ -426,6 +507,31 @@ mod tests {
             "defmodule M do\n  def f, do: A.Foo.new()\nend",
         );
         assert!(r.iter().any(|x| x.name == "Foo" && x.line == 2));
+    }
+
+    #[test]
+    fn test_elixir_definitions_are_not_calls() {
+        let r = refs(
+            Language::Elixir,
+            "defmodule Mod do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\n  def baz(x) when is_integer(x), do: x\n  def noparen, do: :ok\n  alias A.B\n  import Enum\nend\n",
+        );
+        assert_eq!(kinds_of(&r, "Mod"), vec![(1, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&r, "foo"), vec![(2, ReferenceKind::Definition)]);
+        assert_eq!(
+            kinds_of(&r, "bar"),
+            vec![(3, ReferenceKind::Call), (5, ReferenceKind::Definition)]
+        );
+        assert_eq!(kinds_of(&r, "baz"), vec![(6, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&r, "is_integer"), vec![(6, ReferenceKind::Call)]);
+        assert_eq!(
+            kinds_of(&r, "noparen"),
+            vec![(7, ReferenceKind::Definition)]
+        );
+        assert_eq!(kinds_of(&r, "A.B"), vec![(8, ReferenceKind::Import)]);
+        assert_eq!(kinds_of(&r, "Enum"), vec![(9, ReferenceKind::Import)]);
+        for keyword in ["defmodule", "def", "defp", "alias", "import"] {
+            assert!(kinds_of(&r, keyword).is_empty(), "{keyword} indexed");
+        }
     }
 
     #[test]
