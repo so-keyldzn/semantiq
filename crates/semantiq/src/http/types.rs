@@ -153,6 +153,11 @@ pub(super) struct StatsResponse {
     /// (counts are still growing).
     #[serde(default)]
     pub indexing: bool,
+    /// True when the file watcher reindexes edits made while the server runs;
+    /// false when it could not be created (e.g. inotify watch limit): edits
+    /// are then picked up only by `semantiq index` or a restart.
+    #[serde(default)]
+    pub watching: bool,
     /// Chunks with an embedding, out of `indexed_chunks`.
     #[serde(default)]
     pub embedded_chunks: usize,

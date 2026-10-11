@@ -61,6 +61,10 @@ All notable changes to Semantiq will be documented in this file.
   (`semantiq refs x` after editing files) or `semantiq index --no-embeddings`
   no longer leaves chunks without an embedding until an unrelated file changes
   (#37).
+- `serve` still runs the initial index and the embedder when the file watcher
+  cannot be created (inotify watch limit on a large tree): it falls back to an
+  indexer without watcher, logs a WARN that live reindexing is off, says so in
+  the MCP instructions, and `GET /stats` reports `"watching": false` (#47).
 - A failed embedding model load (download, disk, digest) is retried with a
   backoff (30 s, doubling, up to 15 min) instead of once per server lifetime;
   until it succeeds `semantiq_search` starts with `⚠️ Semantic index

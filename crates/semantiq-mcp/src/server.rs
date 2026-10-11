@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::version_check::{VersionCheckConfig, check_for_update};
 
@@ -34,6 +34,10 @@ pub struct SemantiqServer {
     engine: Arc<RetrievalEngine>,
     store: Arc<IndexStore>,
     auto_indexer: Option<Arc<Mutex<AutoIndexer>>>,
+    /// False when the file watcher could not be created (e.g. inotify watch
+    /// limit): the initial index and the embedder still run, but edits made
+    /// after startup are not reindexed.
+    watching: bool,
     /// True while the initial index pass (phase 1: structure) started by
     /// `start_auto_indexer` runs.
     initial_indexing: Arc<AtomicBool>,
@@ -56,24 +60,57 @@ impl SemantiqServer {
         let engine = Arc::new(RetrievalEngine::new(Arc::clone(&store), project_root));
 
         // Initialize auto-indexer with the same shared store
-        let auto_indexer = match AutoIndexer::new(Arc::clone(&store), PathBuf::from(project_root)) {
-            Ok(indexer) => {
-                info!("Auto-indexing enabled");
-                Some(Arc::new(Mutex::new(indexer)))
-            }
-            Err(e) => {
-                info!("Auto-indexing disabled: {}", e);
-                None
-            }
-        };
+        let project_root = PathBuf::from(project_root);
+        let (auto_indexer, watching) =
+            match AutoIndexer::new(Arc::clone(&store), project_root.clone()) {
+                Ok(indexer) => {
+                    info!("Auto-indexing enabled");
+                    (Some(Arc::new(Mutex::new(indexer))), true)
+                }
+                Err(e) => Self::indexer_without_watcher(&store, project_root, &e),
+            };
 
         Ok(Self {
             engine,
             store,
             auto_indexer,
+            watching,
             initial_indexing: Arc::new(AtomicBool::new(false)),
             embedder: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Fallback when the file watcher cannot be created (inotify watch limit
+    /// on a large tree, unsupported filesystem): index without one so the
+    /// initial pass and the embedder still run, and say so.
+    fn indexer_without_watcher(
+        store: &Arc<IndexStore>,
+        project_root: PathBuf,
+        cause: &anyhow::Error,
+    ) -> (Option<Arc<Mutex<AutoIndexer>>>, bool) {
+        match AutoIndexer::without_watcher(Arc::clone(store), project_root) {
+            Ok(indexer) => {
+                warn!(
+                    "File watcher unavailable, live reindexing is off (restart the server or \
+                     run `semantiq index` after editing files): {}",
+                    cause
+                );
+                (Some(Arc::new(Mutex::new(indexer))), false)
+            }
+            Err(e) => {
+                error!(
+                    "Auto-indexing disabled: file watcher unavailable ({}) and indexer \
+                     initialization failed ({})",
+                    cause, e
+                );
+                (None, false)
+            }
+        }
+    }
+
+    /// Whether the file watcher reindexes edits made while the server runs.
+    pub fn is_watching(&self) -> bool {
+        self.watching
     }
 
     /// Spawn a background version check that notifies the MCP client if an update is available.
@@ -208,11 +245,14 @@ impl SemantiqServer {
     /// Phase 1 (structure) runs first over the whole project; then the
     /// background embedder (phase 2) is woken and fills the chunk embeddings on
     /// its own thread while queries and the watcher go on. Watcher events run
-    /// phase 1 right away and queue their new chunks for the embedder.
+    /// phase 1 right away and queue their new chunks for the embedder. Without
+    /// a watcher (`is_watching() == false`) only the initial pass runs; the
+    /// embedder still polls for chunks left pending by another process.
     pub fn start_auto_indexer(&self) {
         if let Some(ref auto_indexer) = self.auto_indexer {
             let indexer = Arc::clone(auto_indexer);
             let initial_indexing = Arc::clone(&self.initial_indexing);
+            let watching = self.watching;
             initial_indexing.store(true, Ordering::Relaxed);
 
             let embedder = match BackgroundEmbedder::spawn(
@@ -264,6 +304,10 @@ impl SemantiqServer {
                     Err(e) => {
                         tracing::error!("Initial indexing task panicked: {}", e);
                     }
+                }
+
+                if !watching {
+                    return;
                 }
 
                 // Then start watching for changes
@@ -547,6 +591,13 @@ impl ServerHandler for SemantiqServer {
                 " The index is being built: structural tools answer as soon as files are \
                  parsed, while embeddings are computed in the background; until they are \
                  complete, semantiq_search says how much of the semantic index is ready.",
+            );
+        }
+        if !self.watching {
+            instructions.push_str(
+                " Note: live file watching is off in this session (the watcher could not be \
+                 created); files edited after startup are reindexed only by `semantiq index` \
+                 or a server restart.",
             );
         }
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())

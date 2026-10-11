@@ -26,6 +26,7 @@ pub(super) fn create_test_server() -> (SemantiqServer, TempDir) {
         engine,
         store,
         auto_indexer: None,
+        watching: false,
         initial_indexing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         embedder: Arc::new(std::sync::OnceLock::new()),
     };

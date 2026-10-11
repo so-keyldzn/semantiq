@@ -142,7 +142,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 - `IndexStore`: `Arc<Mutex<Connection>>` — serialized single connection.
 - `LanguageSupport`: Wrapped in `Mutex` in `AutoIndexer` (tree-sitter parsers are `!Send`).
 - `OnnxEmbeddingModel`: `Mutex<Session>`.
-- `BackgroundEmbedder`: own thread and model; `EmbeddingProgress` (embedded/total packed in one atomic, single writer) read by the `semantiq_search` notice (`⏳ Semantic index N% ready`) and `GET /stats`.
+- `BackgroundEmbedder`: own thread and model; `EmbeddingProgress` (embedded/total packed in one atomic, single writer) read by the `semantiq_search` notice (`⏳ Semantic index N% ready`) and `GET /stats`. `SemantiqServer` falls back to `AutoIndexer::without_watcher` when the watcher cannot be created (`is_watching() == false`: no event loop, initial index and embedder still run).
 - `RetrievalEngine`: `Arc<RwLock<ThresholdConfig>>` for thresholds, `Mutex<Option<FileListCache>>` (30s TTL) for text search file list, `Mutex<Option<(fingerprint, Arc<RankedRepo>)>>` for the unfocused repo map ranking.
 
 ### HTTP API (`--http-port`)

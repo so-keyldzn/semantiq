@@ -570,6 +570,11 @@ by a query command) and embeds them. If the embedding model cannot be loaded
 `semantiq_search` starts with `⚠️ Semantic index unavailable` and `GET /stats`
 reports `"semantic_search": false` with the reason.
 
+If the file watcher cannot be created (for example the inotify watch limit on a
+large tree), `serve` logs a warning, still runs the initial index and the
+embedder, and reports `"watching": false` in `GET /stats`; files edited
+afterwards are reindexed by `semantiq index` or a restart.
+
 The index lives in `.semantiq.db` at the project root, so each git worktree has
 its own index and is indexed separately.
 

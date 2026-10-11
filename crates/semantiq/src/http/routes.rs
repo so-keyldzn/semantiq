@@ -68,6 +68,7 @@ async fn stats(
             indexed_chunks: stats.chunk_count,
             indexed_dependencies: stats.dependency_count,
             indexing: server.is_initial_indexing(),
+            watching: server.is_watching(),
             embedded_chunks: embeddings.embedded,
             semantic_index_ready_percent: embeddings.percent(),
             embedding: server.embedding_in_progress().is_some(),
