@@ -619,6 +619,7 @@ Indexing follows `.gitignore` (plus the global git excludes and
 never hold project source:
 ```
 VCS:          .git, .hg, .svn, .jj
+credentials:  .aws, .azure, .docker, .gnupg, .kube, .ssh
 dependencies: node_modules, bower_components, jspm_packages, vendor, venv, .venv,
               .yarn, .pnp.cjs, .pnpm-store, .bundle, .npm, .m2, .gem, .gradle,
               .stack-work, .dart_tool, .terraform
@@ -631,10 +632,12 @@ caches:       __pycache__, .cache, .parcel-cache, .turbo, .nx, .nyc_output,
               .ipynb_checkpoints
 IDE state:    .idea, .vs, .vscode-test, .history
 ```
-plus Semantiq's own files (`.semantiq.db*`). Other hidden directories
+plus Semantiq's own files (`.semantiq.db*`) and credential files, whose name
+starts with `.env`, `.secret` or `.credential` (`.env.json`, `.env.yaml`,
+`.envrc`, `.secrets.yml`, `.credentials.json`...). Other hidden directories
 (`.github`, `.storybook`, `.vscode`, `.config`, `.husky`, `.changeset`,
-`.devcontainer`, `.claude`...) are indexed like any other, subject to
-`.gitignore`.
+`.devcontainer`, `.claude`...) and hidden files (`.eslintrc.json`,
+`.gitlab-ci.yml`...) are indexed like any other, subject to `.gitignore`.
 
 ## Benchmark
 

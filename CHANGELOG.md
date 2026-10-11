@@ -49,11 +49,16 @@ All notable changes to Semantiq will be documented in this file.
   source: VCS state (`.git`, `.hg`, `.svn`, `.jj`), dependencies
   (`node_modules`, `vendor`, `.venv`, `.yarn`...), build output (`target`,
   `dist`, `.next`, `.nuxt`...), caches (`.cache`, `.turbo`, `.mypy_cache`...),
-  IDE state (`.idea`, `.vs`) and Semantiq's own files (`.semantiq*`); the full
-  list is `EXCLUDED_DIRS`. The initial walk, the query refresh check, the text
-  search and the watcher share one walk configuration (`project_walker`).
-  Text search still leaves dot-files out, since it reads files of any
-  extension. `PARSER_VERSION` 17: existing indexes are rebuilt.
+  IDE state (`.idea`, `.vs`), credential stores (`.aws`, `.azure`,
+  `.docker`, `.gnupg`, `.kube`, `.ssh`) and Semantiq's own files
+  (`.semantiq*`); the full list is `EXCLUDED_DIRS`. Hidden files are indexed
+  too (`.eslintrc.json`, `.gitlab-ci.yml`), except credential files, whose
+  name starts with `.env`, `.secret` or `.credential` (`.env.json`,
+  `.env.yaml`, `.secrets.yml`, `.credentials.json`): never parsed, chunked,
+  embedded or returned by search. The initial walk, the query refresh check,
+  the text search and the watcher share one walk configuration
+  (`project_walker`). Text search still leaves dot-files out, since it reads
+  files of any extension. `PARSER_VERSION` 17: existing indexes are rebuilt.
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead

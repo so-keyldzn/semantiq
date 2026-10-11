@@ -43,15 +43,24 @@ pub fn exceeds_indexed_size(path: &Path, size: u64) -> bool {
 /// `.vscode`, `.config`, `.husky`, `.changeset`, `.devcontainer`, `.claude`...
 /// hold real source and configuration and follow the project's `.gitignore`
 /// like any other directory. What is excluded by name is what never holds
-/// project source: VCS state, dependency trees, build output, tool caches and
-/// IDE state. Semantiq's own files (`.semantiq.db*`) are excluded by prefix,
-/// see [`should_exclude_entry`].
+/// project source: VCS state, dependency trees, build output, tool caches,
+/// IDE state and credential stores. Semantiq's own files (`.semantiq.db*`)
+/// and credential files (`.env*`, `.secret*`, `.credential*`) are excluded by
+/// prefix, see [`should_exclude_entry`].
 pub const EXCLUDED_DIRS: &[&str] = &[
     // Version control
     ".git",
     ".hg",
     ".svn",
     ".jj",
+    // Credentials: a tool's home directory checked out or mounted next to the
+    // code must never be parsed, chunked or embedded.
+    ".aws",
+    ".azure",
+    ".docker",
+    ".gnupg",
+    ".kube",
+    ".ssh",
     // Dependencies
     "node_modules",
     "bower_components",
@@ -123,6 +132,12 @@ pub const EXCLUDED_DIRS: &[&str] = &[
 /// `.semantiq.db-wal`, `.semantiq.db-shm`), never indexed and never watched.
 const SEMANTIQ_PREFIX: &str = ".semantiq";
 
+/// Name prefixes of credential files: `.env`, `.env.json`, `.env.yaml`,
+/// `.env.local`, `.envrc`, `.secrets.yml`, `.credentials.json`... Hidden
+/// files are indexed when their extension is a supported language, and these
+/// would otherwise be parsed, chunked, embedded and returned by search.
+const CREDENTIAL_PREFIXES: &[&str] = &[".env", ".secret", ".credential"];
+
 /// Check if a path should be excluded from indexing
 ///
 /// Returns true if any component of the path is an excluded name (see
@@ -150,12 +165,17 @@ pub fn should_exclude(path: &Path) -> bool {
 
 /// Check if a directory entry name should be excluded (for WalkBuilder filter).
 ///
-/// Returns true for the names in [`EXCLUDED_DIRS`] and for Semantiq's own
-/// files (`.semantiq*`). Other hidden names are kept: `.github/workflows`,
+/// Returns true for the names in [`EXCLUDED_DIRS`], for Semantiq's own files
+/// (`.semantiq*`) and for credential files (`.env*`, `.secret*`,
+/// `.credential*`). Other hidden names are kept: `.github/workflows`,
 /// `.storybook/main.ts` or `.eslintrc.json` are project source and follow
 /// `.gitignore` like everything else.
 pub fn should_exclude_entry(name: &str) -> bool {
-    name.starts_with(SEMANTIQ_PREFIX) || EXCLUDED_DIRS.contains(&name)
+    name.starts_with(SEMANTIQ_PREFIX)
+        || CREDENTIAL_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || EXCLUDED_DIRS.contains(&name)
 }
 
 /// Whether a walked entry is excluded by name ([`should_exclude_entry`]).
@@ -283,6 +303,39 @@ mod tests {
     }
 
     #[test]
+    fn test_should_exclude_credential_files_and_dirs() {
+        for path in [
+            ".env",
+            ".env.json",
+            ".env.yaml",
+            ".env.local",
+            ".envrc",
+            "apps/web/.env.production.json",
+            ".secrets.yml",
+            ".secret.toml",
+            ".credentials.json",
+            ".docker/config.json",
+            ".kube/config.yaml",
+            ".aws/cli/cache/token.json",
+            ".azure/azureProfile.json",
+            ".gnupg/gpg.conf",
+            ".ssh/config",
+        ] {
+            assert!(should_exclude_path(Path::new(path)), "{path}");
+        }
+        // Only the leading dot marks a credential file: `env.rs`,
+        // `secrets.rs` and `credentials.ts` are code.
+        for path in [
+            "src/env.rs",
+            "src/secrets.rs",
+            "lib/credentials.ts",
+            "environment.yml",
+        ] {
+            assert!(!should_exclude_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
     fn test_hidden_tooling_dirs_are_indexed() {
         for path in [
             ".storybook/main.ts",
@@ -330,7 +383,12 @@ mod tests {
         assert!(!should_exclude_entry("lib"));
         assert!(!should_exclude_entry(".github"));
         assert!(!should_exclude_entry(".storybook"));
-        assert!(!should_exclude_entry(".env"));
+        assert!(!should_exclude_entry(".eslintrc.json"));
+        assert!(should_exclude_entry(".env"));
+        assert!(should_exclude_entry(".env.json"));
+        assert!(should_exclude_entry(".secrets.yml"));
+        assert!(should_exclude_entry(".credentials.json"));
+        assert!(should_exclude_entry(".docker"));
     }
 
     fn io_walk_error(path: Option<&Path>, depth: Option<usize>) -> ignore::Error {
@@ -405,6 +463,8 @@ mod tests {
             ("node_modules/x/index.js", "x"),
             (".idea/workspace.xml", "<x/>"),
             (".semantiq.db", "sqlite"),
+            (".env.json", "{\"TOKEN\": \"x\"}"),
+            (".docker/config.json", "{\"auths\": {}}"),
             ("generated/schema.ts", "export type S = 1;"),
             (".gitignore", "generated/\n"),
         ] {

@@ -324,6 +324,14 @@ fn build_hidden_dirs_project(root: &Path) {
         "export function cachedThing(): number { return 4; }\n",
     );
     write_file(root, "node_modules/dep/index.js", "module.exports = 1;\n");
+    // Credential files and directories, hidden like the tooling directories
+    // but never indexed.
+    write_file(root, ".env.json", "{\"envJsonToken\": \"s3cr3t\"}\n");
+    write_file(
+        root,
+        ".docker/config.json",
+        "{\"dockerConfigAuth\": \"s3cr3t\"}\n",
+    );
 }
 
 #[test]
@@ -349,8 +357,28 @@ fn hidden_tooling_dirs_are_indexed_and_excluded_dirs_are_not() {
             "src/lib.rs",
             "src/util.rs",
         ],
-        "hidden tooling directories are indexed; .gitignore, VCS, cache, IDE \
-         and dependency directories are not"
+        "hidden tooling directories are indexed; .gitignore, VCS, cache, IDE, \
+         dependency and credential directories and credential files are not"
+    );
+    assert!(store.get_file_by_path(".env.json").unwrap().is_none());
+    assert!(
+        store
+            .get_file_by_path(".docker/config.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("envJsonToken")
+            .unwrap()
+            .is_empty(),
+        "a key of a credential file must not be a symbol"
+    );
+    assert!(
+        store
+            .find_symbol_by_name("dockerConfigAuth")
+            .unwrap()
+            .is_empty()
     );
     assert!(
         !store
