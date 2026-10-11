@@ -3,7 +3,9 @@
 Each query command prints one JSON object on stdout, identical to the
 `structuredContent` of the matching MCP tool. Optional fields are omitted when
 empty (never `null`). Line numbers are 1-based; paths are relative to the
-project root.
+project root and use `/` on every platform (Windows included); a path argument
+(`deps <file>`, `--file`, `--focus`, `--path-prefix`) is accepted with either
+`/` or `\`.
 
 ## `semantiq search <query> --json`
 

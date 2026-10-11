@@ -7,9 +7,9 @@
 //! never defines (standard library, dependencies) are not listed as edges but
 //! summarised in `external_callees`.
 
-use super::RetrievalEngine;
 use super::impact::{ImpactConfidence, ImpactDefinition};
 use super::resolution::{DefLocation, Resolver};
+use super::{RetrievalEngine, normalize_input_path};
 use anyhow::Result;
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use tracing::info;
@@ -102,6 +102,8 @@ impl RetrievalEngine {
         info!(symbol = %symbol_name, ?file_path, ?direction, max_depth, max_edges, "Building call graph");
         let max_depth = max_depth.clamp(1, MAX_CALL_DEPTH);
         let max_edges = max_edges.clamp(1, MAX_CALL_EDGES);
+        let file_path = file_path.map(normalize_input_path);
+        let file_path = file_path.as_deref();
         let mut resolver = Resolver::new(self);
 
         let roots: Vec<DefLocation> = resolver

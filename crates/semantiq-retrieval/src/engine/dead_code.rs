@@ -14,9 +14,9 @@
 //! carrying an attribute or decorator (framework / macro registration) and
 //! methods of types extending a library supertype (possible overrides).
 
-use super::RetrievalEngine;
 use super::impact::is_test_location;
 use super::resolution::Resolver;
+use super::{RetrievalEngine, normalize_input_path};
 use anyhow::Result;
 use semantiq_index::UnreferencedSymbol;
 use std::collections::HashMap;
@@ -102,8 +102,13 @@ impl RetrievalEngine {
     pub fn find_dead_code(&self, options: &DeadCodeOptions) -> Result<DeadCodeReport> {
         info!(?options, "Finding dead code");
         let limit = options.limit.clamp(1, MAX_DEAD_CODE_LIMIT);
+        let path_prefix = options
+            .path_prefix
+            .as_deref()
+            .map(normalize_input_path)
+            .filter(|prefix| !prefix.is_empty());
         let candidates = self.store.find_unreferenced_symbols(
-            options.path_prefix.as_deref(),
+            path_prefix.as_deref(),
             options.language.as_deref(),
             MAX_CANDIDATES,
         )?;

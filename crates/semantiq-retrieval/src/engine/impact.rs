@@ -12,7 +12,7 @@
 //! method is only followed through calls: a plain reference to its name there
 //! is usually a local variable or module that happens to share it.
 
-use super::RetrievalEngine;
+use super::{RetrievalEngine, normalize_input_path};
 use anyhow::Result;
 use semantiq_index::{DependencyRecord, SymbolRecord};
 use std::collections::hash_map::Entry;
@@ -154,6 +154,8 @@ impl RetrievalEngine {
         info!(symbol = %symbol_name, ?file_path, max_depth, max_sites, "Analyzing impact");
         let max_depth = max_depth.clamp(1, MAX_IMPACT_DEPTH);
         let max_sites = max_sites.clamp(1, MAX_IMPACT_SITES);
+        let file_path = file_path.map(normalize_input_path);
+        let file_path = file_path.as_deref();
         let mut caches = Caches::default();
 
         let mut definitions: Vec<ImpactDefinition> = Vec::new();

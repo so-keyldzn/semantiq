@@ -6,7 +6,13 @@
 //! `chunks_vec` in sync with `chunks` (the resulting orphan vectors silently
 //! poison KNN). This module centralizes the conversion so the rule has exactly
 //! one implementation.
+//!
+//! The relative form always uses `/` as separator, whatever the platform
+//! ([`semantiq_parser::slash_path`], shared with `resolved_path`): agents,
+//! the documented output contract and the `/`-only inputs never see a
+//! backslash, and a Windows index stays comparable with a `/` argument.
 
+use semantiq_parser::slash_path;
 use std::path::{Component, Path, PathBuf};
 
 /// Lexically normalize a *relative* path by resolving `.` and `..` components
@@ -55,7 +61,8 @@ fn normalize_relative(rel: &Path) -> Option<PathBuf> {
 /// On a symlink cycle `canonicalize` returns `Err` (it's bounded internally),
 /// and we fall through to the WARN branch with the original path.
 ///
-/// Returns the relative form. If stripping fails — typically because `path` is
+/// Returns the relative form, with `/` between components on every platform.
+/// If stripping fails — typically because `path` is
 /// not actually inside `project_root` — a `WARN` is logged and the path is
 /// returned as-is. Indexing an "outside" file is almost always a bug; the warn
 /// makes it visible instead of silently inserting absolute paths.
@@ -68,7 +75,7 @@ pub fn to_relative_string(path: &Path, project_root: &Path) -> String {
     if let Ok(rel) = path.strip_prefix(project_root)
         && let Some(norm) = normalize_relative(rel)
     {
-        return norm.to_string_lossy().to_string();
+        return slash_path(&norm);
     }
 
     // Fallback: canonicalize both and retry. Necessary on macOS where /tmp
@@ -83,7 +90,7 @@ pub fn to_relative_string(path: &Path, project_root: &Path) -> String {
         .ok()
         .and_then(normalize_relative)
     {
-        Some(rel) => rel.to_string_lossy().to_string(),
+        Some(rel) => slash_path(&rel),
         None => {
             tracing::warn!(
                 path = %path.display(),
@@ -134,6 +141,33 @@ mod tests {
             PathBuf::from(&s).is_absolute(),
             "expected absolute, got: {s}"
         );
+    }
+
+    /// #68: the stored key uses `/` whatever the platform separator. The
+    /// relative part is built with `MAIN_SEPARATOR` so the test is explicit
+    /// about separators on every OS, and would fail on Windows without the
+    /// conversion.
+    #[test]
+    fn relative_form_uses_forward_slashes_on_every_platform() {
+        let root = TempDir::new().unwrap();
+        let sub = root.path().join("sub").join("deep");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("file.rs"), "").unwrap();
+
+        let sep = std::path::MAIN_SEPARATOR;
+        let native = root.path().join(format!("sub{sep}deep{sep}file.rs"));
+        let s = to_relative_string(&native, root.path());
+        assert_eq!(s, "sub/deep/file.rs");
+        assert!(!s.contains('\\'), "no backslash in a stored path: {s}");
+    }
+
+    /// On Windows the walker hands us backslash paths; the key still uses `/`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_backslash_paths_are_stored_with_forward_slashes() {
+        let root = Path::new(r"C:\proj");
+        let s = to_relative_string(Path::new(r"C:\proj\src\lib\foo.ts"), root);
+        assert_eq!(s, "src/lib/foo.ts");
     }
 
     /// `sub/../sub/file.rs` must collapse to the same dedup key as

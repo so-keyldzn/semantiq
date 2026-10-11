@@ -13,7 +13,7 @@ pub use engine::{
     ImpactConfidence, ImpactDefinition, ImpactSite, MAX_CALL_DEPTH, MAX_CALL_EDGES,
     MAX_DEAD_CODE_LIMIT, MAX_HIERARCHY_DEPTH, MAX_HIERARCHY_EDGES, MAX_IMPACT_DEPTH,
     MAX_IMPACT_SITES, RetrievalEngine, SymbolDefinition, SymbolExplanation, TypeEdge,
-    TypeHierarchy, is_test_location,
+    TypeHierarchy, is_test_location, normalize_input_path,
 };
 pub use query::{Query, QueryExpander, SearchOptions};
 pub use repo_map::{

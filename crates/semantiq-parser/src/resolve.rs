@@ -33,7 +33,7 @@ pub fn resolve_local_import(
 
         // Try exact match
         if abs.is_file() {
-            return Some(normalized.to_string_lossy().to_string());
+            return Some(slash_path(&normalized));
         }
 
         // Try with language-specific extensions, appended to the full file name so
@@ -44,7 +44,7 @@ pub fn resolve_local_import(
                 let with_ext = abs.with_file_name(format!("{file_name}.{ext}"));
                 if with_ext.is_file() {
                     let rel = with_ext.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().to_string());
+                    return Some(slash_path(rel));
                 }
             }
         }
@@ -60,7 +60,7 @@ pub fn resolve_local_import(
                 let swapped = abs.with_extension(ext);
                 if swapped.is_file() {
                     let rel = swapped.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().to_string());
+                    return Some(slash_path(rel));
                 }
             }
         }
@@ -70,7 +70,7 @@ pub fn resolve_local_import(
                 let index_path = abs.join(index_name);
                 if index_path.is_file() {
                     let rel = index_path.strip_prefix(project_root).ok()?;
-                    return Some(rel.to_string_lossy().to_string());
+                    return Some(slash_path(rel));
                 }
             }
         }
@@ -80,12 +80,27 @@ pub fn resolve_local_import(
             let init_path = abs.join("__init__.py");
             if init_path.is_file() {
                 let rel = init_path.strip_prefix(project_root).ok()?;
-                return Some(rel.to_string_lossy().to_string());
+                return Some(slash_path(rel));
             }
         }
     }
 
     None
+}
+
+/// Render a relative path with `/` between its components, whatever the
+/// platform separator.
+///
+/// Every path the index stores or emits goes through this (via
+/// `semantiq_index::paths::to_relative_string` for `files.path`, here for
+/// `resolved_path`), so a Windows index holds `src/lib/foo.ts` like the
+/// documentation, the agents and the `/`-only inputs expect, and
+/// `resolved_path` stays comparable to `files.path` everywhere.
+pub fn slash_path(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
@@ -390,6 +405,37 @@ mod tests {
         let resolved =
             resolve_local_import("src/main.ts", "react", Language::TypeScript, dir.path());
         assert!(resolved.is_none());
+    }
+
+    /// #68: `resolved_path` uses `/` on every platform. `Path::join` inserts the
+    /// native separator, so this exercises the conversion wherever it runs.
+    #[test]
+    fn test_slash_path_uses_forward_slashes() {
+        let native = Path::new("src").join("lib").join("foo.ts");
+        assert!(native.to_string_lossy().contains(std::path::MAIN_SEPARATOR));
+        assert_eq!(slash_path(&native), "src/lib/foo.ts");
+        assert_eq!(slash_path(Path::new("foo.ts")), "foo.ts");
+        assert_eq!(slash_path(Path::new("")), "");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_slash_path_windows_backslashes() {
+        assert_eq!(slash_path(Path::new(r"src\lib\foo.ts")), "src/lib/foo.ts");
+    }
+
+    #[test]
+    fn test_resolved_paths_use_forward_slashes() {
+        let dir = setup_project(&["src/components/Button.tsx", "src/utils/helpers.ts"]);
+        let resolved = resolve_local_import(
+            "src/components/Button.tsx",
+            "../utils/helpers",
+            Language::TypeScript,
+            dir.path(),
+        )
+        .unwrap();
+        assert!(!resolved.contains('\\'), "{resolved}");
+        assert_eq!(resolved, "src/utils/helpers.ts");
     }
 
     #[test]

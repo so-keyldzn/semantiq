@@ -33,6 +33,12 @@ All notable changes to Semantiq will be documented in this file.
   embedding only covered its first 512 tokens: semantic search can now hit the
   whole body, and a hit returns a window rather than a 3000-line chunk. The
   embedding carry-over on edit is per window (#62).
+- Stored paths (`files.path`, `resolved_path`, every `path` / `file_path` in
+  the outputs) use `/` on every platform: a Windows index held backslashes,
+  so `deps src/lib/foo.ts`, `--focus` and `path_prefix` did not match and the
+  output differed from the documented contract. Path arguments of the CLI, the
+  MCP tools and the HTTP API accept either separator. `PARSER_VERSION` 14:
+  existing indexes are rebuilt (#68).
 - An older Semantiq binary opening an index written by a newer one (after a
   `semantiq update` rollback, or a plugin binary next to a `cargo run` on a
   branch that bumped the schema) refuses it with an error naming both schema

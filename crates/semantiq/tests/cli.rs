@@ -105,6 +105,15 @@ fn query_commands_print_json() {
     assert_eq!(deps["file_path"], "src/lib.rs");
     assert!(deps["imports"].is_array());
     assert!(deps["imported_by"].is_array());
+    // #68: either separator is accepted and the stored form always uses `/`.
+    let deps_backslash = query_json(dir, &["deps", r"src\lib.rs"]);
+    assert_eq!(deps_backslash["file_path"], "src/lib.rs");
+    assert_eq!(deps_backslash["imports"], deps["imports"]);
+    let dead = query_json(dir, &["dead-code", "--path-prefix", r"src\"]);
+    assert_eq!(
+        dead,
+        query_json(dir, &["dead-code", "--path-prefix", "src/"])
+    );
 
     let search = query_json(dir, &["search", "compute", "--limit", "5"]);
     assert_eq!(search["query"], "compute");
