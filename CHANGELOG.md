@@ -168,6 +168,12 @@ All notable changes to Semantiq will be documented in this file.
   instead of the 10th percentile, so the two gates cut at the same point
   (the calibrated `max_distance` can still be stricter than the default
   1.2) (#33).
+- The watcher applies the project's ignore rules (#36): saving a file matched
+  by `.gitignore`, the global git excludes or `.git/info/exclude` (nested
+  `.gitignore` files included) no longer indexes it until the next refresh
+  prunes it; a file that became ignored since it was indexed is dropped on
+  save. `AutoIndexer::process_file_events` applies a batch of events and is
+  what `process_events` calls.
 - Walk errors no longer prune the index (#53): a directory that cannot be
   listed (permissions, mount hiccup) is logged and counted in `errors`, and
   the files under it keep their rows and embeddings, since the walk cannot

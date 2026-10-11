@@ -1,5 +1,7 @@
 use crate::IndexStore;
-use crate::exclusions::{is_file_too_large, project_walker, should_exclude_path};
+use crate::exclusions::{
+    is_file_too_large, project_walker, project_walker_with, should_exclude_path,
+};
 use crate::paths::to_relative_string;
 use crate::store::DependencyInsert;
 use crate::watcher::{FileEvent, FileWatcher};
@@ -265,11 +267,32 @@ impl AutoIndexer {
             return Ok(ProcessResult::default());
         }
 
-        let mut result = ProcessResult {
-            events: events.iter().filter(|e| concerns_indexed_file(e)).count(),
-            ..ProcessResult::default()
+        // Events on files the index could contain wake the embedder
+        // (`events`), whether or not they lead to a reindex here.
+        let events_on_indexed_files = events.iter().filter(|e| concerns_indexed_file(e)).count();
+        let mut result = self.process_file_events(events);
+        result.events = events_on_indexed_files;
+        Ok(result)
+    }
+
+    /// Apply file events as the watcher reports them: created and modified
+    /// files are (re)indexed, deleted ones removed. A created or modified
+    /// file is indexed only if the project walk would reach it (`.gitignore`,
+    /// global excludes, `.git/info/exclude`, excluded names): the watcher sees
+    /// every write, including those to generated or ignored files, and the
+    /// index must stay the one `initial_index` builds.
+    pub fn process_file_events(&self, events: Vec<FileEvent>) -> ProcessResult {
+        let mut result = ProcessResult::default();
+        let remove = |path: &Path, result: &mut ProcessResult| {
+            if let Err(e) = self.remove_file(path) {
+                error!("Failed to remove {:?}: {}", path, e);
+                result.errors += 1;
+            } else {
+                result.removed += 1;
+            }
         };
 
+        let mut changed: Vec<PathBuf> = Vec::new();
         for event in events {
             match event {
                 FileEvent::Created(path) | FileEvent::Modified(path) => {
@@ -277,29 +300,42 @@ impl AutoIndexer {
                     // (macOS FSEvents, editors' atomic saves): a path that no
                     // longer exists is a removal, not a modification.
                     if !path.exists() {
-                        if let Err(e) = self.remove_file(&path) {
-                            error!("Failed to remove {:?}: {}", path, e);
-                            result.errors += 1;
-                        } else {
-                            result.removed += 1;
-                        }
+                        remove(&path, &mut result);
                         continue;
                     }
-                    match self.index_file(&path, false) {
-                        Ok(true) => result.indexed += 1,
-                        Ok(false) => {}
-                        Err(e) => {
-                            error!("Failed to index {:?}: {}", path, e);
-                            result.errors += 1;
+                    changed.push(path);
+                }
+                FileEvent::Deleted(path) => remove(&path, &mut result),
+            }
+        }
+
+        if !changed.is_empty() {
+            let (walked, walk_complete) = self.walked_subset(&changed);
+            for path in changed {
+                let rel_path = to_relative_string(&path, &self.project_root);
+                if !walked.contains(&rel_path) {
+                    debug!("Not part of the project walk, not indexed: {}", rel_path);
+                    // A row from before the file became ignored (or from an
+                    // older version) must go; not when the walk itself failed,
+                    // since the file may simply have been missed.
+                    if walk_complete {
+                        match self.store.get_file_by_path(&rel_path) {
+                            Ok(Some(_)) => remove(&path, &mut result),
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!("Failed to look up {}: {}", rel_path, e);
+                                result.errors += 1;
+                            }
                         }
                     }
+                    continue;
                 }
-                FileEvent::Deleted(path) => {
-                    if let Err(e) = self.remove_file(&path) {
-                        error!("Failed to remove {:?}: {}", path, e);
+                match self.index_file(&path, false) {
+                    Ok(true) => result.indexed += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        error!("Failed to index {:?}: {}", path, e);
                         result.errors += 1;
-                    } else {
-                        result.removed += 1;
                     }
                 }
             }
@@ -312,7 +348,54 @@ impl AutoIndexer {
             );
         }
 
-        Ok(result)
+        result
+    }
+
+    /// The project-relative paths among `candidates` that the project walk
+    /// reaches, and whether the walk completed. The walk is restricted to the
+    /// ancestors of the candidates and the candidates themselves, so it reads
+    /// one directory per path component and the ignore files along the way:
+    /// the same rules as `initial_index`, including nested `.gitignore`
+    /// files, without a matcher to keep in sync with them.
+    fn walked_subset(&self, candidates: &[PathBuf]) -> (HashSet<String>, bool) {
+        let root = self.project_root.clone();
+        let wanted: HashSet<String> = candidates
+            .iter()
+            .map(|path| to_relative_string(path, &root))
+            .collect();
+        let keep_root = root.clone();
+        let walker = project_walker_with(&root, move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let rel = to_relative_string(entry.path(), &keep_root);
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                wanted
+                    .iter()
+                    .any(|wanted| Path::new(wanted).starts_with(&rel))
+            } else {
+                wanted.contains(&rel)
+            }
+        })
+        .build();
+
+        let mut walked = HashSet::new();
+        let mut complete = true;
+        for entry in walker {
+            match entry {
+                Ok(entry) => {
+                    if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        walked.insert(to_relative_string(entry.path(), &root));
+                    }
+                }
+                Err(e) if e.is_partial() => warn!("Ignore rules partially applied: {}", e),
+                Err(e) => {
+                    warn!("Walk error while checking changed files: {}", e);
+                    complete = false;
+                }
+            }
+        }
+        (walked, complete)
     }
 
     /// Index a single file (phase 1). Returns `Ok(false)` when the file was

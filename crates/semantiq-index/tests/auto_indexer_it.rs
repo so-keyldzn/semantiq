@@ -290,6 +290,8 @@ fn initial_index_records_root_and_refuses_to_prune_from_a_wrong_root() {
 // Walk rules: hidden directories, `.gitignore`, walk errors (#65, #36, #53).
 // ---------------------------------------------------------------------------
 
+use semantiq_index::watcher::FileEvent;
+
 /// A project with hidden tooling directories, excluded directories and a
 /// `.gitignore`. `.gitignore` is only honoured inside a git repository, so
 /// `.git` exists (an empty directory is enough for the `ignore` crate).
@@ -364,6 +366,87 @@ fn hidden_tooling_dirs_are_indexed_and_excluded_dirs_are_not() {
             .is_empty()
     );
     assert!(store.find_symbol_by_name("cachedThing").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+#[test]
+fn watcher_events_follow_gitignore_and_excluded_names() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_hidden_dirs_project(&root);
+    // A nested `.gitignore`, as monorepos have.
+    write_file(&root, "packages/.gitignore", "dist-types/\n");
+    write_file(
+        &root,
+        "packages/dist-types/index.ts",
+        "export function distTypes(): number { return 5; }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let before: Vec<String> = store.list_file_paths().unwrap();
+
+    // Saves of ignored or excluded files, as the watcher reports them.
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join("generated/schema.ts")),
+        FileEvent::Created(root.join("app.min.js")),
+        FileEvent::Modified(root.join("packages/dist-types/index.ts")),
+        FileEvent::Modified(root.join(".cache/stale.ts")),
+        FileEvent::Modified(root.join("node_modules/dep/index.js")),
+    ]);
+    assert_eq!(
+        result.indexed, 0,
+        "ignored files must not be indexed on save"
+    );
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    let mut after = store.list_file_paths().unwrap();
+    after.sort();
+    let mut expected = before.clone();
+    expected.sort();
+    assert_eq!(after, expected);
+    assert!(
+        store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.find_symbol_by_name("distTypes").unwrap().is_empty());
+
+    // Saves of project files, hidden directory included, are indexed.
+    write_file(
+        &root,
+        ".storybook/main.ts",
+        "export function storybookRenamed(): number { return 1; }\n",
+    );
+    write_file(&root, "src/new.rs", "pub fn brand_new() -> i32 { 6 }\n");
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join(".storybook/main.ts")),
+        FileEvent::Created(root.join("src/new.rs")),
+    ]);
+    assert_eq!(result.indexed, 2);
+    assert_eq!(result.errors, 0);
+    assert!(
+        !store
+            .find_symbol_by_name("storybookRenamed")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("storybookMain")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!store.find_symbol_by_name("brand_new").unwrap().is_empty());
+
+    // A file that became ignored since it was indexed loses its row on save.
+    write_file(&root, ".gitignore", "generated/\n*.min.js\nsrc/new.rs\n");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join("src/new.rs"))]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 1);
+    assert!(store.get_file_by_path("src/new.rs").unwrap().is_none());
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
