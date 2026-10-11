@@ -410,6 +410,21 @@ impl Shared {
                             continue;
                         }
                     };
+                    if model.is_none() {
+                        // Retry the load whatever the chunks say: a failure
+                        // on a complete index must clear itself too, not
+                        // wait for the next notification.
+                        if !retry.due() {
+                            continue;
+                        }
+                        self.progress.running.store(true, Ordering::Relaxed);
+                        let loaded =
+                            Self::load(&mut model, &mut load_model, &mut retry, &self.progress);
+                        self.progress.finish();
+                        if !loaded {
+                            continue;
+                        }
+                    }
                     if seen_version == Some(version) {
                         continue;
                     }
@@ -431,30 +446,12 @@ impl Shared {
                 }
             };
 
-            if model.is_none() {
-                if !retry.due() {
-                    self.progress.finish();
-                    continue;
-                }
-                match load_model() {
-                    Ok(loaded) => {
-                        model = Some(loaded);
-                        retry.succeeded();
-                        self.progress.set_model_error(None);
-                    }
-                    Err(e) => {
-                        let wait = retry.failed();
-                        warn!(
-                            "Embedding model unavailable, semantic index not built \
-                             (next attempt in {}s): {}",
-                            wait.as_secs(),
-                            e
-                        );
-                        self.progress.set_model_error(Some(e.to_string()));
-                        self.progress.finish();
-                        continue;
-                    }
-                }
+            if model.is_none()
+                && (!retry.due()
+                    || !Self::load(&mut model, &mut load_model, &mut retry, &self.progress))
+            {
+                self.progress.finish();
+                continue;
             }
             let Some(model) = model.as_deref() else {
                 continue;
@@ -480,6 +477,35 @@ impl Shared {
                 Err(e) => warn!("Embedding pass failed: {}", e),
             }
             seen_version = version;
+        }
+    }
+
+    /// One load attempt; records the outcome in `retry` and in the progress's
+    /// `model_error`. Returns whether a model is now loaded.
+    fn load(
+        model: &mut Option<Box<dyn EmbeddingModel>>,
+        load_model: &mut ModelLoader,
+        retry: &mut ModelRetry,
+        progress: &EmbeddingProgress,
+    ) -> bool {
+        match load_model() {
+            Ok(loaded) => {
+                *model = Some(loaded);
+                retry.succeeded();
+                progress.set_model_error(None);
+                true
+            }
+            Err(e) => {
+                let wait = retry.failed();
+                warn!(
+                    "Embedding model unavailable, semantic index not built \
+                     (next attempt in {}s): {}",
+                    wait.as_secs(),
+                    e
+                );
+                progress.set_model_error(Some(e.to_string()));
+                false
+            }
         }
     }
 }

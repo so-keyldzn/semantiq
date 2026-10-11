@@ -490,6 +490,50 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
     }));
 }
 
+/// A load failure on an already complete index clears itself: the poll
+/// retries the load once the backoff elapsed, with nothing pending and no
+/// `notify` (otherwise the "Semantic index unavailable" notice stayed until
+/// the next watcher event).
+#[test]
+fn background_embedder_clears_a_load_failure_on_a_complete_index_without_notify() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    embed_pending(
+        &store,
+        &StubEmbeddingModel::new(),
+        4,
+        &EmbeddingProgress::new(),
+        &no_stop,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            if loader_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                anyhow::bail!("disk full")
+            }
+            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+        }),
+        quick_config(),
+    )
+    .unwrap();
+
+    assert!(wait_until(Duration::from_secs(10), || {
+        embedder.progress().model_error().is_some()
+    }));
+    assert!(wait_until(Duration::from_secs(10), || {
+        embedder.progress().model_error().is_none()
+    }));
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(embedder.progress().in_progress().is_none());
+}
+
 /// A poll does not retry the chunks the model keeps failing on while nobody
 /// wrote to the database; a commit from another connection (CLI reindex that
 /// may have replaced them) or a notification does.
