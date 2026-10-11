@@ -13,6 +13,12 @@ All notable changes to Semantiq will be documented in this file.
   `println!("{}", compute(2))`, `vec![make()]`, `tracing::info!(n = total())`)
   are `call` references: `calls compute --direction callers` finds functions
   exercised only through macros, and `impact` follows them beyond depth 1 (#60).
+- Functions named only in attribute strings (`#[serde(default = "f")]`,
+  `deserialize_with`, `with`, `skip_serializing_if`, Python decorator and
+  Java / Kotlin / C# annotation arguments) get a `reference` occurrence, so
+  `dead-code` no longer reports serde helpers with high confidence. Only
+  identifier-shaped strings inside attribute arguments count: strings elsewhere
+  still never match (#64).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

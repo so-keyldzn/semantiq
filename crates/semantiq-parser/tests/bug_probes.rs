@@ -329,4 +329,28 @@ public:
             .collect();
         assert_eq!(compute_edges, vec![3, 4, 5, 6]);
     }
+
+    // B13 (#64): a function named in an attribute string (`#[serde(default =
+    // "f")]`, `deserialize_with`, `with`) gets a `reference` occurrence, so
+    // `dead-code` no longer flags serde helpers. Ordinary strings still never
+    // match.
+    #[test]
+    fn b13_attribute_strings_are_references() {
+        let source = "fn default_true() -> bool { true }\nfn parse_level<'de, D>(d: D) -> Result<u8, D::Error> { todo!() }\n#[derive(serde::Deserialize)]\npub struct Cfg {\n    #[serde(default = \"default_true\")]\n    pub on: bool,\n    #[serde(deserialize_with = \"parse_level\")]\n    pub level: u8,\n}\nfn main() { let s = \"default_true\"; }\n";
+        let refs = references(Language::Rust, source);
+        assert_eq!(
+            kinds_of(&refs, "default_true"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (5, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&refs, "parse_level"),
+            vec![
+                (2, ReferenceKind::Definition),
+                (7, ReferenceKind::Reference)
+            ]
+        );
+    }
 }

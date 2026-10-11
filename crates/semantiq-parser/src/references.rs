@@ -86,25 +86,31 @@ impl ReferenceExtractor {
         let mut cursor = tree.walk();
         let mut stack = vec![tree.root_node()];
 
+        let mut record = |name: &str, line: usize, kind: ReferenceKind| {
+            if name.chars().count() >= MIN_NAME_LEN {
+                by_line
+                    .entry((name.to_string(), line))
+                    .and_modify(|(k, n)| match kind.cmp(k) {
+                        std::cmp::Ordering::Greater => (*k, *n) = (kind, 1),
+                        std::cmp::Ordering::Equal => *n += 1,
+                        std::cmp::Ordering::Less => {}
+                    })
+                    .or_insert((kind, 1));
+            }
+        };
+
         while let Some(node) = stack.pop() {
             if node.named_child_count() == 0 {
+                let line = node.start_position().row + 1;
                 if is_identifier(node)
                     && let Ok(text) = node.utf8_text(source.as_bytes())
                     && let Some(kind) = classify(node, text, source.as_bytes(), language)
                 {
-                    let line = node.start_position().row + 1;
                     for name in names_of(text) {
-                        if name.chars().count() >= MIN_NAME_LEN {
-                            by_line
-                                .entry((name.to_string(), line))
-                                .and_modify(|(k, n)| match kind.cmp(k) {
-                                    std::cmp::Ordering::Greater => (*k, *n) = (kind, 1),
-                                    std::cmp::Ordering::Equal => *n += 1,
-                                    std::cmp::Ordering::Less => {}
-                                })
-                                .or_insert((kind, 1));
-                        }
+                        record(name, line, kind);
                     }
+                } else if let Some(name) = attribute_string_name(node, source, language) {
+                    record(name, line, ReferenceKind::Reference);
                 }
                 continue;
             }
@@ -123,6 +129,72 @@ impl ReferenceExtractor {
         refs.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.name.cmp(&b.name)));
         refs
     }
+}
+
+/// Profondeur maximale entre une chaîne et l'attribut qui la contient.
+const MAX_ATTRIBUTE_DEPTH: usize = 6;
+
+/// Nœud d'attribut / décorateur / annotation dont les arguments peuvent nommer
+/// un symbole dans une chaîne : `#[serde(default = "f")]`, `@fixture(name="db")`,
+/// `@DependsOn("bean")`. Les autres langages gardent la règle « une chaîne ne
+/// référence jamais ».
+fn attribute_kind(language: Language) -> Option<&'static str> {
+    match language {
+        Language::Rust => Some("attribute"),
+        Language::Python => Some("decorator"),
+        Language::Java | Language::Kotlin => Some("annotation"),
+        Language::CSharp => Some("attribute"),
+        _ => None,
+    }
+}
+
+/// Le contenu d'une chaîne littérale située dans les arguments d'un attribut,
+/// s'il a la forme d'un identifiant ou d'un chemin (`default_true`,
+/// `Default::default`, `my_mod::serialize`) : la fonction qu'il nomme est
+/// utilisée par la macro ou le framework, donc référencée. Retourne le dernier
+/// segment du chemin. `#[doc = "..."]` est un commentaire, pas un argument.
+fn attribute_string_name<'a>(node: Node, source: &'a str, language: Language) -> Option<&'a str> {
+    if !matches!(node.kind(), "string_content" | "string_fragment") {
+        return None;
+    }
+    let wanted = attribute_kind(language)?;
+    let mut current = node.parent();
+    let mut found = false;
+    for _ in 0..MAX_ATTRIBUTE_DEPTH {
+        let Some(n) = current else {
+            break;
+        };
+        if n.kind() == wanted {
+            // Rust : `#[doc = "..."]` porte un champ `value`, pas `arguments`.
+            if language == Language::Rust && n.child_by_field_name("arguments").is_none() {
+                return None;
+            }
+            found = true;
+            break;
+        }
+        current = n.parent();
+    }
+    if !found {
+        return None;
+    }
+    let text = node.utf8_text(source.as_bytes()).ok()?;
+    let is_ident = |s: &str| {
+        let mut chars = s.chars();
+        chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && chars.all(|c| c.is_alphanumeric() || c == '_')
+    };
+    let mut segments = text.split("::");
+    let mut last = segments.next()?;
+    if !is_ident(last) {
+        return None;
+    }
+    for segment in segments {
+        if !is_ident(segment) {
+            return None;
+        }
+        last = segment;
+    }
+    Some(last)
 }
 
 fn is_data_language(language: Language) -> bool {
@@ -592,6 +664,51 @@ mod tests {
         );
         assert_eq!(kinds_of(&r, "all"), vec![(1, ReferenceKind::Reference)]);
         assert_eq!(kinds_of(&r, "wrap"), vec![(3, ReferenceKind::Reference)]);
+    }
+
+    #[test]
+    fn test_rust_attribute_strings_reference_functions() {
+        let r = refs(
+            Language::Rust,
+            "fn default_true() -> bool { true }\n#[derive(serde::Deserialize)]\npub struct Cfg {\n    #[serde(default = \"default_true\", skip_serializing_if = \"is_false\")]\n    pub on: bool,\n    #[serde(with = \"my_mod::as_str\", rename = \"not an identifier\")]\n    pub w: u8,\n}\n#[doc = \"hidden\"]\nfn g() { let s = \"default_true\"; }\n",
+        );
+        assert_eq!(
+            kinds_of(&r, "default_true"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (4, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&r, "is_false"),
+            vec![(4, ReferenceKind::Reference)]
+        );
+        assert_eq!(kinds_of(&r, "as_str"), vec![(6, ReferenceKind::Reference)]);
+        assert!(kinds_of(&r, "my_mod::as_str").is_empty());
+        assert!(kinds_of(&r, "not an identifier").is_empty());
+        assert!(kinds_of(&r, "hidden").is_empty());
+    }
+
+    #[test]
+    fn test_decorator_and_annotation_strings_reference_names() {
+        let py = refs(
+            Language::Python,
+            "@pytest.fixture(name=\"session_db\")\ndef db(): pass\n@app.route(\"/users\")\ndef users(): return \"session_db\"\n",
+        );
+        assert_eq!(
+            kinds_of(&py, "session_db"),
+            vec![(1, ReferenceKind::Reference)]
+        );
+        assert!(kinds_of(&py, "/users").is_empty());
+
+        let java = refs(
+            Language::Java,
+            "class C {\n  @DependsOn(\"initCache\")\n  void run() { String s = \"initCache\"; }\n}",
+        );
+        assert_eq!(
+            kinds_of(&java, "initCache"),
+            vec![(2, ReferenceKind::Reference)]
+        );
     }
 
     #[test]

@@ -151,6 +151,30 @@ fn test_type_hierarchy_cycle_terminates() {
     assert_eq!(h.subtypes.len(), 2);
 }
 
+/// #64: a function named only in an attribute string (`#[serde(default =
+/// "f")]`) is used by the derive macro and must not be reported as dead.
+#[test]
+fn test_dead_code_keeps_functions_named_in_attribute_strings() {
+    let source = "fn default_true() -> bool {\n    true\n}\n\nfn is_false(b: &bool) -> bool {\n    !b\n}\n\nfn really_unused() -> bool {\n    false\n}\n\n#[derive(serde::Deserialize)]\npub struct Cfg {\n    #[serde(default = \"default_true\", skip_serializing_if = \"is_false\")]\n    pub on: bool,\n}\n";
+    let (engine, _root) = index_project(&[("src/lib.rs", source)]);
+    let report = engine
+        .find_dead_code(&DeadCodeOptions {
+            limit: 100,
+            ..Default::default()
+        })
+        .unwrap();
+    let dead: Vec<_> = report
+        .symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.confidence))
+        .collect();
+    assert_eq!(
+        dead,
+        vec![("really_unused", DeadCodeConfidence::High)],
+        "{report:?}"
+    );
+}
+
 #[test]
 fn test_dead_code_filters() {
     let source = "trait Speak {\n    fn speak(&self);\n}\n\nstruct Dog;\n\nimpl Speak for Dog {\n    fn speak(&self) {}\n}\n\nfn unused_helper() {}\n\npub fn public_api() {}\n\nfn used() {}\n\nfn recursive(n: u32) {\n    recursive(n);\n}\n\n#[inline]\nfn attributed() {}\n\nfn main() {\n    used();\n    let d = Dog;\n    d.speak();\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn checks_things() {}\n}\n";
