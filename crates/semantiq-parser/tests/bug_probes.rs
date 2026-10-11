@@ -454,17 +454,17 @@ public:
         );
     }
 
-    // B11 (#54): `.tsx` files are parsed with the TSX grammar. With the plain
+    // B15 (#54): `.tsx` files are parsed with the TSX grammar. With the plain
     // TypeScript grammar the JSX yielded ERROR nodes, `format(user)` inside the
     // markup was a plain reference and tag / attribute names were `type`s.
     #[test]
-    fn b11_tsx_jsx_parsed_with_tsx_grammar() {
+    fn b15_tsx_jsx_parsed_with_tsx_grammar() {
         let source = include_str!("fixtures/typescript/sample.tsx");
         let e = extract_file("src/App.tsx", source);
         assert!(!e.has_error, "TSX fixture must parse without ERROR nodes");
 
         // Exported components are definitions (their `export` visibility in
-        // the signature is B15), and the declarations after the JSX survive.
+        // the signature is B19), and the declarations after the JSX survive.
         let app = e.symbols.iter().find(|s| s.name == "App").expect("App");
         assert_eq!(app.kind, SymbolKind::Function);
         assert_eq!(
@@ -576,9 +576,9 @@ public:
         );
     }
 
-    // B12 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).
+    // B16 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).
     #[test]
-    fn b12_kotlin_imports_extracted() {
+    fn b16_kotlin_imports_extracted() {
         let source = include_str!("fixtures/kotlin/sample.kt");
         let e = extract_file("src/Sample.kt", source);
         assert_eq!(
@@ -607,9 +607,9 @@ public:
         assert_eq!(e.imports[2].1, None, "wildcard has no binding name");
     }
 
-    // B13 (#57): `import X as Y` and `import a, b`.
+    // B17 (#57): `import X as Y` and `import a, b`.
     #[test]
-    fn b13_python_aliased_and_multi_imports() {
+    fn b17_python_aliased_and_multi_imports() {
         let e = extract_file(
             "pkg/mod.py",
             "import numpy as np\nimport os, sys\nfrom . import sibling\n",
@@ -633,11 +633,11 @@ public:
         );
     }
 
-    // B14 (#58): barrel files. Re-exports and `require()` are imports; a
+    // B18 (#58): barrel files. Re-exports and `require()` are imports; a
     // re-exported name is not a definition (it is an import when it has a
     // source, a plain reference for `export { qux }`).
     #[test]
-    fn b14_ts_barrel_reexports() {
+    fn b18_ts_barrel_reexports() {
         let e = extract_file(
             "src/index.ts",
             "export { greet, Foo as Bar } from './foo';\nexport * from './bar';\nexport { qux };\nconst { helper } = require('./util');\n",
@@ -682,10 +682,10 @@ public:
         );
     }
 
-    // B15 (#63): `export` is part of the signature of TS/JS declarations, as
+    // B19 (#63): `export` is part of the signature of TS/JS declarations, as
     // `pub` is for Rust, so `dead-code` sees exported symbols as public.
     #[test]
-    fn b15_ts_export_in_signature() {
+    fn b19_ts_export_in_signature() {
         let e = extract_file(
             "src/a.ts",
             "export default function Panel() { return 1; }\nexport function Unused() { return null; }\nexport const unusedConst = () => 1;\nexport class K {}\nexport interface I {}\nfunction local() {}\nconst v = 1;\n",
@@ -742,9 +742,9 @@ public:
         assert_eq!(sig("C"), "export default class C {}");
     }
 
-    // B16 (#66): comments inside a Rust `use` group are not path segments.
+    // B20 (#66): comments inside a Rust `use` group are not path segments.
     #[test]
-    fn b16_rust_use_group_comments() {
+    fn b20_rust_use_group_comments() {
         let e = extract_file(
             "src/lib.rs",
             "use foo::{ // keep\n    Bar, /* c */ Baz,\n};\n",
@@ -758,10 +758,10 @@ public:
         );
     }
 
-    // B17 (#66): Scala selector imports and PHP group imports yield one
+    // B21 (#66): Scala selector imports and PHP group imports yield one
     // import per leaf, like the Rust brace expansion.
     #[test]
-    fn b17_scala_php_brace_imports() {
+    fn b21_scala_php_brace_imports() {
         let e = extract_file("src/A.scala", "import a.b.{C, D => E}\n");
         assert_eq!(
             e.imports,
@@ -796,12 +796,12 @@ public:
         );
     }
 
-    // B18 (#66): call edges on a file with many symbols and calls attach each
+    // B22 (#66): call edges on a file with many symbols and calls attach each
     // call to its own function (the line-sorted sweep replaces the calls x
     // symbols scan; `test_call_edges_sweep_matches_naive_scan` in
     // `structure.rs` is the guard of its exactness).
     #[test]
-    fn b18_call_edges_on_a_large_file() {
+    fn b22_call_edges_on_a_large_file() {
         let mut source = String::new();
         for i in 0..4000 {
             source.push_str(&format!(
