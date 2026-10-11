@@ -452,8 +452,12 @@ impl IndexStore {
     }
 }
 
-/// Ids per `IN (...)` list: SQLite's default `SQLITE_MAX_VARIABLE_NUMBER`
-/// is 999.
+/// Ids per `IN (...)` list of the bulk lookups. The bundled SQLite (rusqlite
+/// `bundled`, SQLite >= 3.32) allows 32766 parameters per statement
+/// (`SQLITE_MAX_VARIABLE_NUMBER`); 900 keeps the lists short and stays
+/// under the 999 of older builds. `near_files_priority` (2 + N parameters)
+/// and `find_callees_from` (2 + 2N) are not batched: they rely on that
+/// limit, with N the definitions of one name.
 pub(super) const SQL_IN_BATCH: usize = 900;
 
 /// A chunk candidate of semantic search, with its file resolved.
