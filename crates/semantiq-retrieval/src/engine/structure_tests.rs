@@ -156,6 +156,26 @@ fn test_type_hierarchy_flags_a_cut_at_the_edge_cap() {
 }
 
 #[test]
+fn test_type_hierarchy_cut_in_one_direction_does_not_stop_the_other() {
+    // Regression: one shared cut flag made the subtype walk stop after its
+    // first node once the supertype walk had hit the cap, dropping the
+    // subtypes at depth >= 2.
+    let (engine, _root) = index_project(&[(
+        "model.py",
+        "class Mixin1:\n    pass\n\nclass Mixin2:\n    pass\n\nclass Mixin3:\n    pass\n\nclass Model(Mixin1, Mixin2, Mixin3):\n    pass\n\nclass Child(Model):\n    pass\n\nclass GrandChild(Child):\n    pass\n",
+    )]);
+    let h = engine.type_hierarchy("Model", 3, 2).unwrap();
+    assert_eq!(h.supertypes.len(), 2);
+    let down: Vec<_> = h
+        .subtypes
+        .iter()
+        .map(|e| (e.depth, e.sub_type.as_str()))
+        .collect();
+    assert_eq!(down, vec![(1, "Child"), (2, "GrandChild")]);
+    assert!(h.truncated);
+}
+
+#[test]
 fn test_callers_across_files_confidence() {
     let (engine, _root) = index_project(&[
         ("a.rs", "pub fn shared() {}\n"),
