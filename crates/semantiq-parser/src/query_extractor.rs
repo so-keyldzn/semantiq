@@ -570,17 +570,44 @@ impl QuerySymbolExtractor {
     }
 
     /// Extrait la signature (première ligne du nœud).
+    ///
+    /// TS/JS : une déclaration exportée est l'enfant `declaration` d'un
+    /// `export_statement`, le mot-clé `export` (ou `export default`) est donc
+    /// hors du nœud ; on le remet en tête, comme `pub` fait partie d'un
+    /// `function_item` Rust, pour que la visibilité se lise dans la signature
+    /// (`dead-code` exclut les symboles publics).
     fn extract_signature(node: &Node, source: &str) -> Option<String> {
         let source_bytes = source.as_bytes();
         let text = node.utf8_text(source_bytes).ok()?;
         let first_line = text.lines().next()?;
+        let first_line = match Self::export_prefix(node, source) {
+            Some(prefix) => format!("{prefix} {}", first_line.trim_start()),
+            None => first_line.to_string(),
+        };
         let sig = if first_line.chars().count() > 200 {
             let truncated: String = first_line.chars().take(200).collect();
             format!("{}...", truncated)
         } else {
-            first_line.to_string()
+            first_line
         };
         Some(sig.trim().to_string())
+    }
+
+    /// `export` / `export default` quand `node` est la déclaration d'un
+    /// `export_statement` (TS/JS) : le texte du parent avant la déclaration.
+    fn export_prefix(node: &Node, source: &str) -> Option<String> {
+        let parent = node.parent()?;
+        if parent.kind() != "export_statement"
+            || parent.child_by_field_name("declaration") != Some(*node)
+        {
+            return None;
+        }
+        let prefix = source
+            .get(parent.start_byte()..node.start_byte())?
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!prefix.is_empty()).then_some(prefix)
     }
 
     /// Extrait les doc comments précédant le nœud (voir [`doc_comment_of`]).

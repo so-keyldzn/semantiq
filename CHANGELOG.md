@@ -191,11 +191,16 @@ All notable changes to Semantiq will be documented in this file.
   and `require('./x')` are imports (`deps`, repo map edges), and a re-exported
   name is an import (or a plain reference for `export { a }`), no longer a
   definition site in `refs`, `explain`, `impact` and `dead-code`.
+- TS/JS `export` / `export default` is part of the signature of exported
+  declarations, as `pub` is for Rust, so `dead-code` treats them as public:
+  excluded unless `--include-public`, then reported with low confidence (#63).
 - Parser defects (#66): comments inside a Rust `use` group are dropped from
   the import path; Go imports under the `go.mod` module path are `local`;
   Scala `import a.b.{C, D => E}` and PHP `use Foo\{A, B as C}` yield one import
   per leaf; call edges are attached by a line-sorted sweep instead of a scan
   of every symbol per call (1.2 s → linear on a 32k-line file).
+- `PARSER_VERSION` 16 (once for the parser fixes above): existing indexes are
+  rebuilt.
 
 ## [0.11.0] - 2026-10-07
 

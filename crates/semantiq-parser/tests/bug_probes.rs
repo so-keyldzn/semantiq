@@ -644,6 +644,47 @@ public:
         );
     }
 
+    // B15 (#63): `export` is part of the signature of TS/JS declarations, as
+    // `pub` is for Rust, so `dead-code` sees exported symbols as public.
+    #[test]
+    fn b15_ts_export_in_signature() {
+        let e = extract_file(
+            "src/a.ts",
+            "export default function Panel() { return 1; }\nexport function Unused() { return null; }\nexport const unusedConst = () => 1;\nexport class K {}\nexport interface I {}\nfunction local() {}\nconst v = 1;\n",
+        );
+        let sig = |name: &str| {
+            e.symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            sig("Panel"),
+            "export default function Panel() { return 1; }"
+        );
+        assert_eq!(sig("Unused"), "export function Unused() { return null; }");
+        assert_eq!(sig("unusedConst"), "export const unusedConst = () => 1;");
+        assert_eq!(sig("K"), "export class K {}");
+        assert_eq!(sig("I"), "export interface I {}");
+        assert_eq!(sig("local"), "function local() {}");
+        assert_eq!(sig("v"), "const v = 1;");
+
+        let js = extract_file(
+            "src/b.js",
+            "export function f() {}\nexport default class C {}\n",
+        );
+        let sig = |name: &str| {
+            js.symbols
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.signature.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(sig("f"), "export function f() {}");
+        assert_eq!(sig("C"), "export default class C {}");
+    }
+
     // B16 (#66): comments inside a Rust `use` group are not path segments.
     #[test]
     fn b16_rust_use_group_comments() {
