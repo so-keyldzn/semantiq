@@ -146,56 +146,80 @@ impl StructureExtractor {
     }
 }
 
-/// Bare type name: generics, call arguments and qualification removed.
-/// `std::fmt::Display` → `Display`, `Base<T>` → `Base`, `mod.B()` → `B`.
 /// For each reference, the symbol of an accepted kind with the smallest line
-/// span containing its line (ties: the first in `symbols` order), as
-/// `innermost` used to compute it by scanning every symbol.
+/// span containing its line (ties: the first in `symbols` order), exactly
+/// what a scan of every symbol per reference gives, in one pass.
 ///
 /// Symbols nest or are disjoint (they are AST nodes), so a sweep in line order
 /// keeps the open ones on a stack: a symbol is pushed when its first line is
 /// reached and popped once past its last line. The top of the stack is the
-/// innermost open symbol; a symbol that ended on a line shared with the start
-/// of its successor sits stale underneath and is popped with it.
+/// innermost open symbol, except on a line shared by the end of one symbol
+/// and the start of the next (`a` 2..10, `c` 10..30, call at line 10): the
+/// one that ends there may be shorter, so when the top starts on the line
+/// the entry ending on it is considered too. A symbol that ended on such a
+/// shared line sits stale under its successor until that one is popped.
 fn innermost_by_line<'a>(
     symbols: &'a [Symbol],
     references: &[&Reference],
     accept: impl Fn(SymbolKind) -> bool,
 ) -> Vec<Option<&'a Symbol>> {
-    let mut candidates: Vec<&Symbol> = symbols.iter().filter(|s| accept(s.kind)).collect();
+    // (position in `symbols`, symbol): the position breaks span ties.
+    let mut candidates: Vec<(usize, &Symbol)> = symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| accept(s.kind))
+        .collect();
     // Outer symbols first on a shared start line (pushed first, so deeper on
     // the stack); for identical spans the later one goes first so the first
     // one ends up on top.
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
-    order.sort_by(|&a, &b| {
-        let (x, y) = (candidates[a], candidates[b]);
+    candidates.sort_by(|(i, x), (j, y)| {
         x.start_line
             .cmp(&y.start_line)
             .then(y.end_line.cmp(&x.end_line))
-            .then(b.cmp(&a))
+            .then(j.cmp(i))
     });
-    candidates = order.into_iter().map(|i| candidates[i]).collect();
+    let span = |s: &Symbol| s.end_line - s.start_line;
 
     let mut by_line: Vec<usize> = (0..references.len()).collect();
     by_line.sort_by_key(|&i| references[i].line);
 
     let mut result = vec![None; references.len()];
-    let mut stack: Vec<&Symbol> = Vec::new();
+    let mut stack: Vec<(usize, &Symbol)> = Vec::new();
     let mut next = 0;
     for i in by_line {
         let line = references[i].line;
-        while next < candidates.len() && candidates[next].start_line <= line {
+        while next < candidates.len() && candidates[next].1.start_line <= line {
             stack.push(candidates[next]);
             next += 1;
         }
-        while stack.last().is_some_and(|s| s.end_line < line) {
+        while stack.last().is_some_and(|(_, s)| s.end_line < line) {
             stack.pop();
         }
-        result[i] = stack.last().copied();
+        let Some(&(top_index, top)) = stack.last() else {
+            continue;
+        };
+        let mut best = (top_index, top);
+        if top.start_line == line {
+            // Below the top: symbols starting on this line (siblings, longer
+            // than the top), stale ones, then possibly one ending on this
+            // line; anything below that contains the line and is longer.
+            for &(index, s) in stack.iter().rev().skip(1) {
+                if s.start_line == line || s.end_line < line {
+                    continue;
+                }
+                if s.end_line == line && (span(s), index) < (span(best.1), best.0) {
+                    best = (index, s);
+                }
+                break;
+            }
+        }
+        result[i] = Some(best.1);
     }
     result
 }
 
+/// Bare type name: generics, call arguments and qualification removed.
+/// `std::fmt::Display` → `Display`, `Base<T>` → `Base`, `mod.B()` → `B`.
 fn bare_name(node: Node, src: &[u8]) -> Option<String> {
     let text = node.utf8_text(src).ok()?;
     let head = text.split(['<', '[', '(', '{']).next()?.trim();
@@ -725,8 +749,24 @@ mod tests {
             sym("Nested", SymbolKind::Struct, 20, 30),
             sym("e", SymbolKind::Function, 22, 25),
             sym("top", SymbolKind::Function, 50, 55),
+            // `p` ends on the line where the longer `q` starts.
+            sym("p", SymbolKind::Function, 60, 63),
+            sym("q", SymbolKind::Function, 63, 90),
+            sym("r", SymbolKind::Function, 64, 65),
+            // Nested chain ending on the line where `z` starts: `y` is the
+            // shortest of those ending there, and ties with `z`.
+            sym("x", SymbolKind::Function, 100, 110),
+            sym("y", SymbolKind::Function, 105, 110),
+            sym("z", SymbolKind::Function, 110, 115),
+            // Stale `m` under `n` when `o` starts.
+            sym("m", SymbolKind::Function, 120, 121),
+            sym("n", SymbolKind::Function, 121, 122),
+            sym("o", SymbolKind::Function, 122, 130),
+            // Zero-span symbol on the boundary line of a longer one.
+            sym("u", SymbolKind::Function, 140, 150),
+            sym("v", SymbolKind::Function, 150, 150),
         ];
-        let references: Vec<Reference> = (1..=60)
+        let references: Vec<Reference> = (1..=160)
             .map(|line| Reference {
                 name: format!("call{line}"),
                 line,
@@ -771,6 +811,19 @@ mod tests {
         assert_eq!(actual[11], ("c".to_string(), 12));
         assert_eq!(actual[13], ("Outer".to_string(), 1));
         assert_eq!(actual[45], (String::new(), 0));
+        assert_eq!(
+            actual[62],
+            ("p".to_string(), 60),
+            "shorter symbol ending on the line"
+        );
+        assert_eq!(actual[64], ("r".to_string(), 64));
+        assert_eq!(
+            actual[109],
+            ("y".to_string(), 105),
+            "first of two equal spans"
+        );
+        assert_eq!(actual[121], ("n".to_string(), 121), "stale `m` under `n`");
+        assert_eq!(actual[149], ("v".to_string(), 150), "zero span wins");
     }
 
     #[test]
