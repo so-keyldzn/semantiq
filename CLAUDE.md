@@ -101,7 +101,7 @@ crates/
 ### Languages
 
 19 total via tree-sitter (`semantiq-parser/src/language.rs`). Each has a `tags.scm` in `semantiq-parser/queries/<lang>/`, loaded by `QuerySymbolExtractor` (`semantiq-parser/src/query_extractor.rs`), and a sample under `semantiq-parser/tests/fixtures/<lang>/`:
-- **Code** (symbols + chunks + imports): Rust, TypeScript (`.tsx` files use the TSX grammar, `Grammar::Tsx`, chosen by `LanguageSupport::parse_path`; the same `tags.scm` is compiled for both grammars), JavaScript, Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
+- **Code** (symbols + chunks + imports): Rust, TypeScript (`.tsx` files use the TSX grammar, `Grammar::Tsx`, chosen by `LanguageSupport::parse_path`; the same `tags.scm` is compiled for both grammars), JavaScript (its grammar parses JSX in `.jsx` and `.js`; the JSX reference rules of `references.rs` apply to both grammars: component tag = call, attribute names / intrinsic tags / closing tags ignored), Python, Go, Java, C, C++, PHP, Ruby, C#, Kotlin, Scala, Bash, Elixir.
 - **Data** (keys/sections indexed as Variable/Struct, plus chunks + embeddings): HTML, JSON, YAML, TOML.
 
 ### Key Internal Conventions
