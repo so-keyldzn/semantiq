@@ -12,10 +12,10 @@ ignore = [
     # Remove when: notify drops `instant` (replaced by `web-time` or std)
     "RUSTSEC-2024-0384",
 
-    # paste is unmaintained but used transitively by rmcp
-    # Dep chain: rmcp -> paste
-    # Tracking: https://github.com/aspect-build/rules_lint/issues — awaiting migration to `pastey`
-    # Remove when: rmcp migrates from `paste` to `pastey`
+    # paste is unmaintained but used transitively by tokenizers
+    # Dep chain: tokenizers -> macro_rules_attribute -> paste
+    # Tracking: https://github.com/Luthaf/macro_rules_attribute — awaiting migration to `pastey`
+    # Remove when: macro_rules_attribute migrates from `paste` to `pastey`
     "RUSTSEC-2024-0436",
 
     # number_prefix is unmaintained but used transitively by tokenizers via indicatif

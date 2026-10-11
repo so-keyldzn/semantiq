@@ -4,6 +4,13 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Dependencies: `anyhow` 1.0.104 (RUSTSEC-2026-0190), `crossbeam-epoch` 0.9.21
+  (RUSTSEC-2026-0204) and `memmap2` 0.9.11 (RUSTSEC-2026-0186). `rmcp` 3.5
+  already carries the Streamable HTTP `Host` check (RUSTSEC-2026-0189). The
+  `Security` workflow is green again; its remaining ignores are the three
+  unmaintained-only advisories without a fixed release (#39).
+
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
   of calls: `refs foo` shows the definition line, `calls foo` no longer lists
