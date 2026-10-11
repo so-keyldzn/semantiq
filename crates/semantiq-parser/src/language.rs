@@ -58,6 +58,17 @@ impl Language {
             .and_then(Self::from_extension)
     }
 
+    /// The tree-sitter grammar for a file of this language: one per language,
+    /// except `.tsx`, whose JSX needs the TSX grammar.
+    pub fn grammar_for_path(self, path: &Path) -> Grammar {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if self == Language::TypeScript && ext.eq_ignore_ascii_case("tsx") {
+            Grammar::Tsx
+        } else {
+            Grammar::Language(self)
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Language::Rust => "rust",
@@ -107,124 +118,105 @@ impl Language {
     }
 }
 
+/// A tree-sitter grammar. `Language::TypeScript` has two: plain TypeScript
+/// and TSX (`.tsx` files), whose JSX the plain grammar parses as type
+/// assertions and `ERROR` nodes. The queries and extractors are shared: TSX
+/// is a superset with the same node kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Grammar {
+    Language(Language),
+    Tsx,
+}
+
+impl Grammar {
+    pub fn tree_sitter_language(self) -> tree_sitter::Language {
+        match self {
+            Grammar::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Grammar::Language(lang) => lang.tree_sitter_language(),
+        }
+    }
+
+    /// Whether `tree` was produced by this grammar.
+    pub fn parsed(self, tree: &tree_sitter::Tree) -> bool {
+        *tree.language() == self.tree_sitter_language()
+    }
+}
+
+impl Language {
+    pub fn tree_sitter_language(self) -> tree_sitter::Language {
+        match self {
+            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Language::Python => tree_sitter_python::LANGUAGE.into(),
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            Language::Java => tree_sitter_java::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+            Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+            Language::Html => tree_sitter_html::LANGUAGE.into(),
+            Language::Json => tree_sitter_json::LANGUAGE.into(),
+            Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+            Language::Toml => tree_sitter_toml_ng::LANGUAGE.into(),
+            Language::Bash => tree_sitter_bash::LANGUAGE.into(),
+            Language::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+        }
+    }
+}
+
 pub struct LanguageSupport {
-    parsers: std::collections::HashMap<Language, tree_sitter::Parser>,
+    parsers: std::collections::HashMap<Grammar, tree_sitter::Parser>,
 }
 
 impl LanguageSupport {
     pub fn new() -> Result<Self> {
         let mut parsers = std::collections::HashMap::new();
 
-        // Initialize parsers for each language
-        Self::add_parser(
-            &mut parsers,
-            Language::Rust,
-            tree_sitter_rust::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::TypeScript,
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::JavaScript,
-            tree_sitter_javascript::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Python,
-            tree_sitter_python::LANGUAGE.into(),
-        )?;
-        Self::add_parser(&mut parsers, Language::Go, tree_sitter_go::LANGUAGE.into())?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Java,
-            tree_sitter_java::LANGUAGE.into(),
-        )?;
-        Self::add_parser(&mut parsers, Language::C, tree_sitter_c::LANGUAGE.into())?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Cpp,
-            tree_sitter_cpp::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Php,
-            tree_sitter_php::LANGUAGE_PHP.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Ruby,
-            tree_sitter_ruby::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::CSharp,
-            tree_sitter_c_sharp::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Kotlin,
-            tree_sitter_kotlin_ng::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Scala,
-            tree_sitter_scala::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Html,
-            tree_sitter_html::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Json,
-            tree_sitter_json::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Yaml,
-            tree_sitter_yaml::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Toml,
-            tree_sitter_toml_ng::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Bash,
-            tree_sitter_bash::LANGUAGE.into(),
-        )?;
-        Self::add_parser(
-            &mut parsers,
-            Language::Elixir,
-            tree_sitter_elixir::LANGUAGE.into(),
-        )?;
+        for &lang in Self::supported_languages() {
+            Self::add_parser(&mut parsers, Grammar::Language(lang))?;
+        }
+        Self::add_parser(&mut parsers, Grammar::Tsx)?;
 
         Ok(Self { parsers })
     }
 
     fn add_parser(
-        parsers: &mut std::collections::HashMap<Language, tree_sitter::Parser>,
-        lang: Language,
-        grammar: tree_sitter::Language,
+        parsers: &mut std::collections::HashMap<Grammar, tree_sitter::Parser>,
+        grammar: Grammar,
     ) -> Result<()> {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&grammar)
-            .map_err(|e| anyhow!("Failed to set {} language: {}", lang.name(), e))?;
-        parsers.insert(lang, parser);
+            .set_language(&grammar.tree_sitter_language())
+            .map_err(|e| anyhow!("Failed to set {:?} language: {}", grammar, e))?;
+        parsers.insert(grammar, parser);
         Ok(())
     }
 
+    /// Parse with the language's default grammar. `.tsx` files need
+    /// [`LanguageSupport::parse_path`] (or `parse_with`) for the TSX grammar.
     pub fn parse(&mut self, lang: Language, source: &str) -> Result<tree_sitter::Tree> {
+        self.parse_with(Grammar::Language(lang), source)
+    }
+
+    /// Parse a file: its grammar is chosen from `path` (`.tsx` → TSX).
+    pub fn parse_path(
+        &mut self,
+        lang: Language,
+        path: &Path,
+        source: &str,
+    ) -> Result<tree_sitter::Tree> {
+        self.parse_with(lang.grammar_for_path(path), source)
+    }
+
+    pub fn parse_with(&mut self, grammar: Grammar, source: &str) -> Result<tree_sitter::Tree> {
         let parser = self
             .parsers
-            .get_mut(&lang)
-            .ok_or_else(|| anyhow!("No parser for language: {:?}", lang))?;
+            .get_mut(&grammar)
+            .ok_or_else(|| anyhow!("No parser for grammar: {:?}", grammar))?;
 
         parser
             .parse(source, None)
@@ -452,6 +444,48 @@ mod tests {
             .parse(Language::Php, "<?php function hello() { echo 'hello'; }")
             .unwrap();
         assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn test_grammar_for_path() {
+        assert_eq!(
+            Language::TypeScript.grammar_for_path(Path::new("app/App.tsx")),
+            Grammar::Tsx
+        );
+        assert_eq!(
+            Language::TypeScript.grammar_for_path(Path::new("app/App.TSX")),
+            Grammar::Tsx
+        );
+        assert_eq!(
+            Language::TypeScript.grammar_for_path(Path::new("app/index.ts")),
+            Grammar::Language(Language::TypeScript)
+        );
+        assert_eq!(
+            Language::JavaScript.grammar_for_path(Path::new("app/App.jsx")),
+            Grammar::Language(Language::JavaScript)
+        );
+    }
+
+    #[test]
+    fn test_parse_tsx_uses_the_tsx_grammar() {
+        let mut support = LanguageSupport::new().unwrap();
+        let source = "export function App() {\n  return <div className=\"app\"><Button onClick={go} /></div>;\n}\n";
+        let path = Path::new("src/App.tsx");
+        let tree = support
+            .parse_path(Language::TypeScript, path, source)
+            .unwrap();
+        assert!(
+            !tree.root_node().has_error(),
+            "{}",
+            tree.root_node().to_sexp()
+        );
+        assert!(Grammar::Tsx.parsed(&tree));
+        assert!(!Grammar::Language(Language::TypeScript).parsed(&tree));
+
+        // The plain grammar reads the JSX as type assertions and fails.
+        let plain = support.parse(Language::TypeScript, source).unwrap();
+        assert!(plain.root_node().has_error());
+        assert!(Grammar::Language(Language::TypeScript).parsed(&plain));
     }
 
     #[test]

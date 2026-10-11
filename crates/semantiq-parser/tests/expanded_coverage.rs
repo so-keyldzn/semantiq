@@ -2,14 +2,26 @@
 // l'élargissement des queries fonctionnent comme attendu sur les vrais
 // parsers tree-sitter. À supprimer si déplacé dans la suite normale.
 
-use semantiq_parser::language::{Language, LanguageSupport};
+use semantiq_parser::language::{Grammar, Language, LanguageSupport};
 use semantiq_parser::query_extractor::QuerySymbolExtractor;
 use semantiq_parser::symbols::SymbolKind;
 
 fn run(lang: Language, src: &str) -> Vec<(String, SymbolKind, Option<String>)> {
+    run_with(
+        lang.grammar_for_path(std::path::Path::new("sample")),
+        lang,
+        src,
+    )
+}
+
+fn run_with(
+    grammar: Grammar,
+    lang: Language,
+    src: &str,
+) -> Vec<(String, SymbolKind, Option<String>)> {
     let mut support = LanguageSupport::new().unwrap();
     let extractor = QuerySymbolExtractor::new().unwrap();
-    let tree = support.parse(lang, src).unwrap();
+    let tree = support.parse_with(grammar, src).unwrap();
     extractor
         .extract(&tree, src, lang)
         .unwrap()
@@ -153,6 +165,28 @@ fn audit_typescript() {
         names.contains(&"ambient"),
         "ambient declare missed: {names:?}"
     );
+}
+
+#[test]
+fn audit_tsx_components() {
+    // `.tsx`: the TSX grammar compiles the TypeScript query, so components,
+    // hooks and the declarations following a JSX block are all indexed
+    // (the plain grammar's error recovery used to swallow them).
+    let src = "export function App() {\n  return <div className=\"a\"><Button onClick={go} /></div>;\n}\nexport default function Panel() { return <App />; }\nexport const useThing = () => 1;\ninterface Props { id: string }\n";
+    let symbols = run_with(Grammar::Tsx, Language::TypeScript, src);
+    eprintln!("TSX: {symbols:?}");
+    let pairs: Vec<(&str, &SymbolKind)> = symbols.iter().map(|(n, k, _)| (n.as_str(), k)).collect();
+    for (name, kind) in [
+        ("App", SymbolKind::Function),
+        ("Panel", SymbolKind::Function),
+        ("useThing", SymbolKind::Function),
+        ("Props", SymbolKind::Interface),
+    ] {
+        assert!(
+            pairs.iter().any(|(n, k)| *n == name && **k == kind),
+            "{name} as {kind:?} missed: {pairs:?}"
+        );
+    }
 }
 
 #[test]

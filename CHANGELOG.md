@@ -177,6 +177,10 @@ All notable changes to Semantiq will be documented in this file.
   and `stats` / `calibrate`) ends quietly with exit code 0 when the reader
   closes the pipe early, instead of panicking with `Broken pipe` and exit
   code 101 (#49).
+- `.tsx` files are parsed with the TSX grammar (#54): JSX no longer yields
+  `ERROR` nodes, a rendered component (`<Button />`, `<Ui.Card>`) is a call of
+  the component (an edge in `calls`, a use for `dead-code`), attribute values
+  are references, attribute names, intrinsic tags and closing tags are not.
 - Kotlin imports are extracted (#56): the extractor matched the old
   `import_header` node, so `deps` and the repo map had nothing for Kotlin
   files. Aliases (`import a.B as C`) and wildcards are handled.

@@ -14,7 +14,7 @@ pub const PARSER_VERSION: u32 = 15; // v15: Stored paths (`files.path`, `resolve
 
 pub use chunks::{ChunkExtractor, CodeChunk};
 pub use imports::{Import, ImportContext, ImportExtractor, ImportKind, go_module_path};
-pub use language::{Language, LanguageSupport};
+pub use language::{Grammar, Language, LanguageSupport};
 pub use query_extractor::QuerySymbolExtractor;
 pub use references::{Reference, ReferenceExtractor, ReferenceKind};
 pub use resolve::{resolve_local_import, slash_path};

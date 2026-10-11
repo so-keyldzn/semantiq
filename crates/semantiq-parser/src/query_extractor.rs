@@ -1,4 +1,4 @@
-use crate::language::Language;
+use crate::language::{Grammar, Language};
 use crate::symbols::{Symbol, SymbolKind};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -10,8 +10,10 @@ use tree_sitter::{Node, Query, QueryCursor, Tree};
 /// Cette approche remplace la traversée AST récursive par des pattern matching
 /// déclaratifs, ce qui est plus maintenable et extensible.
 pub struct QuerySymbolExtractor {
-    /// Queries compilées par langage. Une query est immutable et thread-safe.
-    queries: HashMap<Language, Query>,
+    /// Queries compilées par grammaire (une query est liée à la grammaire qui
+    /// l'a compilée : la query TypeScript est compilée une seconde fois pour
+    /// TSX). Une query est immutable et thread-safe.
+    queries: HashMap<Grammar, Query>,
 }
 
 impl QuerySymbolExtractor {
@@ -27,15 +29,16 @@ impl QuerySymbolExtractor {
 
         // Macro locale pour compiler une query et accumuler les erreurs.
         macro_rules! load {
-            ($lang:expr, $path:literal, $grammar:expr) => {{
+            ($lang:expr, $path:literal, $grammar:expr) => {{ load!(Grammar::Language($lang), $lang.name(), $path, $grammar) }};
+            ($key:expr, $label:expr, $path:literal, $grammar:expr) => {{
                 let src = include_str!($path);
                 let ts_lang: tree_sitter::Language = $grammar.into();
                 match Query::new(&ts_lang, src) {
                     Ok(q) => {
-                        queries.insert($lang, q);
+                        queries.insert($key, q);
                     }
                     Err(e) => {
-                        errors.push(format!("  - {} ({}): {:?}", $lang.name(), $path, e));
+                        errors.push(format!("  - {} ({}): {:?}", $label, $path, e));
                     }
                 }
             }};
@@ -50,6 +53,12 @@ impl QuerySymbolExtractor {
             Language::TypeScript,
             "../queries/typescript/tags.scm",
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT
+        );
+        load!(
+            Grammar::Tsx,
+            "tsx",
+            "../queries/typescript/tags.scm",
+            tree_sitter_typescript::LANGUAGE_TSX
         );
         load!(
             Language::JavaScript,
@@ -150,7 +159,7 @@ impl QuerySymbolExtractor {
 
     /// Retourne true si une query est disponible pour ce langage.
     pub fn has_query(&self, language: Language) -> bool {
-        self.queries.contains_key(&language)
+        self.queries.contains_key(&Grammar::Language(language))
     }
 
     /// Extrait les symboles d'un arbre syntaxique en utilisant la query du langage.
@@ -160,9 +169,16 @@ impl QuerySymbolExtractor {
     /// 2. Pour chaque match, extrait le nom et le kind depuis les captures
     /// 3. Post-traitement : résolution des parents, signatures, doc comments
     pub fn extract(&self, tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
+        // La query doit venir de la grammaire qui a produit l'arbre (TSX ou
+        // TypeScript pour un fichier TypeScript).
+        let grammar = if Grammar::Tsx.parsed(tree) {
+            Grammar::Tsx
+        } else {
+            Grammar::Language(language)
+        };
         let query = self
             .queries
-            .get(&language)
+            .get(&grammar)
             .context("No query available for language")?;
 
         let mut cursor = QueryCursor::new();

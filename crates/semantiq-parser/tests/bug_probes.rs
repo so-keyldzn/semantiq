@@ -54,7 +54,7 @@ mod bug_probes {
         let path = Path::new(path);
         let lang = Language::from_path(path).unwrap();
         let mut support = LanguageSupport::new().unwrap();
-        let tree = support.parse(lang, source).unwrap();
+        let tree = support.parse_path(lang, path, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, lang);
         let calls = StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
@@ -452,6 +452,90 @@ public:
             .as_deref(),
             Some("/// Config.")
         );
+    }
+
+    // B11 (#54): `.tsx` files are parsed with the TSX grammar. With the plain
+    // TypeScript grammar the JSX yielded ERROR nodes, `format(user)` inside the
+    // markup was a plain reference and tag / attribute names were `type`s.
+    #[test]
+    fn b11_tsx_jsx_parsed_with_tsx_grammar() {
+        let source = include_str!("fixtures/typescript/sample.tsx");
+        let e = extract_file("src/App.tsx", source);
+        assert!(!e.has_error, "TSX fixture must parse without ERROR nodes");
+
+        // Exported components are definitions (their `export` visibility in
+        // the signature is B15), and the declarations after the JSX survive.
+        let app = e.symbols.iter().find(|s| s.name == "App").expect("App");
+        assert_eq!(app.kind, SymbolKind::Function);
+        assert_eq!(
+            reference(&e.refs, "App", 19).map(|r| r.kind),
+            Some(ReferenceKind::Definition)
+        );
+        for name in ["Panel", "Unused"] {
+            assert!(
+                e.symbols
+                    .iter()
+                    .any(|s| s.name == name && s.kind == SymbolKind::Function),
+                "{name} missing after the JSX block: {:?}",
+                e.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+            );
+        }
+
+        // A rendered component is a call: `<Button />` → edge App -> Button,
+        // `<Ui.Card>` → App -> Card, `<App />` → Panel -> App.
+        assert_eq!(
+            reference(&e.refs, "Button", 24).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        for edge in [
+            ("App", "Button", 24),
+            ("App", "Card", 25),
+            ("App", "format", 25),
+            ("App", "setCount", 28),
+            ("Panel", "App", 34),
+        ] {
+            let (caller, callee, line) = edge;
+            assert!(
+                e.calls
+                    .iter()
+                    .any(|(c, k, l)| c == caller && k == callee && *l == line),
+                "missing edge {caller} -> {callee} L{line}: {:?}",
+                e.calls
+            );
+        }
+
+        // Attribute values are references, a call inside the markup is a call.
+        assert_eq!(
+            reference(&e.refs, "handle", 24).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+        assert_eq!(
+            reference(&e.refs, "format", 25).map(|r| r.kind),
+            Some(ReferenceKind::Call)
+        );
+        assert_eq!(
+            reference(&e.refs, "count", 26).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+
+        // Attribute names, intrinsic tags and closing tags are not symbols.
+        for name in [
+            "className",
+            "onClick",
+            "label",
+            "title",
+            "div",
+            "button",
+            "p",
+        ] {
+            assert!(
+                !e.refs.iter().any(|r| r.name == name),
+                "`{name}` must not be a reference: {:?}",
+                e.refs
+            );
+        }
+        assert!(reference(&e.refs, "Card", 27).is_none(), "closing tag");
+        assert!(reference(&e.refs, "Ui", 27).is_none(), "closing tag");
     }
 
     // B12 (#56): Kotlin imports come from `import` nodes (kotlin-ng grammar).

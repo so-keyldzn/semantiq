@@ -5,7 +5,7 @@ use semantiq_parser::{
     Language, LanguageSupport, ReferenceExtractor, StructureExtractor, SymbolExtractor,
 };
 
-/// Index Rust `files` (path, source) under a temp root, with structure.
+/// Index `files` (path, source) under a temp root, with structure.
 fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
     let root = tempfile::Builder::new()
         .prefix("semantiq-structure")
@@ -21,7 +21,9 @@ fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir)
         let file_id = store
             .insert_file(path, Some(language.name()), source, 0)
             .unwrap();
-        let tree = support.parse(language, source).unwrap();
+        let tree = support
+            .parse_path(language, std::path::Path::new(path), source)
+            .unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, language).unwrap();
         store.insert_symbols(file_id, &symbols).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, language);

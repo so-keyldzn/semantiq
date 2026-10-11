@@ -387,7 +387,7 @@ impl AutoIndexer {
             .language_support
             .lock()
             .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
-        match language_support.parse(language, &content) {
+        match language_support.parse_path(language, path, &content) {
             Ok(tree) => {
                 // Extract symbols
                 let symbols = SymbolExtractor::extract(&tree, &content, language)?;
