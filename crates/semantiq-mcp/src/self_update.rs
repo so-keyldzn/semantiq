@@ -404,6 +404,19 @@ mod tests {
         );
     }
 
+    /// `USER == root` or an effective uid of 0 (`id -u`).
+    #[cfg(unix)]
+    fn running_as_root() -> bool {
+        if std::env::var("USER").as_deref() == Ok("root") {
+            return true;
+        }
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+            .unwrap_or(false)
+    }
+
     #[test]
     fn install_location_must_be_writable() {
         let dir = tempfile::tempdir().unwrap();
@@ -425,8 +438,10 @@ mod tests {
             "{err}"
         );
 
+        // Root ignores mode bits (containers, CI images): the unwritable
+        // directory cannot be built there, skip that sub-case.
         #[cfg(unix)]
-        {
+        if !running_as_root() {
             use std::os::unix::fs::PermissionsExt as _;
             let locked = dir.path().join("locked");
             std::fs::create_dir(&locked).unwrap();
