@@ -79,32 +79,82 @@ impl IndexStore {
 
     /// Call sites of `callee`, ordered by file path then line.
     pub fn find_callers(&self, callee: &str, limit: usize) -> Result<Vec<CallEdgeRecord>> {
-        self.query_call_edges("e.callee = ?1", callee, limit)
+        self.find_callers_near(callee, &[], limit)
+    }
+
+    /// Call sites of `callee`, the ones most likely to target a definition
+    /// in `near_files` first (see `find_references_by_name_near`), so a
+    /// capped lookup of a common name never cuts the trusted callers.
+    pub fn find_callers_near(
+        &self,
+        callee: &str,
+        near_files: &[i64],
+        limit: usize,
+    ) -> Result<Vec<CallEdgeRecord>> {
+        let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
+        let (priority, params) =
+            super::references::near_files_priority("e.file_id", callee, safe_limit, near_files);
+        self.query_call_edges("e.callee = ?1", &priority, params)
     }
 
     /// Calls made from inside any function/method named `caller`.
     pub fn find_callees(&self, caller: &str, limit: usize) -> Result<Vec<CallEdgeRecord>> {
-        self.query_call_edges("e.caller = ?1", caller, limit)
+        self.find_callees_from(caller, &[], limit)
     }
 
-    fn query_call_edges(
+    /// Calls made from inside the functions/methods named `caller` declared
+    /// at the given `(file_id, line)` sites; from any of them when `sites`
+    /// is empty. Filtering in SQL keeps a capped lookup of a common name
+    /// (`new`) from returning only the homonyms sorting first.
+    pub fn find_callees_from(
         &self,
-        filter: &str,
-        name: &str,
+        caller: &str,
+        sites: &[(i64, i64)],
         limit: usize,
     ) -> Result<Vec<CallEdgeRecord>> {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(caller.to_string()), Box::new(safe_limit as i64)];
+        let mut filter = "e.caller = ?1".to_string();
+        if !sites.is_empty() {
+            let pairs: Vec<String> = sites
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    format!(
+                        "(e.file_id = ?{} AND e.caller_line = ?{})",
+                        2 * i + 3,
+                        2 * i + 4
+                    )
+                })
+                .collect();
+            filter.push_str(&format!(" AND ({})", pairs.join(" OR ")));
+            for (file_id, line) in sites {
+                params.push(Box::new(*file_id));
+                params.push(Box::new(*line));
+            }
+        }
+        self.query_call_edges(&filter, "NULL", params)
+    }
+
+    /// `?1` = name, `?2` = limit in both `filter` and `priority`.
+    fn query_call_edges(
+        &self,
+        filter: &str,
+        priority: &str,
+        params: Vec<Box<dyn rusqlite::ToSql>>,
+    ) -> Result<Vec<CallEdgeRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&format!(
                 "SELECT e.file_id, f.path, e.line, e.callee, e.caller, e.caller_line, e.count
                  FROM call_edges e
                  JOIN files f ON f.id = e.file_id
                  WHERE {filter}
-                 ORDER BY f.path, e.line
+                 ORDER BY {priority}, f.path, e.line
                  LIMIT ?2"
             ))?;
             let records = stmt
-                .query_map(params![name, safe_limit as i64], |row| {
+                .query_map(rusqlite::params_from_iter(params), |row| {
                     Ok(CallEdgeRecord {
                         file_id: row.get(0)?,
                         file_path: row.get(1)?,
@@ -319,6 +369,98 @@ mod tests {
         store.delete_file("src/a.rs").unwrap();
         assert!(store.find_callers("helper", 10).unwrap().is_empty());
         assert!(store.find_subtypes("Bar", 10).unwrap().is_empty());
+    }
+
+    fn call(caller: &str, caller_line: usize, callee: &str, line: usize) -> CallEdge {
+        CallEdge {
+            caller: caller.into(),
+            caller_line,
+            callee: callee.into(),
+            line,
+            count: 1,
+        }
+    }
+
+    #[test]
+    fn test_find_callees_from_filters_sites_before_the_limit() {
+        // Regression for #42: the limit applied in path order before the
+        // location filter, so homonyms sorting first hid the wanted edges.
+        let store = IndexStore::open_in_memory().unwrap();
+        for i in 0..6 {
+            let id = store
+                .insert_file(&format!("a{i}.rs"), Some("rust"), "x", 0)
+                .unwrap();
+            let structure = FileStructure {
+                calls: vec![call("new", 1, "shared", 2)],
+                relations: vec![],
+            };
+            store.insert_structure(id, &structure).unwrap();
+        }
+        let z = store.insert_file("zz.rs", Some("rust"), "x", 0).unwrap();
+        let structure = FileStructure {
+            calls: vec![call("new", 10, "target", 11), call("new", 20, "other", 21)],
+            relations: vec![],
+        };
+        store.insert_structure(z, &structure).unwrap();
+
+        let edges = store.find_callees_from("new", &[(z, 10)], 5).unwrap();
+        let callees: Vec<&str> = edges.iter().map(|e| e.callee.as_str()).collect();
+        assert_eq!(callees, vec!["target"]);
+        // No sites: any function named `new`, capped.
+        assert_eq!(store.find_callees_from("new", &[], 5).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_find_callers_near_puts_trusted_files_first() {
+        let store = IndexStore::open_in_memory().unwrap();
+        for i in 0..6 {
+            let id = store
+                .insert_file(&format!("a{i}.rs"), Some("rust"), "x", 0)
+                .unwrap();
+            let structure = FileStructure {
+                calls: vec![call("run", 1, "shared", 2)],
+                relations: vec![],
+            };
+            store.insert_structure(id, &structure).unwrap();
+        }
+        let importer = store.insert_file("m.rs", Some("rust"), "x", 0).unwrap();
+        store
+            .insert_structure(
+                importer,
+                &FileStructure {
+                    calls: vec![call("go", 1, "shared", 3)],
+                    relations: vec![],
+                },
+            )
+            .unwrap();
+        store
+            .insert_dependency(
+                importer,
+                "crate::zz::shared",
+                Some("shared"),
+                "local",
+                None,
+                (1, 1),
+            )
+            .unwrap();
+        let z = store.insert_file("zz.rs", Some("rust"), "x", 0).unwrap();
+        store
+            .insert_structure(
+                z,
+                &FileStructure {
+                    calls: vec![call("local", 5, "shared", 6)],
+                    relations: vec![],
+                },
+            )
+            .unwrap();
+
+        let edges = store.find_callers_near("shared", &[z], 3).unwrap();
+        let files: Vec<&str> = edges.iter().map(|e| e.file_path.as_str()).collect();
+        assert_eq!(files, vec!["zz.rs", "m.rs", "a0.rs"]);
+        // Without a hint, plain path order.
+        let edges = store.find_callers("shared", 2).unwrap();
+        let files: Vec<&str> = edges.iter().map(|e| e.file_path.as_str()).collect();
+        assert_eq!(files, vec!["a0.rs", "a1.rs"]);
     }
 
     #[test]

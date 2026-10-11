@@ -22,10 +22,10 @@ pub struct CalibrationResult {
 pub struct CalibrationConfig {
     /// Minimum number of samples required for calibration.
     pub min_samples: usize,
-    /// Percentile to use for max_distance (e.g., 90 = 90th percentile).
+    /// Percentile of the observed distances kept by the calibrated gates
+    /// (e.g., 90 = 90th percentile): `max_distance` is that percentile and
+    /// `min_similarity` its similarity, so both gates cut at the same point.
     pub distance_percentile: f32,
-    /// Percentile to use for min_similarity (e.g., 10 = 10th percentile of distances).
-    pub similarity_percentile: f32,
 }
 
 impl Default for CalibrationConfig {
@@ -33,7 +33,6 @@ impl Default for CalibrationConfig {
         Self {
             min_samples: MIN_SAMPLES_FOR_CALIBRATION,
             distance_percentile: 90.0,
-            similarity_percentile: 10.0,
         }
     }
 }
@@ -158,21 +157,24 @@ impl ThresholdCalibrator {
     }
 
     /// Compute thresholds from distance statistics.
+    ///
+    /// A candidate passes semantic search when `distance < max_distance` and
+    /// `1 / (1 + distance) >= min_similarity`. Both gates are derived from
+    /// the same (high) percentile of the observed distances, so together
+    /// they keep that share of the candidates seen so far: deriving
+    /// `min_similarity` from a low percentile instead made the similarity
+    /// gate the binding one and dropped ~90 % of the candidates.
     fn compute_thresholds(&self, stats: &DistanceStats, sample_count: usize) -> LanguageThresholds {
-        // Use percentile-based thresholds
-        // max_distance: 90th percentile of distances (includes 90% of results)
+        // max_distance: the configured percentile (90th by default), within
+        // sanity bounds.
         let max_distance =
-            Self::compute_percentile_threshold(stats, self.config.distance_percentile);
+            Self::compute_percentile_threshold(stats, self.config.distance_percentile)
+                .clamp(0.5, 3.0);
 
-        // min_similarity: derived from 10th percentile of distances
-        // Low distance = high similarity, so we want low distances to have high similarity
-        let low_distance =
-            Self::compute_percentile_threshold(stats, self.config.similarity_percentile);
-        let min_similarity = DistanceStats::distance_to_similarity(low_distance);
-
-        // Apply sanity bounds
-        let max_distance = max_distance.clamp(0.5, 3.0);
-        let min_similarity = min_similarity.clamp(0.1, 0.8);
+        // min_similarity: the similarity of max_distance, so the similarity
+        // gate never cuts closer than the distance gate (1/(1+3) = 0.25 and
+        // 1/(1+0.5) = 0.67 both sit inside the sanity bounds).
+        let min_similarity = DistanceStats::distance_to_similarity(max_distance).clamp(0.1, 0.8);
 
         debug!(
             p90_distance = stats.p90,
@@ -391,6 +393,72 @@ mod tests {
         let high_distances: Vec<f32> = (0..100).map(|i| 5.0 + i as f32 * 0.1).collect();
         let result = calibrator.calibrate_language("test", &high_distances);
         assert!(result.thresholds.max_distance <= 3.0);
+    }
+
+    /// Share of `distances` that pass both semantic gates, as `search_semantic`
+    /// applies them.
+    fn kept_share(distances: &[f32], max_distance: f32, min_similarity: f32) -> f32 {
+        let kept = distances
+            .iter()
+            .filter(|&&d| {
+                d < max_distance && DistanceStats::distance_to_similarity(d) >= min_similarity
+            })
+            .count();
+        kept as f32 / distances.len() as f32
+    }
+
+    #[test]
+    fn test_calibrated_gates_keep_the_configured_share_of_candidates() {
+        // Regression for #33: min_similarity used to come from the 10th
+        // percentile, so only candidates closer than p10 survived (~10 %).
+        let calibrator = ThresholdCalibrator::with_config(CalibrationConfig {
+            min_samples: 10,
+            ..Default::default()
+        });
+        // Uniform 0.5..1.1, the shape of real KNN candidates: p10 ≈ 0.56.
+        let distances: Vec<f32> = (0..600).map(|i| 0.5 + i as f32 * 0.001).collect();
+
+        let result = calibrator.calibrate_language("rust", &distances);
+        assert!(result.success);
+        let t = &result.thresholds;
+        assert!(
+            (t.min_similarity - DistanceStats::distance_to_similarity(t.max_distance)).abs() < 1e-6,
+            "min_similarity {} must be the similarity of max_distance {}",
+            t.min_similarity,
+            t.max_distance
+        );
+        let share = kept_share(&distances, t.max_distance, t.min_similarity);
+        assert!(
+            (0.85..=0.95).contains(&share),
+            "calibration must keep ~90 % of the observed sample, kept {share}"
+        );
+
+        // A query whose nearest chunks sit at 0.7..0.9 still gets results.
+        let query: Vec<f32> = (0..20).map(|i| 0.7 + i as f32 * 0.01).collect();
+        assert_eq!(kept_share(&query, t.max_distance, t.min_similarity), 1.0);
+    }
+
+    #[test]
+    fn test_calibration_at_the_min_samples_boundary() {
+        // Exactly MIN_SAMPLES_FOR_CALIBRATION samples calibrate, one fewer
+        // does not; both gates keep ~90 % of the sample at the boundary.
+        let calibrator = ThresholdCalibrator::new();
+        let distances: Vec<f32> = (0..MIN_SAMPLES_FOR_CALIBRATION)
+            .map(|i| 0.5 + i as f32 * 0.006)
+            .collect();
+        assert_eq!(distances.len(), 100);
+
+        let result = calibrator.calibrate_language("rust", &distances);
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.thresholds.sample_count, MIN_SAMPLES_FOR_CALIBRATION);
+        let t = &result.thresholds;
+        let share = kept_share(&distances, t.max_distance, t.min_similarity);
+        assert!((0.85..=0.95).contains(&share), "kept {share}");
+
+        let result = calibrator.calibrate_language("rust", &distances[1..]);
+        assert!(!result.success);
+        assert!(calibrator.calibrate_global(&distances).success);
+        assert!(!calibrator.calibrate_global(&distances[1..]).success);
     }
 
     #[test]

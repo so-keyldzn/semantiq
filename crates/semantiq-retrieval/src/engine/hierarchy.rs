@@ -80,33 +80,23 @@ impl RetrievalEngine {
             })
             .collect();
 
-        let mut truncated = false;
-        let supertypes = self.walk_hierarchy(
-            &mut resolver,
-            type_name,
-            Walk::Up,
-            max_depth,
-            max_edges,
-            &mut truncated,
-        )?;
-        let subtypes = self.walk_hierarchy(
-            &mut resolver,
-            type_name,
-            Walk::Down,
-            max_depth,
-            max_edges,
-            &mut truncated,
-        )?;
+        // Each direction has its own budget and its own cut: a supertype
+        // walk hitting the cap must not stop the subtype walk.
+        let (supertypes, cut_up) =
+            self.walk_hierarchy(&mut resolver, type_name, Walk::Up, max_depth, max_edges)?;
+        let (subtypes, cut_down) =
+            self.walk_hierarchy(&mut resolver, type_name, Walk::Down, max_depth, max_edges)?;
 
         Ok(TypeHierarchy {
             symbol: type_name.to_string(),
             definitions,
             supertypes,
             subtypes,
-            truncated,
+            truncated: cut_up || cut_down,
         })
     }
 
+    /// Edges in one direction, and whether `max_edges` cut some.
     fn walk_hierarchy(
         &self,
         resolver: &mut Resolver,
@@ -114,22 +104,25 @@ impl RetrievalEngine {
         walk: Walk,
         max_depth: usize,
         max_edges: usize,
-        truncated: &mut bool,
-    ) -> Result<Vec<TypeEdge>> {
+    ) -> Result<(Vec<TypeEdge>, bool)> {
         let mut edges = Vec::new();
+        let mut cut = false;
         let mut visited = HashSet::from([type_name.to_string()]);
         let mut queue = VecDeque::from([(type_name.to_string(), 1)]);
 
         while let Some((name, depth)) = queue.pop_front() {
-            let relations = match walk {
-                Walk::Up => self.store.find_supertypes(&name, max_edges)?,
-                Walk::Down => self.store.find_subtypes(&name, max_edges)?,
+            // One relation more than the remaining budget tells whether the
+            // cap cuts some: a query limited to the budget hid that.
+            let budget = max_edges - edges.len();
+            let mut relations = match walk {
+                Walk::Up => self.store.find_supertypes(&name, budget + 1)?,
+                Walk::Down => self.store.find_subtypes(&name, budget + 1)?,
             };
+            if relations.len() > budget {
+                relations.truncate(budget);
+                cut = true;
+            }
             for relation in relations {
-                if edges.len() >= max_edges {
-                    *truncated = true;
-                    return Ok(edges);
-                }
                 let next = match walk {
                     Walk::Up => relation.super_name.clone(),
                     Walk::Down => relation.type_name.clone(),
@@ -151,7 +144,10 @@ impl RetrievalEngine {
                     queue.push_back((next, depth + 1));
                 }
             }
+            if cut {
+                break;
+            }
         }
-        Ok(edges)
+        Ok((edges, cut))
     }
 }

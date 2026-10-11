@@ -1,7 +1,6 @@
 //! Code analysis functionality for RetrievalEngine.
 
 use super::{RetrievalEngine, normalize_input_path};
-use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -65,11 +64,16 @@ impl RetrievalEngine {
                 .store
                 .get_file_by_path(&self.get_file_path(symbol.file_id)?)?
             {
-                let content = self.read_file_lines(
-                    &file.path,
-                    symbol.start_line as usize,
-                    symbol.end_line as usize,
-                )?;
+                // A definition whose file is gone (renamed before the watcher
+                // caught up, `--no-refresh`) keeps its index data; only its
+                // snippet is missing.
+                let content = self
+                    .read_file_lines(
+                        &file.path,
+                        symbol.start_line as usize,
+                        symbol.end_line as usize,
+                    )
+                    .unwrap_or_default();
 
                 definition_spans.push((file.path.clone(), symbol.start_line, symbol.end_line));
                 results.push(
@@ -96,8 +100,7 @@ impl RetrievalEngine {
             .find_references_by_name(symbol_name, limit.saturating_add(symbols.len()))?;
 
         if references.is_empty() {
-            let usage_results =
-                self.search_text(&Query::new(symbol_name), limit, &SearchOptions::default())?;
+            let usage_results = self.search_identifier_text(symbol_name, limit)?;
             let mut seen = std::collections::HashSet::new();
             for r in &results {
                 seen.insert((r.file_path.clone(), r.start_line));
@@ -260,19 +263,16 @@ impl RetrievalEngine {
         }
 
         // Usages come from the AST `refs` table. Names it does not know
-        // (data-file keys) fall back to counting text occurrences, minus the
-        // known definitions; that count is capped and reads as "at least N".
+        // (data-file keys) fall back to counting the lines holding the whole
+        // identifier, minus the known definitions; that count is capped and
+        // reads as "at least N".
         let usage_count = if self
             .store
             .find_references_by_name(symbol_name, 1)?
             .is_empty()
         {
             const USAGE_SEARCH_CAP: usize = 1000;
-            let usage_results = self.search_text(
-                &Query::new(symbol_name),
-                USAGE_SEARCH_CAP,
-                &SearchOptions::default(),
-            )?;
+            let usage_results = self.search_identifier_text(symbol_name, USAGE_SEARCH_CAP)?;
             usage_results.len().saturating_sub(symbols.len())
         } else {
             self.store.count_usages(symbol_name)?

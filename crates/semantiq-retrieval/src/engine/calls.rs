@@ -70,7 +70,9 @@ pub struct CallGraph {
     /// Names called by the analysed symbol (depth 1) with no definition in
     /// the index: library / standard calls.
     pub external_callees: Vec<String>,
-    /// The edge cap was reached; the graph is incomplete.
+    /// The edge cap was reached, or a name had more call edges than the
+    /// walk examines and some of them could have been reported; the graph
+    /// is incomplete.
     pub truncated: bool,
 }
 
@@ -173,10 +175,27 @@ impl RetrievalEngine {
             depth: 1,
         }]);
 
+        let mut truncated = false;
         while let Some(node) = queue.pop_front() {
-            let edges = self
+            // Capped lookup, the edges from the defining files and from
+            // files importing them first (see `find_callers_near`). The cut
+            // is a truncation when the first cut edge could have been
+            // reported: at depth 1 every edge is, deeper only trusted ones
+            // (and the edges come trusted first).
+            let cap = max_edges.saturating_mul(5);
+            let near_files: Vec<i64> = node.locations.iter().map(|l| l.file_id).collect();
+            let mut edges = self
                 .store
-                .find_callers(&node.name, max_edges.saturating_mul(5))?;
+                .find_callers_near(&node.name, &near_files, cap + 1)?;
+            if edges.len() > cap {
+                let first_cut = edges.pop().expect("more than cap edges");
+                let trusted = !node.locations.is_empty()
+                    && resolver.confidence(first_cut.file_id, &node.name, &node.locations)?
+                        > ImpactConfidence::NameOnly;
+                if node.depth == 1 || trusted {
+                    truncated = true;
+                }
+            }
             for edge in edges {
                 let confidence = if node.locations.is_empty() {
                     ImpactConfidence::NameOnly
@@ -221,7 +240,7 @@ impl RetrievalEngine {
                 }
             }
         }
-        Ok(false)
+        Ok(truncated)
     }
 
     /// Breadth-first walk down the call graph. Returns whether the cap was hit.
@@ -243,21 +262,19 @@ impl RetrievalEngine {
             depth: 1,
         }]);
 
+        let mut truncated = false;
         while let Some(node) = queue.pop_front() {
-            let edges = self
-                .store
-                .find_callees(&node.name, max_edges.saturating_mul(5))?;
+            // Only calls made from the definitions being followed, not from
+            // homonyms elsewhere: filtered by the store, before its cap.
+            let cap = max_edges.saturating_mul(5);
+            let from: Vec<(i64, i64)> =
+                node.locations.iter().map(|l| (l.file_id, l.line)).collect();
+            let mut edges = self.store.find_callees_from(&node.name, &from, cap + 1)?;
+            if edges.len() > cap {
+                edges.truncate(cap);
+                truncated = true;
+            }
             for edge in edges {
-                // Only calls made from the definitions being followed, not
-                // from homonyms elsewhere.
-                if !node.locations.is_empty()
-                    && !node
-                        .locations
-                        .iter()
-                        .any(|l| l.file_id == edge.file_id && l.line == edge.caller_line)
-                {
-                    continue;
-                }
                 let targets = resolver.definitions(&edge.callee)?.to_vec();
                 if targets.is_empty() {
                     if node.depth == 1 {
@@ -302,6 +319,6 @@ impl RetrievalEngine {
                 }
             }
         }
-        Ok(false)
+        Ok(truncated)
     }
 }

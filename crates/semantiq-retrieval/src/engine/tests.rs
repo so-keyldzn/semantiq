@@ -1,6 +1,6 @@
 //! Tests for RetrievalEngine.
 
-use super::search::{WEIGHT_SEMANTIC, WEIGHT_SYMBOL, WEIGHT_TEXT, normalize_and_weight};
+use super::search::{WEIGHT_SEMANTIC, WEIGHT_SYMBOL, WEIGHT_TEXT, weight_strategy};
 use super::*;
 use crate::results::{SearchResult, SearchResultKind};
 
@@ -16,54 +16,92 @@ fn mk_result(score: f32) -> SearchResult {
 }
 
 #[test]
-fn test_normalize_and_weight_min_max() {
-    let mut results = vec![mk_result(0.5), mk_result(1.0), mk_result(0.75)];
-    normalize_and_weight(&mut results, 1.0);
+fn test_weight_strategy_two_hits_keep_their_strength() {
+    // Regression for #34: min-max normalization sent the weakest hit of a
+    // strategy to 0.0 (`parse_configuration` below every grep line).
+    let mut results = vec![mk_result(1.0), mk_result(0.8)];
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
 
-    // Min-max: lowest -> 0.0, highest -> 1.0, middle in between.
-    assert!((results[0].score - 0.0).abs() < 1e-6, "min should map to 0");
-    assert!((results[1].score - 1.0).abs() < 1e-6, "max should map to 1");
-    assert!(results[2].score > 0.0 && results[2].score < 1.0);
-
-    // Relative order within the strategy is preserved.
-    assert!(results[1].score > results[2].score);
-    assert!(results[2].score > results[0].score);
-}
-
-#[test]
-fn test_normalize_and_weight_applies_weight() {
-    let mut results = vec![mk_result(0.2), mk_result(0.9)];
-    normalize_and_weight(&mut results, WEIGHT_TEXT);
-
-    // Top result maps to 1.0 * weight; bottom maps to 0.0 * weight.
-    assert!((results[1].score - WEIGHT_TEXT).abs() < 1e-6);
-    assert!((results[0].score - 0.0).abs() < 1e-6);
-}
-
-#[test]
-fn test_normalize_and_weight_single_result_keeps_full_strength() {
-    // A lone result has no spread to normalize against; it must keep full
-    // weight (mapped to 1.0 * weight) rather than collapse to 0.
-    let mut results = vec![mk_result(0.42)];
-    normalize_and_weight(&mut results, WEIGHT_SYMBOL);
     assert!((results[0].score - WEIGHT_SYMBOL).abs() < 1e-6);
+    assert!(
+        (results[1].score - 0.8 * WEIGHT_SYMBOL).abs() < 1e-6,
+        "the weaker hit keeps its raw score: {}",
+        results[1].score
+    );
+    assert!(
+        results[1].score > 0.5 * WEIGHT_TEXT,
+        "a real symbol hit outranks weak grep lines"
+    );
 }
 
 #[test]
-fn test_normalize_and_weight_equal_scores_keep_full_strength() {
-    // All-equal scores (span == 0) must not collapse to 0.
-    let mut results = vec![mk_result(0.6), mk_result(0.6), mk_result(0.6)];
-    normalize_and_weight(&mut results, WEIGHT_SEMANTIC);
-    for r in &results {
-        assert!((r.score - WEIGHT_SEMANTIC).abs() < 1e-6);
-    }
+fn test_weight_strategy_single_hit_is_not_inflated() {
+    // Regression for #34: a lone weak hit used to map to full weight and
+    // outrank the best semantic chunk.
+    let mut results = vec![mk_result(0.45)];
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
+    assert!((results[0].score - 0.45 * WEIGHT_SYMBOL).abs() < 1e-6);
+
+    let mut semantic = vec![mk_result(0.95)];
+    weight_strategy(&mut semantic, WEIGHT_SEMANTIC);
+    assert!(semantic[0].score > results[0].score);
 }
 
 #[test]
-fn test_normalize_and_weight_empty_is_noop() {
+fn test_weight_strategy_applies_weight() {
+    let mut results = vec![mk_result(0.2), mk_result(0.9)];
+    weight_strategy(&mut results, WEIGHT_TEXT);
+    assert!((results[1].score - 0.9 * WEIGHT_TEXT).abs() < 1e-6);
+    assert!((results[0].score - 0.2 * WEIGHT_TEXT).abs() < 1e-6);
+}
+
+#[test]
+fn test_weight_strategy_empty_is_noop() {
     let mut results: Vec<SearchResult> = Vec::new();
-    normalize_and_weight(&mut results, WEIGHT_SYMBOL);
+    weight_strategy(&mut results, WEIGHT_SYMBOL);
     assert!(results.is_empty());
+}
+
+#[test]
+fn test_exact_symbol_match_outranks_boosted_prefix_match() {
+    // Regression for #34: the boosted scores were clamped to 1.0, so an exact
+    // function match tied with a prefix match of a short function name.
+    use semantiq_parser::{Symbol, SymbolKind};
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let file_id = store.insert_file("cfg.rs", Some("rust"), "", 0).unwrap();
+    let mk = |name: &str, line: usize| Symbol {
+        name: name.to_string(),
+        kind: SymbolKind::Function,
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 0,
+        signature: None,
+        doc_comment: None,
+        parent: None,
+    };
+    store
+        .insert_symbols(
+            file_id,
+            &[mk("parse_configuration", 1), mk("parse_config", 2)],
+        )
+        .unwrap();
+    let root = tempfile::TempDir::new().unwrap();
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+
+    let results = engine.search("parse_config", 10, None).unwrap().results;
+    let scored: Vec<(&str, f32)> = results
+        .iter()
+        .map(|r| (r.metadata.symbol_name.as_deref().unwrap_or(""), r.score))
+        .collect();
+    assert_eq!(scored[0].0, "parse_config", "{scored:?}");
+    assert_eq!(scored[1].0, "parse_configuration", "{scored:?}");
+    assert!(scored[0].1 > scored[1].1, "{scored:?}");
+    assert!(
+        scored.iter().all(|(_, s)| *s <= 1.0 && *s > 0.0),
+        "{scored:?}"
+    );
 }
 
 #[test]
@@ -376,6 +414,64 @@ fn test_find_references_falls_back_to_text_for_unknown_names() {
 }
 
 #[test]
+fn test_text_fallback_matches_whole_identifiers_case_sensitively() {
+    // Regression for #43: the fallback expanded case variants and matched
+    // substrings, so `id` hit `uuid`, `width`, `provider` and `IDENTITY`.
+    let (engine, _root) = index_rust_project(&[(
+        "main.rs",
+        "fn main() {\n    let a = \"id\";\n    let b = \"uuid\";\n    let c = \"width\";\n    let d = \"ID\";\n    let e = \"user_id\";\n    let f = \"x.id\";\n}\n",
+    )]);
+
+    let results = engine.find_references("id", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| (r.start_line, r.metadata.match_type.as_deref().unwrap_or("")))
+        .collect();
+    assert_eq!(hits, vec![(2, "text"), (7, "text")], "{hits:?}");
+}
+
+#[test]
+fn test_text_search_skips_minified_files_and_cuts_long_lines() {
+    // Regression for #44: a minified bundle returned its whole line as the
+    // hit's content.
+    let root = tempfile::Builder::new()
+        .prefix("semantiq-text")
+        .tempdir()
+        .unwrap();
+    let minified = format!("!function(){{var needle=1;{}}}();\n", "a=1;".repeat(2000));
+    std::fs::write(root.path().join("vendor.min.js"), minified).unwrap();
+    std::fs::write(
+        root.path().join("app.js"),
+        "function run() {\n  return needle();\n}\n",
+    )
+    .unwrap();
+    // A normal file with one long generated line: the hit is cut, not dropped.
+    let long_line = format!(
+        "const TABLE = [{}needle{}];",
+        "0,".repeat(1000),
+        ",0".repeat(1000)
+    );
+    let filler = "function helper_number_x(value) { return value + 1; }\n".repeat(20);
+    std::fs::write(
+        root.path().join("table.js"),
+        format!("{filler}{long_line}\n{filler}"),
+    )
+    .unwrap();
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+
+    let results = engine.search("needle", 10, None).unwrap().results;
+    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    assert!(files.contains(&"app.js"), "{files:?}");
+    assert!(files.contains(&"table.js"), "{files:?}");
+    assert!(!files.contains(&"vendor.min.js"), "{files:?}");
+    let cut = results.iter().find(|r| r.file_path == "table.js").unwrap();
+    assert!(cut.content.chars().count() <= crate::text_searcher::MAX_LINE_CHARS + 2);
+    assert!(cut.content.contains("needle"));
+}
+
+#[test]
 fn test_explain_usage_count_from_ast() {
     let (engine, _root) = index_rust_project(&[(
         "lib.rs",
@@ -446,6 +542,110 @@ fn test_impact_does_not_propagate_through_homonyms() {
     assert_eq!(analysis.definitions.len(), 1);
     // c.rs might call b.rs's `process`: reported, but `go` is not followed.
     assert_eq!(impact_sites(&analysis), vec![(1, "c.rs", 1, "name_only")]);
+}
+
+#[test]
+fn test_impact_mutual_recursion_reports_each_site_once() {
+    // Regression for #46: the analysed symbol was never marked visited, so
+    // `ping` <-> `pong` re-walked every reference to `ping` at depth 3 and reported
+    // the depth-1 sites again.
+    let (engine, _root) = index_rust_project(&[
+        (
+            "lib.rs",
+            "pub fn ping(n: u32) { if n > 0 { pong(n - 1); } }\npub fn pong(n: u32) { if n > 0 { ping(n - 1); } }\n",
+        ),
+        ("main.rs", "fn main() { ping(3); }\n"),
+    ]);
+
+    let analysis = engine.analyze_impact("ping", None, 3, 100).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![
+            (1, "lib.rs", 2, "same_file"),
+            (1, "main.rs", 1, "unique_name"),
+            (2, "lib.rs", 1, "same_file"),
+        ],
+        "{:?}",
+        analysis.sites
+    );
+    assert!(!analysis.truncated);
+
+    // With a cap of 3 the duplicates used to set `truncated`.
+    let capped = engine.analyze_impact("ping", None, 3, 3).unwrap();
+    assert_eq!(capped.sites.len(), 3);
+    assert!(!capped.truncated);
+}
+
+#[test]
+fn test_find_references_tolerates_a_missing_definition_file() {
+    let (engine, root) = index_rust_project(&[
+        ("lib.rs", "pub fn compute() -> u32 { 1 }\n"),
+        ("main.rs", "fn main() { compute(); }\n"),
+    ]);
+    std::fs::remove_file(root.path().join("lib.rs")).unwrap();
+
+    let results = engine.find_references("compute", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| (r.file_path.as_str(), r.content.as_str()))
+        .collect();
+    assert_eq!(
+        hits,
+        vec![("lib.rs", ""), ("main.rs", "fn main() { compute(); }")]
+    );
+}
+
+#[test]
+fn test_impact_depth_two_through_a_common_name_is_not_cut_by_homonyms() {
+    // Regression for #42: with `max_sites = 2` the lookup of `mid` examined
+    // 10 occurrences in path order, all homonyms in files sorting before
+    // zz.rs, and the trusted depth-2 site in zz.rs was never reached.
+    let mut files: Vec<(String, String)> = (0..12)
+        .map(|i| {
+            (
+                format!("b{i:02}.rs"),
+                "fn mid() {}\nfn x() {\n    mid();\n}\n".to_string(),
+            )
+        })
+        .collect();
+    files.push((
+        "zz.rs".to_string(),
+        "fn base() {}\nfn mid() {\n    base();\n}\nfn top() {\n    mid();\n}\n".to_string(),
+    ));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_rust_project(&files);
+
+    let analysis = engine.analyze_impact("base", None, 2, 2).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![(1, "zz.rs", 3, "same_file"), (2, "zz.rs", 6, "same_file")]
+    );
+    // The occurrences of `mid` beyond the cap are name-only homonyms that
+    // depth 2 would not report: not a truncation.
+    assert!(!analysis.truncated);
+}
+
+#[test]
+fn test_impact_flags_a_cut_of_trusted_occurrences_only() {
+    // 12 same-file non-call references to `mid` after its one real caller:
+    // the cap (10) cuts trusted rows, so the analysis is truncated even
+    // though no reported site was lost.
+    let refs = "    let f = mid;\n".repeat(12);
+    let source = format!(
+        "fn base() {{}}\nfn mid() {{\n    base();\n}}\nfn top() {{\n    mid();\n}}\nfn aliases() {{\n{refs}}}\n"
+    );
+    let (engine, _root) = index_rust_project(&[("zz.rs", source.as_str())]);
+
+    let analysis = engine.analyze_impact("base", None, 2, 2).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![(1, "zz.rs", 3, "same_file"), (2, "zz.rs", 6, "same_file")]
+    );
+    assert!(analysis.truncated);
 }
 
 #[test]

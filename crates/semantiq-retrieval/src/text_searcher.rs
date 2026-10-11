@@ -1,7 +1,33 @@
 use anyhow::Result;
+use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use std::io;
+
+/// Longest line content returned by a match. Longer lines (minified or
+/// generated code) are cut to a window of this many characters around the
+/// first match, marked with `…` on the cut sides.
+pub const MAX_LINE_CHARS: usize = 500;
+
+/// A file whose lines average more characters than this is minified or
+/// generated (bundles, source maps, SVG sprites, one-line HTML): text search
+/// skips it rather than return its whole content as a hit.
+pub const MAX_AVERAGE_LINE_CHARS: usize = 500;
+
+/// Bytes inspected for a NUL byte, the mark of a binary file.
+const BINARY_PROBE_BYTES: usize = 1024;
+
+/// Whether `content` is binary, minified or generated text that text search
+/// should skip: a NUL byte in the first KB, or lines averaging more than
+/// [`MAX_AVERAGE_LINE_CHARS`] characters.
+pub fn looks_generated(content: &str) -> bool {
+    let probe = &content.as_bytes()[..content.len().min(BINARY_PROBE_BYTES)];
+    if probe.contains(&0) {
+        return true;
+    }
+    let lines = content.lines().count().max(1);
+    content.chars().count() / lines > MAX_AVERAGE_LINE_CHARS
+}
 
 /// A text match result from ripgrep-based search
 #[derive(Debug, Clone)]
@@ -56,6 +82,30 @@ impl TextSearcher {
         })
     }
 
+    /// Pre-compile a literal pattern matched as a whole word: `id` matches
+    /// `id` but not `uuid`, `width` or `user_id`. A word boundary is only
+    /// required on the sides where the pattern itself is a word character,
+    /// so `$state` or `@tool` still match.
+    pub fn compile_word(&self, pattern: &str) -> Result<CompiledMatcher> {
+        let is_word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let mut word_pattern = String::new();
+        if is_word(pattern.chars().next()) {
+            word_pattern.push_str(r"\b");
+        }
+        word_pattern.push_str(&regex::escape(pattern));
+        if is_word(pattern.chars().last()) {
+            word_pattern.push_str(r"\b");
+        }
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(self.case_insensitive)
+            .word(false)
+            .build(&word_pattern)?;
+        Ok(CompiledMatcher {
+            matcher,
+            pattern: pattern.to_string(),
+        })
+    }
+
     /// Search `content` using an already-compiled matcher.
     pub fn search_compiled(
         &self,
@@ -63,25 +113,20 @@ impl TextSearcher {
         compiled: &CompiledMatcher,
     ) -> Result<Vec<TextMatch>> {
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, &compiled.pattern);
+        let mut sink = MatchSink::new(
+            &mut matches,
+            &compiled.matcher,
+            &compiled.pattern,
+            self.case_insensitive,
+        );
         Searcher::new().search_slice(&compiled.matcher, content.as_bytes(), &mut sink)?;
         Ok(matches)
     }
 
     /// Search with word boundary matching for better precision
     pub fn search_word(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
-        // Build regex matcher with word boundaries
-        let word_pattern = format!(r"\b{}\b", regex::escape(pattern));
-        let matcher = RegexMatcherBuilder::new()
-            .case_insensitive(self.case_insensitive)
-            .build(&word_pattern)?;
-
-        let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern);
-
-        Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
-
-        Ok(matches)
+        let compiled = self.compile_word(pattern)?;
+        self.search_compiled(content, &compiled)
     }
 
     /// Search with a raw regex pattern.
@@ -102,7 +147,7 @@ impl TextSearcher {
             .build(pattern)?;
 
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, pattern);
+        let mut sink = MatchSink::new(&mut matches, &matcher, pattern, self.case_insensitive);
 
         Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
 
@@ -119,18 +164,38 @@ impl Default for TextSearcher {
 /// Sink implementation to collect matches
 struct MatchSink<'a> {
     matches: &'a mut Vec<TextMatch>,
+    /// The matcher that selected the line, re-run on the trimmed line to
+    /// locate the match itself (a substring search for the pattern would
+    /// find `id` inside `uuid` before the whole-word match).
+    matcher: &'a RegexMatcher,
     pattern: &'a str,
-    /// Pre-computed lowercase pattern to avoid re-allocating on every line.
-    pattern_lower: String,
+    /// Whether the matcher ignored case: the exact-line check follows the
+    /// same rule.
+    case_insensitive: bool,
 }
 
 impl<'a> MatchSink<'a> {
-    fn new(matches: &'a mut Vec<TextMatch>, pattern: &'a str) -> Self {
+    fn new(
+        matches: &'a mut Vec<TextMatch>,
+        matcher: &'a RegexMatcher,
+        pattern: &'a str,
+        case_insensitive: bool,
+    ) -> Self {
         Self {
             matches,
-            pattern_lower: pattern.to_lowercase(),
+            matcher,
             pattern,
+            case_insensitive,
         }
+    }
+
+    /// Byte range of the first match in `line`.
+    fn match_range(&self, line: &str) -> Option<(usize, usize)> {
+        self.matcher
+            .find(line.as_bytes())
+            .ok()
+            .flatten()
+            .map(|m| (m.start(), m.end()))
     }
 
     fn calculate_score(&self, line: &str, match_start: usize) -> f32 {
@@ -138,19 +203,21 @@ impl<'a> MatchSink<'a> {
 
         // Use eq_ignore_ascii_case for the common ASCII path, avoiding allocation.
         // Fall back to full Unicode lowercase only when ASCII comparison fails.
-        let is_exact_line = if line_trimmed.is_ascii() && self.pattern.is_ascii() {
+        let is_exact_line = if !self.case_insensitive {
+            line_trimmed == self.pattern
+        } else if line_trimmed.is_ascii() && self.pattern.is_ascii() {
             line_trimmed.eq_ignore_ascii_case(self.pattern)
         } else {
-            line_trimmed.to_lowercase() == self.pattern_lower
+            line_trimmed.to_lowercase() == self.pattern.to_lowercase()
         };
 
         // Base score
         let mut score = if is_exact_line {
             0.9 // Exact line match
         } else if match_start == 0
-            || line
+            || line[..match_start]
                 .chars()
-                .nth(match_start.saturating_sub(1))
+                .next_back()
                 .map(|c| !c.is_alphanumeric())
                 .unwrap_or(true)
         {
@@ -185,15 +252,13 @@ impl Sink for MatchSink<'_> {
             return Ok(true);
         }
 
-        // Find match position within line for scoring
-        let match_start = line_content
-            .to_lowercase()
-            .find(&self.pattern_lower)
-            .unwrap_or(0);
+        // Locate the match within the line for scoring and the snippet.
+        let (match_start, match_end) = self.match_range(&line_content).unwrap_or((0, 0));
 
-        let match_end = match_start + self.pattern.len();
-
+        // Scored on the whole line, then cut around the match if too long.
         let score = self.calculate_score(&line_content, match_start);
+        let (line_content, match_start, match_end) =
+            snippet_around(line_content, match_start, match_end);
 
         self.matches.push(TextMatch {
             line_number,
@@ -205,6 +270,44 @@ impl Sink for MatchSink<'_> {
 
         Ok(true)
     }
+}
+
+/// Cut `line` to [`MAX_LINE_CHARS`] characters around the match at byte
+/// range `match_start..match_end` (on char boundaries), with a quarter of
+/// the window before the match. Returns the snippet and the match's byte
+/// range in it.
+fn snippet_around(line: String, match_start: usize, match_end: usize) -> (String, usize, usize) {
+    let total = line.chars().count();
+    if total <= MAX_LINE_CHARS {
+        return (line, match_start, match_end);
+    }
+    let match_char = line[..match_start].chars().count();
+    let start = match_char
+        .saturating_sub(MAX_LINE_CHARS / 4)
+        .min(total - MAX_LINE_CHARS);
+    let end = start + MAX_LINE_CHARS;
+
+    let mut snippet = String::with_capacity(MAX_LINE_CHARS + 6);
+    if start > 0 {
+        snippet.push('…');
+    }
+    let prefix_len = snippet.len();
+    // Byte offset of the match start, then of the match end, in the window.
+    let window_start_byte = line
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let new_start = prefix_len + match_start.saturating_sub(window_start_byte);
+    let window: String = line.chars().skip(start).take(MAX_LINE_CHARS).collect();
+    let window_end_byte = window_start_byte + window.len();
+    let new_end =
+        prefix_len + match_end.clamp(window_start_byte, window_end_byte) - window_start_byte;
+    snippet.push_str(&window);
+    if end < total {
+        snippet.push('…');
+    }
+    (snippet, new_start, new_end)
 }
 
 #[cfg(test)]
@@ -253,6 +356,125 @@ mod tests {
         // Should only match "main" as a word, not "mainValue"
         assert_eq!(matches.len(), 1);
         assert!(matches[0].line_content.contains("fn main"));
+    }
+
+    #[test]
+    fn test_word_search_case_sensitive_identifier() {
+        // Regression for #43: the fallback matched `id` inside `uuid`,
+        // `width`, `provider` and `IDENTITY`.
+        let searcher = TextSearcher::new(false);
+        let content =
+            "let id = 1;\nlet uuid = 2;\nlet width = 3;\nlet ID = 4;\nlet user_id = 5;\nx.id\n";
+
+        let compiled = searcher.compile_word("id").unwrap();
+        let lines: Vec<usize> = searcher
+            .search_compiled(content, &compiled)
+            .unwrap()
+            .iter()
+            .map(|m| m.line_number)
+            .collect();
+        assert_eq!(lines, vec![1, 6]);
+    }
+
+    #[test]
+    fn test_match_offset_is_the_matcher_match_not_the_first_substring() {
+        // `find("id")` located `id` inside `uuid` (col 6) and scored the
+        // whole-word match at col 11 as a substring.
+        let searcher = TextSearcher::new(false);
+        let compiled = searcher.compile_word("id").unwrap();
+        let m = &searcher
+            .search_compiled("let uuid = id;", &compiled)
+            .unwrap()[0];
+        assert_eq!((m.match_start, m.match_end), (11, 13));
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "id");
+        assert!(m.score > 0.6, "word-boundary score, got {}", m.score);
+    }
+
+    #[test]
+    fn test_long_line_with_multibyte_case_folding_before_the_match() {
+        // `İ` lowercases to two chars (3 bytes instead of 2): offsets taken
+        // from `to_lowercase()` did not fit the line and the snippet slice
+        // could panic on a non-char boundary.
+        let searcher = TextSearcher::new(true);
+        let line = format!(
+            "{}{}é_needle{}",
+            "İ".repeat(300),
+            "x".repeat(300),
+            "y".repeat(300)
+        );
+        let m = &searcher.search(&line, "É_NEEDLE").unwrap()[0];
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "é_needle");
+        assert!(m.line_content.chars().count() <= MAX_LINE_CHARS + 2);
+    }
+
+    #[test]
+    fn test_word_search_keeps_non_word_edges() {
+        let searcher = TextSearcher::new(false);
+        let content = "$state = 1;\n$states = 2;\nstate\n";
+        let compiled = searcher.compile_word("$state").unwrap();
+        let lines: Vec<usize> = searcher
+            .search_compiled(content, &compiled)
+            .unwrap()
+            .iter()
+            .map(|m| m.line_number)
+            .collect();
+        assert_eq!(lines, vec![1]);
+    }
+
+    #[test]
+    fn test_long_line_is_cut_around_the_match() {
+        // Regression for #44: the whole line of a minified file came back.
+        let searcher = TextSearcher::new(true);
+        let line = format!("{}needle(){}", "a".repeat(3000), "b".repeat(3000));
+        let content = format!("short needle\n{line}\n");
+
+        let matches = searcher.search(&content, "needle").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].line_content, "short needle");
+
+        let long = &matches[1];
+        assert!(long.line_content.chars().count() <= MAX_LINE_CHARS + 2);
+        assert!(long.line_content.starts_with('…') && long.line_content.ends_with('…'));
+        assert_eq!(
+            &long.line_content[long.match_start..long.match_end],
+            "needle",
+            "{}",
+            long.line_content
+        );
+        // A quarter of the window of context before the match.
+        assert_eq!(
+            long.line_content[..long.match_start].chars().count(),
+            MAX_LINE_CHARS / 4 + 1
+        );
+    }
+
+    #[test]
+    fn test_long_line_near_its_end_keeps_a_full_window() {
+        let searcher = TextSearcher::new(true);
+        let content = format!("{}needle", "x".repeat(2000));
+        let m = &searcher.search(&content, "needle").unwrap()[0];
+        assert_eq!(m.line_content.chars().count(), MAX_LINE_CHARS + 1);
+        assert!(m.line_content.starts_with('…') && m.line_content.ends_with("needle"));
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "needle");
+    }
+
+    #[test]
+    fn test_looks_generated() {
+        assert!(!looks_generated("fn main() {\n    println!(\"hi\");\n}\n"));
+        assert!(!looks_generated(""));
+        // One minified line.
+        assert!(looks_generated(&format!(
+            "!function(){{{}}}();",
+            "a=1;".repeat(2000)
+        )));
+        // A short file with a huge embedded line still averages too long.
+        assert!(looks_generated(&format!("x\n{}\n", "y".repeat(5000))));
+        // Binary marker.
+        assert!(looks_generated("ab\0cd\n"));
+        // Long but normal lines are fine.
+        assert!(!looks_generated(
+            &"let value = compute(argument_one, argument_two, argument_three);\n".repeat(50)
+        ));
     }
 
     #[test]

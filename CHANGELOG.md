@@ -34,6 +34,14 @@ All notable changes to Semantiq will be documented in this file.
   command, and an unwritable install directory fails right away. Without a
   platform data directory (sandboxed launch without HOME / XDG), the version
   check no longer writes its cache into the current project (#51).
+- `semantiq_search` resolves its semantic candidates in 3 queries instead
+  of ~500 for `limit 100`: the candidate chunks come back with their file's
+  path and language in one query and the symbol kinds of every file
+  touched in another, instead of one lookup per chunk, per file and per
+  file's symbols on the shared connection. The repo map leaves out names
+  defined in more than 100 files (`new` in a monorepo): their references
+  linked every referencing file to every defining file (tens of millions
+  of pairs) for a weight already damped to nothing (#45).
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
@@ -107,6 +115,47 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- `calls` and `impact` on a common name (`new`, `get`, `run`) are no longer
+  silently partial: the store lookups put the occurrences in the defining
+  files and in files importing them first instead of plain path order, so
+  the cap (5 × the limit) only cuts name-only homonyms; `callees` filters
+  the caller's location in SQL before the cap instead of after it; and
+  `truncated` is set when a lookup hit its cap and a cut occurrence could
+  have been reported (any at depth 1, a trusted one deeper). `hierarchy` flags a type
+  with more relations than `--limit` as truncated instead of cutting
+  silently (#42).
+- Text search no longer returns the whole line of a minified or generated
+  file (up to 1 MB) as a hit's `content`: files whose lines average more
+  than 500 characters, or that hold a NUL byte, are skipped, and a hit on a
+  longer line is cut to a 500-character window around the match (#44).
+- The text fallback of `find_refs` / `explain` (names unknown to the syntax
+  index, such as keys of data files) matches the whole identifier,
+  case-sensitive: `id` no longer reports `uuid`, `width`, `provider` or
+  `IDENTITY` lines as usages, nor counts them in `usage_count` (#43).
+- `impact`: the analysed symbol counts as visited from the start, so mutual
+  recursion (`a` calls `b`, `b` calls `a`) no longer reports the depth-1
+  sites again at depth 3, eating the site budget. `find_refs` no longer
+  fails when a definition's file cannot be read (renamed before the watcher
+  caught up, `--no-refresh`): the definition is listed with an empty
+  snippet (#46).
+- Search ranking: each strategy's scores are only weighted (symbol 1.0,
+  semantic 0.95, text 0.75), no longer min-max normalized per strategy. The
+  weakest symbol hit of a query (`parse_configuration` for `parse_config`)
+  no longer scores 0 under every grep line, and a lone weak hit is no longer
+  inflated to full strength above the best semantic chunk. Symbol boosts are
+  rescaled into `[0, 1]` instead of clamped, so an exact function match
+  outranks a boosted prefix match instead of tying with it. The symbol
+  scale moves down: an exact function match scores ~0.87-0.93 for typical
+  names (1.0 only for a one-character function), an exact variable ~0.70,
+  a substring match on a variable ~0.49, so `--min-score 0.5` now drops
+  substring hits on variables it kept before; a line that is exactly the
+  query (text, 0.68) now outranks realistic semantic hits (<= 0.63) (#34).
+- Calibrated semantic thresholds (`semantiq calibrate`, auto-calibration)
+  keep ~90 % of the observed candidates instead of ~10 %: `min_similarity`
+  is derived from the same 90th-percentile distance as `max_distance`
+  instead of the 10th percentile, so the two gates cut at the same point
+  (the calibrated `max_distance` can still be stricter than the default
+  1.2) (#33).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

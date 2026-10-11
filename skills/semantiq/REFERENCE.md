@@ -27,13 +27,23 @@ project root and use `/` on every platform (Windows included); a path argument
 }
 ```
 
-- `score`: symbol matches up to 1.0, semantic up to 0.95, text up to 0.75,
-  normalized within each strategy (relative to this query only), rounded to
-  2 decimals.
+- `score`: each strategy's own score times its weight (symbol 1.0, semantic
+  0.95, text 0.75), rounded to 2 decimals. Symbol: match tier (exact 1.0,
+  prefix 0.85, substring 0.7) times the kind and name-length boosts, divided
+  by the largest boost, so an exact function match scores ~0.87-0.93 for
+  typical names (1.0 only for a one-character function), an exact variable
+  ~0.70, a substring match on a variable ~0.49. Semantic: `0.95 / (1 +
+  distance)`, realistic hits <= 0.63. Text: 0.68 for a line that is exactly
+  the query, ~0.52 for a word match, ~0.37 for a substring match. The
+  default `--min-score` 0.3 keeps them all; 0.5 drops substring hits on
+  variables and most text hits.
 - `preview`: the most relevant line of the hit (the line declaring
   `symbol_name`, else the line holding most query words), trimmed and cut to
   120 characters.
 - `content`: the hit's code, only with `--snippets` (MCP: `snippets: true`).
+  A text hit on a line longer than 500 characters is cut to a window around
+  the match (`…` on the cut sides); minified or generated files (lines
+  averaging more than 500 characters, or binary) are not searched.
 - `truncated`: more results exist beyond `--limit` (default 10).
 
 ## `semantiq refs <symbol> --json`
@@ -54,8 +64,10 @@ project root and use `/` on every platform (Windows included); a path argument
 ```
 
 - Usage `kind`: `call`, `type`, `import`, `reference`, or `text` (name unknown
-  to the syntax index, found by text search). Definition `kind`: the symbol
-  kind (`function`, `struct`…), or `definition` when unknown.
+  to the syntax index, e.g. a key of a data file: lines holding the whole
+  identifier, case-sensitive, an approximation that includes comments and
+  strings). Definition `kind`: the symbol kind (`function`, `struct`…), or
+  `definition` when unknown.
 - `content`: one line, trimmed and cut to 120 characters (for a definition,
   the line declaring the name).
 - `truncated`: the limit (`--limit`, default 30) was reached.
@@ -135,7 +147,10 @@ those definitions, sorted.
 - `confidence`: `same_file` > `imports` > `unique_name` > `name_only`. Only
   sites above `name_only` propagate to the next depth; beyond depth 1, only
   `call` sites of functions/methods are followed.
-- `truncated`: the site limit (`--limit`, default 200, max 1000) was reached.
+- `truncated`: the site limit (`--limit`, default 200, max 1000) was reached,
+  or a name had more occurrences than the analysis examines (5 × the limit,
+  the ones in the defining files and in files importing them first) and
+  some of the unexamined ones could have been reported.
 
 ## `semantiq map --json`
 
@@ -208,7 +223,10 @@ those definitions, sorted.
   above `name_only` are followed beyond depth 1.
 - `external_callees`: names the symbol calls that the index does not define
   (standard library, dependencies), sorted.
-- `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached.
+- `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached,
+  or a name had more call edges than the walk examines (5 × the limit, the
+  ones from the defining files and from files importing them first) and
+  some of the unexamined ones could have been reported.
 
 ## `semantiq hierarchy <type> --json`
 
@@ -236,7 +254,8 @@ those definitions, sorted.
   a library type (`Send`, `Exception`…), not walked further.
 - Rust: `impl Trait for Type` gives `implements`, supertraits give `extends`.
   C#: extends vs implements is a heuristic (first base, `I`-prefixed names).
-- `truncated`: the limit per direction (`--limit`, default 200) was reached.
+- `truncated`: the limit per direction (`--limit`, default 200) was reached:
+  some relations are not listed.
 
 ## `semantiq dead-code --json`
 
