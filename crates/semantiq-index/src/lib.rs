@@ -7,7 +7,9 @@ pub mod store;
 pub mod watcher;
 
 pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult};
-pub use embedder::{BackgroundEmbedder, EmbedResult, EmbeddingProgress, embed_pending};
+pub use embedder::{
+    BackgroundEmbedder, EmbedResult, EmbedderConfig, EmbeddingProgress, embed_pending,
+};
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_DATA_FILE_SIZE, MAX_FILE_SIZE, exceeds_indexed_size, max_indexed_size,
     should_exclude, should_exclude_entry, should_exclude_path,

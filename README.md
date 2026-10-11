@@ -563,7 +563,9 @@ that blocks neither the tools nor the file watcher: until they are complete,
 `semantiq_search` answers with the embeddings available (plus symbol and text
 matches) and starts with `⏳ Semantic index 42% ready`, and `GET /stats`
 reports `"embedding": true`, `embedded_chunks` and
-`semantic_index_ready_percent`.
+`semantic_index_ready_percent`. The embedder also checks every 30 s for chunks
+another process left pending (`semantiq index --no-embeddings`, the refresh run
+by a query command) and embeds them.
 
 The index lives in `.semantiq.db` at the project root, so each git worktree has
 its own index and is indexed separately.

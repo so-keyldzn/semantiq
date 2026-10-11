@@ -5,7 +5,7 @@
 use anyhow::Result;
 use semantiq_embeddings::{EMBEDDING_DIMENSION, EmbeddingModel, StubEmbeddingModel};
 use semantiq_index::{
-    AutoIndexer, BackgroundEmbedder, EmbeddingProgress, IndexStore, embed_pending,
+    AutoIndexer, BackgroundEmbedder, EmbedderConfig, EmbeddingProgress, IndexStore, embed_pending,
 };
 use std::fs;
 use std::path::Path;
@@ -333,4 +333,132 @@ fn background_embedder_fills_pending_chunks_when_notified() {
     embedder.notify();
     assert!(embedder.wait_idle(Duration::from_secs(30)));
     assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+}
+
+/// Fast timing for the background thread's own checks.
+fn quick_config() -> EmbedderConfig {
+    EmbedderConfig {
+        poll_interval: Duration::from_millis(50),
+    }
+}
+
+/// Poll `cond` until it holds or `timeout` elapses.
+fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while !cond() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// #37: chunks left pending by another process (`semantiq index
+/// --no-embeddings`, a query command's refresh) are embedded without any
+/// `notify`: the thread polls the database on its own.
+#[test]
+fn background_embedder_polls_for_chunks_pending_without_a_notification() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 2, 8);
+    let store = phase1(tmp.path());
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(|| Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+    // No notify: the startup backlog is picked up by the first poll.
+    assert!(wait_until(Duration::from_secs(10), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert!(embedder.progress().in_progress().is_none());
+
+    // Phase 1 run by another indexer (the CLI refresh) while the server is
+    // up: still no notify, still embedded.
+    write_file(tmp.path(), "src/late.rs", "pub fn late() -> i32 { 7 }\n");
+    AutoIndexer::without_watcher(Arc::clone(&store), tmp.path().to_path_buf())
+        .unwrap()
+        .initial_index()
+        .unwrap();
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+    assert!(wait_until(Duration::from_secs(10), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// #37: a poll does not retry the chunks the model keeps failing on; a
+/// notification does.
+#[test]
+fn background_embedder_poll_leaves_failing_chunks_to_the_next_notification() {
+    #[derive(Default)]
+    struct FailingModel {
+        calls: AtomicUsize,
+    }
+    impl EmbeddingModel for FailingModel {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("bad chunk")
+        }
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            anyhow::bail!("bad batch")
+        }
+        fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+            self.embed(query)
+        }
+        fn dimension(&self) -> usize {
+            EMBEDDING_DIMENSION
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    let pending = store.embedding_counts().unwrap().pending();
+    assert!(pending > 0);
+
+    let model = Arc::new(FailingModel::default());
+    let shared = Arc::clone(&model);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || Ok(Box::new(ArcModel(Arc::clone(&shared))) as Box<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+
+    // First poll: one attempt per chunk, all left pending.
+    assert!(wait_until(Duration::from_secs(10), || {
+        model.calls.load(Ordering::SeqCst) >= pending
+    }));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        pending,
+        "later polls skip the unchanged pending set"
+    );
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2 * pending);
+}
+
+/// Shares one model between the test and the loader.
+struct ArcModel<M: EmbeddingModel>(Arc<M>);
+
+impl<M: EmbeddingModel> EmbeddingModel for ArcModel<M> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.0.embed(text)
+    }
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.0.embed_batch(texts)
+    }
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        self.0.embed_query(query)
+    }
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
 }

@@ -179,8 +179,26 @@ fn embed_batch(model: &dyn EmbeddingModel, batch: &[PendingChunk]) -> Vec<Option
 /// Loads the embedding model on the background thread, at its first pass.
 pub type ModelLoader = Box<dyn FnOnce() -> Result<Box<dyn EmbeddingModel>> + Send>;
 
+/// Timing of the background thread.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbedderConfig {
+    /// Without a notification, how often the thread checks the database for
+    /// chunks left pending by another process (`semantiq index
+    /// --no-embeddings`, a query command's refresh).
+    pub poll_interval: Duration,
+}
+
+impl Default for EmbedderConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(30),
+        }
+    }
+}
+
 /// Runs phase 2 on a dedicated thread, woken by [`BackgroundEmbedder::notify`]
-/// after each phase 1 write. Stops when dropped.
+/// after each phase 1 write and on its own every `poll_interval` (chunks
+/// another process left pending). Stops when dropped.
 pub struct BackgroundEmbedder {
     shared: Arc<Shared>,
 }
@@ -191,17 +209,29 @@ struct Shared {
     wake: Condvar,
     shutdown: AtomicBool,
     progress: Arc<EmbeddingProgress>,
+    config: EmbedderConfig,
 }
 
 impl BackgroundEmbedder {
-    /// Start the thread. The model is loaded by `load_model` on the first pass,
-    /// so neither startup nor phase 1 waits for it.
+    /// Start the thread with the default timing. The model is loaded by
+    /// `load_model` on the first pass, so neither startup nor phase 1 waits
+    /// for it.
     pub fn spawn(store: Arc<IndexStore>, load_model: ModelLoader) -> Result<Self> {
+        Self::spawn_with(store, load_model, EmbedderConfig::default())
+    }
+
+    /// `spawn` with explicit timing (tests, tuning).
+    pub fn spawn_with(
+        store: Arc<IndexStore>,
+        load_model: ModelLoader,
+        config: EmbedderConfig,
+    ) -> Result<Self> {
         let shared = Arc::new(Shared {
             dirty: Mutex::new(false),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
             progress: Arc::new(EmbeddingProgress::new()),
+            config,
         });
         let worker = Arc::clone(&shared);
         thread::Builder::new()
@@ -247,30 +277,68 @@ impl Drop for BackgroundEmbedder {
     }
 }
 
+/// Why the thread left its wait.
+enum Wake {
+    /// `notify` was called: a pass is due whatever the database says.
+    Requested,
+    /// `poll_interval` elapsed with no request.
+    Poll,
+    Shutdown,
+}
+
 impl Shared {
+    /// Sleep until a pass is requested, the poll interval elapses or the owner
+    /// is dropped. On `Requested`, the pass is marked running before the request
+    /// is released so `wait_idle` never sees an idle gap between the two.
+    fn wait(&self) -> Wake {
+        let Ok(mut dirty) = self.dirty.lock() else {
+            return Wake::Shutdown;
+        };
+        let deadline = Instant::now() + self.config.poll_interval;
+        while !*dirty && !self.shutdown.load(Ordering::Relaxed) {
+            let now = Instant::now();
+            if now >= deadline {
+                return Wake::Poll;
+            }
+            dirty = match self.wake.wait_timeout(dirty, deadline - now) {
+                Ok((guard, _)) => guard,
+                Err(_) => return Wake::Shutdown,
+            };
+        }
+        if self.shutdown.load(Ordering::Relaxed) {
+            return Wake::Shutdown;
+        }
+        *dirty = false;
+        self.progress.running.store(true, Ordering::Relaxed);
+        Wake::Requested
+    }
+
     fn run(&self, store: &IndexStore, load_model: ModelLoader) {
         let mut load_model = Some(load_model);
         let mut model: Option<Box<dyn EmbeddingModel>> = None;
+        // Pending count the last pass left behind (chunks the model failed
+        // on): a poll runs a pass only when that count changed, so failing
+        // chunks are not retried every poll, only on the next notification.
+        let mut left_pending: Option<usize> = None;
 
         loop {
-            // Sleep until a pass is requested or the owner is dropped.
-            {
-                let Ok(mut dirty) = self.dirty.lock() else {
-                    return;
-                };
-                while !*dirty && !self.shutdown.load(Ordering::Relaxed) {
-                    dirty = match self.wake.wait(dirty) {
-                        Ok(guard) => guard,
-                        Err(_) => return,
+            match self.wait() {
+                Wake::Shutdown => return,
+                Wake::Requested => {}
+                Wake::Poll => {
+                    let pending = match store.embedding_counts() {
+                        Ok(counts) => counts.pending(),
+                        Err(e) => {
+                            debug!("Embedding poll skipped: {}", e);
+                            continue;
+                        }
                     };
+                    if pending == 0 || Some(pending) == left_pending {
+                        continue;
+                    }
+                    debug!("Embedding poll: {} chunks pending", pending);
+                    self.progress.running.store(true, Ordering::Relaxed);
                 }
-                if self.shutdown.load(Ordering::Relaxed) {
-                    return;
-                }
-                *dirty = false;
-                // Mark the pass as running before releasing the request, so
-                // `wait_idle` never sees an idle gap between the two.
-                self.progress.running.store(true, Ordering::Relaxed);
             }
 
             if model.is_none() {
@@ -313,6 +381,7 @@ impl Shared {
                 Ok(_) => {}
                 Err(e) => warn!("Embedding pass failed: {}", e),
             }
+            left_pending = store.embedding_counts().ok().map(|c| c.pending());
         }
     }
 }

@@ -236,7 +236,10 @@ impl AutoIndexer {
             return Ok(ProcessResult::default());
         }
 
-        let mut result = ProcessResult::default();
+        let mut result = ProcessResult {
+            events: events.len(),
+            ..ProcessResult::default()
+        };
 
         for event in events {
             match event {
@@ -467,6 +470,9 @@ impl AutoIndexer {
 
 #[derive(Default, Debug)]
 pub struct ProcessResult {
+    /// File events observed, whether or not they led to a reindex (a file
+    /// another process already indexed, a CLI refresh, has `indexed == 0`).
+    pub events: usize,
     pub indexed: usize,
     pub removed: usize,
     pub errors: usize,

@@ -259,7 +259,10 @@ impl SemantiqServer {
 
                     match result {
                         Ok(Ok(result)) => {
-                            if result.indexed > 0 {
+                            // Any event, not only a reindex: a file another
+                            // process just indexed (CLI refresh) has
+                            // `indexed == 0` but its chunks are pending.
+                            if result.events > 0 {
                                 notify_embedder();
                             }
                         }
