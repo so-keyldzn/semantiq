@@ -331,7 +331,7 @@ fn open_engine_with_store(
     }
 
     if !index.no_refresh {
-        refresh(&store, &root)?;
+        refresh(&store, &db_path, &root)?;
     }
 
     let root_str = root
@@ -415,7 +415,25 @@ fn recorded_project_root(store: &IndexStore, db_path: &Path) -> Result<PathBuf> 
 /// Bring the index up to date before answering: phase 1 (structure) only, no
 /// embedding model. The cheap check runs first so an unchanged project never
 /// pays for the parsers either.
-fn refresh(store: &Arc<IndexStore>, root: &Path) -> Result<()> {
+///
+/// A query command never re-points an index: when the database records a
+/// project root and `root` is another directory, the refresh is refused
+/// (`index`/`serve` warn and re-point, which is what the user asks them for).
+fn refresh(store: &Arc<IndexStore>, db_path: &Path, root: &Path) -> Result<()> {
+    if let Some(recorded) = store.get_project_root()?
+        && recorded != root
+    {
+        bail!(
+            "The index at {} was built from {}, not from {}: pass `--project {}`, or \
+             rebuild it from this directory with `semantiq index {} --database {}`",
+            db_path.display(),
+            recorded.display(),
+            root.display(),
+            recorded.display(),
+            root.display(),
+            db_path.display()
+        );
+    }
     let rebuild = store.check_and_prepare_for_reindex()?;
     if rebuild {
         eprintln!("semantiq: index format changed, rebuilding the index (one time)...");

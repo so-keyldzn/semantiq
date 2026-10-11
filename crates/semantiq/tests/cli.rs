@@ -479,8 +479,8 @@ fn database_without_project_uses_the_recorded_root() {
     assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
     assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
 
-    // An explicit root holding none of the indexed files is refused, and the
-    // index survives.
+    // An explicit root other than the recorded one is refused before the
+    // refresh walks anything, and the index survives.
     let empty = tempfile::tempdir().unwrap();
     let output = semantiq(
         dir,
@@ -495,10 +495,24 @@ fn database_without_project_uses_the_recorded_root() {
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("wrong project root"),
+        stderr(&output).contains("was built from"),
         "{}",
         stderr(&output)
     );
     let refs = query_json(dir, &["refs", "compute", "--database", db]);
     assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+
+    // A wrong root that does hold indexable files (a subdirectory of the
+    // project) would re-point the index: a query command refuses that too.
+    let output = semantiq(
+        dir,
+        &["refs", "compute", "--database", db, "--project", "src"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("was built from"), "{err}");
+    assert!(err.contains("--project"), "{err}");
+    let refs = query_json(dir, &["refs", "compute", "--database", db]);
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+    assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
 }
