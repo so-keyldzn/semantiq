@@ -61,20 +61,22 @@ impl AutoIndexer {
     /// constructor: a wrong root refused by `initial_index` must not be
     /// recorded. Indexing a different directory into a populated index is
     /// allowed (`semantiq index <other> --database <db>`) but worth a
-    /// warning: its files will be pruned.
-    fn record_project_root(&self) -> Result<()> {
+    /// warning when `stale` rows of the previous root are about to be
+    /// pruned (none after `--force` or a parser-version clear).
+    fn record_project_root(&self, stale: usize) -> Result<()> {
         let canonical = self
             .project_root
             .canonicalize()
             .unwrap_or_else(|_| self.project_root.clone());
-        if let Some(previous) = self.store.get_project_root()?
+        if stale > 0
+            && let Some(previous) = self.store.get_project_root()?
             && previous != canonical
-            && self.store.get_stats()?.file_count > 0
         {
             warn!(
-                "Index built from {} now indexed from {}: files of the previous root will be removed",
+                "Index built from {} now indexed from {}: {} files of the previous root will be removed",
                 previous.display(),
-                canonical.display()
+                canonical.display(),
+                stale
             );
         }
         self.store.set_project_root(&canonical)
@@ -178,28 +180,29 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
-        //
+        let stale: Vec<String> = self
+            .store
+            .list_file_paths()?
+            .into_iter()
+            .filter(|path| !seen_paths.contains(path))
+            .collect();
+
         // Safety net: a walk that found nothing indexable while the index holds
         // files means the root is wrong (a database opened from another
         // directory), not that every file vanished. Pruning would wipe the
         // index; refuse instead.
-        if seen_paths.is_empty() {
-            let indexed = self.store.get_stats()?.file_count;
-            if indexed > 0 {
-                bail!(
-                    "no indexable file found under {} while the index holds {} files: wrong \
-                     project root? Pass `--project <root>`, or rebuild with \
-                     `semantiq index <root> --force`",
-                    self.project_root.display(),
-                    indexed
-                );
-            }
+        if seen_paths.is_empty() && !stale.is_empty() {
+            bail!(
+                "no indexable file found under {} while the index holds {} files: wrong \
+                 project root? Pass `--project <root>`, or rebuild with \
+                 `semantiq index <root> --force` (also the way to go if the project really \
+                 has no indexable file left)",
+                self.project_root.display(),
+                stale.len()
+            );
         }
-        self.record_project_root()?;
-        for stale in self.store.list_file_paths()? {
-            if seen_paths.contains(&stale) {
-                continue;
-            }
+        self.record_project_root(stale.len())?;
+        for stale in stale {
             match self.store.delete_file(&stale) {
                 Ok(()) => result.removed += 1,
                 Err(e) => {
