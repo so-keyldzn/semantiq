@@ -4,6 +4,7 @@ use anyhow::Result;
 use semantiq_index::IndexStore;
 use std::path::PathBuf;
 
+use super::common::{outln, print_stdout};
 use super::query::{IndexArgs, locate_index};
 
 pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
@@ -20,39 +21,47 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     let stats = store.get_stats()?;
     let embeddings = store.embedding_counts()?;
 
-    println!("Semantiq Index Statistics");
-    println!("=========================");
-    println!("Database: {:?}", db_path);
-    println!();
-    println!("Index:");
-    println!("  Files indexed: {}", stats.file_count);
-    println!("  Symbols: {}", stats.symbol_count);
-    println!("  Chunks: {}", stats.chunk_count);
-    println!("  Dependencies: {}", stats.dependency_count);
-    println!("  References: {}", stats.ref_count);
-    println!("  Call edges: {}", stats.call_edge_count);
-    println!("  Type relations: {}", stats.type_relation_count);
+    // One report, printed in one go: `semantiq stats | head` must not panic.
+    let mut out = String::new();
+    outln!(out, "Semantiq Index Statistics");
+    outln!(out, "=========================");
+    outln!(out, "Database: {:?}", db_path);
+    outln!(out);
+    outln!(out, "Index:");
+    outln!(out, "  Files indexed: {}", stats.file_count);
+    outln!(out, "  Symbols: {}", stats.symbol_count);
+    outln!(out, "  Chunks: {}", stats.chunk_count);
+    outln!(out, "  Dependencies: {}", stats.dependency_count);
+    outln!(out, "  References: {}", stats.ref_count);
+    outln!(out, "  Call edges: {}", stats.call_edge_count);
+    outln!(out, "  Type relations: {}", stats.type_relation_count);
 
-    println!();
-    println!("Embeddings:");
-    println!("  Model: {}", semantiq_embeddings::embedding_model_id());
-    println!(
+    outln!(out);
+    outln!(out, "Embeddings:");
+    outln!(
+        out,
+        "  Model: {}",
+        semantiq_embeddings::embedding_model_id()
+    );
+    outln!(
+        out,
         "  Chunks embedded: {}/{} ({}%)",
         embeddings.embedded,
         embeddings.total,
         embeddings.percent()
     );
     if embeddings.pending() > 0 {
-        println!(
+        outln!(
+            out,
             "    {} pending: `semantiq index --embeddings-only` (or a running `semantiq serve`) computes them.",
             embeddings.pending()
         );
     }
     match semantiq_embeddings::semantic_search_unavailable_reason() {
-        None => println!("  Semantic search: enabled"),
+        None => outln!(out, "  Semantic search: enabled"),
         Some(reason) => {
-            println!("  Semantic search: UNAVAILABLE ({})", reason);
-            println!("    Symbol and text search still work.");
+            outln!(out, "  Semantic search: UNAVAILABLE ({})", reason);
+            outln!(out, "    Symbol and text search still work.");
         }
     }
 
@@ -63,53 +72,61 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
 
     const BOOTSTRAP_THRESHOLD: usize = 500;
 
-    println!();
-    println!("ML Calibration:");
+    outln!(out);
+    outln!(out, "ML Calibration:");
 
     // Show bootstrap status
     let bootstrap_progress =
         (total_observations as f32 / BOOTSTRAP_THRESHOLD as f32 * 100.0).min(100.0) as u8;
     if total_observations < BOOTSTRAP_THRESHOLD {
-        println!(
+        outln!(
+            out,
             "  Bootstrap: {}% ({}/{} observations)",
-            bootstrap_progress, total_observations, BOOTSTRAP_THRESHOLD
+            bootstrap_progress,
+            total_observations,
+            BOOTSTRAP_THRESHOLD
         );
-        println!("    Mode: BOOTSTRAP (collecting 100% of observations)");
+        outln!(out, "    Mode: BOOTSTRAP (collecting 100% of observations)");
     } else {
-        println!(
+        outln!(
+            out,
             "  Bootstrap: COMPLETE ({} observations)",
             total_observations
         );
-        println!("    Mode: PRODUCTION (collecting 10% of observations)");
+        outln!(out, "    Mode: PRODUCTION (collecting 10% of observations)");
     }
 
-    println!();
-    println!("  Observations by language:");
+    outln!(out);
+    outln!(out, "  Observations by language:");
     if observation_counts.is_empty() {
-        println!("    (none yet)");
+        outln!(out, "    (none yet)");
     } else {
         for (lang, count) in &observation_counts {
-            println!("    {}: {}", lang, count);
+            outln!(out, "    {}: {}", lang, count);
         }
     }
 
-    println!();
-    println!("  Calibrated thresholds: {}", calibrations.len());
+    outln!(out);
+    outln!(out, "  Calibrated thresholds: {}", calibrations.len());
     for cal in &calibrations {
         let label = if cal.language == "_global" {
             "global".to_string()
         } else {
             cal.language.clone()
         };
-        println!(
+        outln!(
+            out,
             "    {}: max_dist={:.3}, min_sim={:.3} ({})",
-            label, cal.max_distance, cal.min_similarity, cal.confidence
+            label,
+            cal.max_distance,
+            cal.min_similarity,
+            cal.confidence
         );
     }
 
     if calibrations.is_empty() {
-        println!("    (will auto-calibrate after bootstrap)");
+        outln!(out, "    (will auto-calibrate after bootstrap)");
     }
 
-    Ok(())
+    print_stdout(out.trim_end())
 }

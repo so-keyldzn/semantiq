@@ -348,7 +348,7 @@ fn empty_index_is_an_error() {
 
 /// `semantiq map --json | head -5`: the reader closes the pipe before the
 /// output is fully written. That is not an error for the command (exit 0, no
-/// panic), for the JSON and the markdown output alike.
+/// panic), for the JSON and the markdown output alike, and for `stats`.
 #[cfg(unix)]
 #[test]
 fn closed_stdout_is_not_an_error() {
@@ -357,6 +357,7 @@ fn closed_stdout_is_not_an_error() {
         &["map", "--json"][..],
         &["map"][..],
         &["refs", "compute"][..],
+        &["stats"][..],
     ] {
         // A socket whose reading end is already closed: the first write
         // fails with EPIPE, whatever the output size.

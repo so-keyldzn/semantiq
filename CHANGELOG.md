@@ -124,9 +124,10 @@ All notable changes to Semantiq will be documented in this file.
   `.semantiq.db` in the current directory or a parent, or `--database`. From
   a subdirectory of an indexed project it no longer fails with a hint that
   would create a second, nested index (#50).
-- `semantiq map --json | head -5` (any query command, `--json` or markdown)
-  ends quietly with exit code 0 when the reader closes the pipe early,
-  instead of panicking with `Broken pipe` and exit code 101 (#49).
+- `semantiq map --json | head -5` (any query command, `--json` or markdown,
+  and `stats` / `calibrate`) ends quietly with exit code 0 when the reader
+  closes the pipe early, instead of panicking with `Broken pipe` and exit
+  code 101 (#49).
 
 ## [0.11.0] - 2026-10-07
 

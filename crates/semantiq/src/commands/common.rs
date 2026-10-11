@@ -44,6 +44,20 @@ pub(super) fn print_stdout(text: &str) -> Result<()> {
     }
 }
 
+/// Append a line to the `String` report a command prints with `print_stdout`
+/// at the end: `outln!(out)` for a blank line, `outln!(out, "...", args)`
+/// otherwise. Writing to a `String` cannot fail.
+macro_rules! outln {
+    ($out:expr) => {
+        $out.push('\n')
+    };
+    ($out:expr, $($arg:tt)*) => {{
+        use std::fmt::Write as _;
+        let _ = writeln!($out, $($arg)*);
+    }};
+}
+pub(super) use outln;
+
 /// Logs a warning when this process uses the stub embedding model, so a
 /// macOS Intel / `--no-default-features` build never silently loses
 /// semantic search.
