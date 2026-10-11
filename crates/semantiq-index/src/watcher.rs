@@ -117,7 +117,9 @@ mod tests {
         use notify::EventKind;
         use notify::event::{CreateKind, ModifyKind};
 
-        let root = PathBuf::from("/home/u/.config/app");
+        // `.cache` is an excluded name; `.config` is not (it holds project
+        // configuration), so it would not exercise the rule.
+        let root = PathBuf::from("/home/u/.cache/app");
         let roots = vec![root.clone()];
 
         let event =
