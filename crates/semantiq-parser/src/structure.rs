@@ -675,6 +675,21 @@ mod tests {
     }
 
     #[test]
+    fn test_rust_call_edges_through_macros() {
+        let e = edges(
+            Language::Rust,
+            "fn compute(x: u32) -> u32 { x }\nfn test_it() {\n    assert_eq!(compute(1), 1);\n}\n",
+        );
+        assert_eq!(
+            e,
+            vec![
+                edge("test_it", "assert_eq", 3),
+                edge("test_it", "compute", 3)
+            ]
+        );
+    }
+
+    #[test]
     fn test_python_call_edges_top_level() {
         let e = edges(
             Language::Python,

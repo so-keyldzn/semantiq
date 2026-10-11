@@ -304,4 +304,29 @@ public:
         let edges = call_edges(Language::Elixir, source);
         assert_eq!(edges, vec![("foo".to_string(), "bar".to_string(), 3)]);
     }
+
+    // B12 (#60): Rust calls inside macro arguments (`assert_eq!`, `println!`,
+    // `vec!`, `tracing::info!`) are `call` references with call edges.
+    #[test]
+    fn b12_rust_calls_inside_macros() {
+        let source = "fn compute(x: u32) -> u32 { x }\nfn test_it() {\n    assert_eq!(compute(1), 1);\n    println!(\"{}\", compute(2));\n    let v = vec![compute(3)];\n    tracing::info!(n = compute(4), \"done\");\n}\n";
+        let refs = references(Language::Rust, source);
+        assert_eq!(
+            kinds_of(&refs, "compute"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (3, ReferenceKind::Call),
+                (4, ReferenceKind::Call),
+                (5, ReferenceKind::Call),
+                (6, ReferenceKind::Call),
+            ]
+        );
+        let edges = call_edges(Language::Rust, source);
+        let compute_edges: Vec<usize> = edges
+            .iter()
+            .filter(|(caller, callee, _)| caller == "test_it" && callee == "compute")
+            .map(|(_, _, line)| *line)
+            .collect();
+        assert_eq!(compute_edges, vec![3, 4, 5, 6]);
+    }
 }

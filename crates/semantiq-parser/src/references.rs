@@ -367,6 +367,11 @@ fn is_callee(node: Node) -> bool {
     let Some(call) = parent else {
         return false;
     };
+    // Rust : les arguments d'une macro (`assert_eq!(f(x), 1)`, `vec![g()]`,
+    // `tracing::info!(n = h())`) ne sont pas parsés en expressions.
+    if call.kind() == "token_tree" {
+        return is_macro_argument_call(current);
+    }
     if !is_call(call.kind()) {
         return false;
     }
@@ -389,6 +394,29 @@ fn is_callee(node: Node) -> bool {
         .iter()
         .any(|f| is_field(call, current, f))
         && call.named_child(0) == Some(current)
+}
+
+/// Rust : un identifiant dans le `token_tree` d'une `macro_invocation` est un
+/// appel quand il est suivi de `(` (`f(x)`) ou de `!(` (macro imbriquée).
+/// Volontairement conservateur : `x = f()` donne `f` seul, `Foo::bar()` donne
+/// `bar` seul. Les `token_tree` d'attributs (`#[cfg(all(...))]`) et de
+/// `macro_rules!` ne sont pas concernés.
+fn is_macro_argument_call(node: Node) -> bool {
+    let mut outer = node.parent();
+    while let Some(tree) = outer {
+        if tree.kind() != "token_tree" {
+            break;
+        }
+        outer = tree.parent();
+    }
+    if outer.map(|n| n.kind()) != Some("macro_invocation") {
+        return false;
+    }
+    let mut next = node.next_sibling();
+    if next.is_some_and(|n| n.kind() == "!") {
+        next = next.and_then(|n| n.next_sibling());
+    }
+    next.is_some_and(|n| n.kind() == "token_tree" && n.child(0).is_some_and(|c| c.kind() == "("))
 }
 
 fn is_type(node: Node) -> bool {
@@ -532,6 +560,38 @@ mod tests {
         for keyword in ["defmodule", "def", "defp", "alias", "import"] {
             assert!(kinds_of(&r, keyword).is_empty(), "{keyword} indexed");
         }
+    }
+
+    #[test]
+    fn test_rust_calls_inside_macro_arguments() {
+        let r = refs(
+            Language::Rust,
+            "fn t() {\n    assert_eq!(compute(1), 1);\n    println!(\"{}\", compute(2));\n    let v = vec![make(), obj.meth(), Ty::build()];\n    tracing::info!(count = total(), \"m\");\n    outer!(inner!(deep()));\n    debug!(flag);\n}",
+        );
+        assert_eq!(
+            kinds_of(&r, "compute"),
+            vec![(2, ReferenceKind::Call), (3, ReferenceKind::Call)]
+        );
+        assert_eq!(kinds_of(&r, "make"), vec![(4, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "meth"), vec![(4, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "obj"), vec![(4, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "build"), vec![(4, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "Ty"), vec![(4, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "total"), vec![(5, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "count"), vec![(5, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "inner"), vec![(6, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "deep"), vec![(6, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&r, "flag"), vec![(7, ReferenceKind::Reference)]);
+    }
+
+    #[test]
+    fn test_rust_attribute_and_macro_rules_token_trees_are_not_calls() {
+        let r = refs(
+            Language::Rust,
+            "#[cfg(all(unix, feature = \"x\"))]\nfn t() {}\nmacro_rules! m { ($e:expr) => { wrap($e) }; }",
+        );
+        assert_eq!(kinds_of(&r, "all"), vec![(1, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "wrap"), vec![(3, ReferenceKind::Reference)]);
     }
 
     #[test]

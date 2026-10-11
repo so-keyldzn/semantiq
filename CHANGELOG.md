@@ -9,6 +9,10 @@ All notable changes to Semantiq will be documented in this file.
   of calls: `refs foo` shows the definition line, `calls foo` no longer lists
   `foo` as its own caller nor `def` as a callee, and `alias` / `import` / `use`
   / `require` arguments are `import` references (#59).
+- Rust calls inside macro arguments (`assert_eq!(compute(1), 1)`,
+  `println!("{}", compute(2))`, `vec![make()]`, `tracing::info!(n = total())`)
+  are `call` references: `calls compute --direction callers` finds functions
+  exercised only through macros, and `impact` follows them beyond depth 1 (#60).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
