@@ -6,9 +6,30 @@ use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashSet;
 
+/// One import of a file, as stored by [`IndexStore::replace_dependencies`].
+#[derive(Debug, Clone, Copy)]
+pub struct DependencyInsert<'a> {
+    /// The imported path or module as written (`./utils`, `std::io`).
+    pub target_path: &'a str,
+    /// The imported name, when the statement names one.
+    pub import_name: Option<&'a str>,
+    /// `ImportKind::as_str()`: `local`, `std`, `external`.
+    pub kind: &'a str,
+    /// Project-relative path of the imported file, for local imports that
+    /// resolve.
+    pub resolved_path: Option<&'a str>,
+    /// First and last line of the import statement (1-based).
+    pub lines: (usize, usize),
+}
+
+const INSERT_DEPENDENCY_SQL: &str = "INSERT INTO dependencies
+    (source_file_id, target_path, import_name, kind, resolved_path, line, end_line)
+ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+
 impl IndexStore {
     /// Insert a dependency record. `lines` is the import statement's first
-    /// and last line (1-based).
+    /// and last line (1-based). The indexer writes a file's imports in one go
+    /// with [`replace_dependencies`](Self::replace_dependencies).
     pub fn insert_dependency(
         &self,
         source_file_id: i64,
@@ -20,9 +41,7 @@ impl IndexStore {
     ) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO dependencies
-                    (source_file_id, target_path, import_name, kind, resolved_path, line, end_line)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                INSERT_DEPENDENCY_SQL,
                 params![
                     source_file_id,
                     target_path,
@@ -35,6 +54,49 @@ impl IndexStore {
             )?;
 
             Ok(())
+        })
+    }
+
+    /// Replace the dependencies of a file: delete its previous rows and insert
+    /// `dependencies`, in one transaction with one prepared statement. A
+    /// failure leaves the previous rows in place; one commit per file instead
+    /// of one per import.
+    pub fn replace_dependencies(
+        &self,
+        source_file_id: i64,
+        dependencies: &[DependencyInsert<'_>],
+    ) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<()> {
+                conn.execute(
+                    "DELETE FROM dependencies WHERE source_file_id = ?1",
+                    [source_file_id],
+                )?;
+                let mut stmt = conn.prepare_cached(INSERT_DEPENDENCY_SQL)?;
+                for dependency in dependencies {
+                    stmt.execute(params![
+                        source_file_id,
+                        dependency.target_path,
+                        dependency.import_name,
+                        dependency.kind,
+                        dependency.resolved_path,
+                        dependency.lines.0 as i64,
+                        dependency.lines.1 as i64
+                    ])?;
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", [])?;
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
         })
     }
 

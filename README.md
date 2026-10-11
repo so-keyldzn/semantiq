@@ -614,15 +614,30 @@ Automatic reindex is triggered when:
 
 ## Excluded Directories
 
-These directories are automatically excluded from indexing:
+Indexing follows `.gitignore` (plus the global git excludes and
+`.git/info/exclude`) and skips, wherever they appear, the directories that
+never hold project source:
 ```
-node_modules, target, dist, build, vendor, .next,
-__pycache__, venv, .venv, coverage, .nyc_output,
-.git, .hg, .svn, out, .output, .nuxt, .cache,
-.parcel-cache, .turbo
+VCS:          .git, .hg, .svn, .jj
+credentials:  .aws, .azure, .docker, .gnupg, .kube, .ssh
+dependencies: node_modules, bower_components, jspm_packages, vendor, venv, .venv,
+              .yarn, .pnp.cjs, .pnpm-store, .bundle, .npm, .m2, .gem, .gradle,
+              .stack-work, .dart_tool, .terraform
+build output: target, dist, build, out, coverage, .next, .nuxt, .output,
+              .svelte-kit, .angular, .astro, .docusaurus, .expo, .open-next,
+              .serverless, .vercel, .netlify, .firebase, .wrangler, .eggs
+caches:       __pycache__, .cache, .parcel-cache, .turbo, .nx, .nyc_output,
+              .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .sass-cache,
+              .ccls-cache, .clangd, .metals, .bloop, .bsp, .direnv, .devenv,
+              .ipynb_checkpoints
+IDE state:    .idea, .vs, .vscode-test, .history
 ```
-
-Hidden directories (starting with `.`) are also excluded.
+plus Semantiq's own files (`.semantiq.db*`) and credential files, whose name
+starts with `.env`, `.secret` or `.credential` (`.env.json`, `.env.yaml`,
+`.envrc`, `.secrets.yml`, `.credentials.json`...). Other hidden directories
+(`.github`, `.storybook`, `.vscode`, `.config`, `.husky`, `.changeset`,
+`.devcontainer`, `.claude`...) and hidden files (`.eslintrc.json`,
+`.gitlab-ci.yml`...) are indexed like any other, subject to `.gitignore`.
 
 ## Benchmark
 

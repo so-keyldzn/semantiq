@@ -553,6 +553,71 @@ fn test_get_dependents_no_false_positives() {
 }
 
 #[test]
+fn test_replace_dependencies_swaps_rows_in_one_go() {
+    use crate::store::DependencyInsert;
+
+    let store = IndexStore::open_in_memory().unwrap();
+    let file_id = store
+        .insert_file("src/main.rs", Some("rust"), "use a; use b;", 1000)
+        .unwrap();
+    let other = store
+        .insert_file("src/lib.rs", Some("rust"), "use c;", 1000)
+        .unwrap();
+    store
+        .insert_dependency(other, "c", Some("c"), "external", None, (1, 1))
+        .unwrap();
+
+    store
+        .replace_dependencies(
+            file_id,
+            &[
+                DependencyInsert {
+                    target_path: "crate::a",
+                    import_name: Some("a"),
+                    kind: "local",
+                    resolved_path: Some("src/a.rs"),
+                    lines: (1, 1),
+                },
+                DependencyInsert {
+                    target_path: "std::io",
+                    import_name: Some("io"),
+                    kind: "std",
+                    resolved_path: None,
+                    lines: (2, 3),
+                },
+            ],
+        )
+        .unwrap();
+    let deps = store.get_dependencies(file_id).unwrap();
+    assert_eq!(deps.len(), 2);
+    assert_eq!(deps[0].target_path, "crate::a");
+    assert_eq!(deps[0].resolved_path.as_deref(), Some("src/a.rs"));
+    assert_eq!((deps[1].line, deps[1].end_line), (2, 3));
+
+    // A second call replaces, it does not append; other files are untouched.
+    store
+        .replace_dependencies(
+            file_id,
+            &[DependencyInsert {
+                target_path: "crate::b",
+                import_name: Some("b"),
+                kind: "local",
+                resolved_path: None,
+                lines: (1, 1),
+            }],
+        )
+        .unwrap();
+    let deps = store.get_dependencies(file_id).unwrap();
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].target_path, "crate::b");
+    assert_eq!(store.get_dependencies(other).unwrap().len(), 1);
+
+    // An empty list clears the file's dependencies.
+    store.replace_dependencies(file_id, &[]).unwrap();
+    assert!(store.get_dependencies(file_id).unwrap().is_empty());
+}
+
+#[test]
 fn test_delete_dependencies() {
     let store = IndexStore::open_in_memory().unwrap();
 

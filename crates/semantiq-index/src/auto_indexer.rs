@@ -1,13 +1,18 @@
 use crate::IndexStore;
-use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
+use crate::exclusions::{
+    WalkFailures, is_file_too_large, project_walker, project_walker_with, should_exclude_path,
+};
+use crate::paths::to_relative_string;
+use crate::store::DependencyInsert;
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::{Result, bail};
-use ignore::WalkBuilder;
 use semantiq_parser::{
     ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
     ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_local_import,
 };
+use std::collections::HashSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
@@ -25,6 +30,15 @@ pub struct AutoIndexer {
     chunk_extractor: ChunkExtractor,
     /// Project facts for import classification (`go.mod` module path).
     import_context: ImportContext,
+}
+
+/// Whether a read error means the file's row no longer describes anything on
+/// disk: the file is gone, or is not UTF-8 text any more. Any other error
+/// (permissions, interruption, I/O) is transient from the index's point of
+/// view: dropping the row would throw its embeddings away and recompute them
+/// for nothing once the file is readable again.
+fn read_error_is_final(e: &std::io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::InvalidData | ErrorKind::NotFound)
 }
 
 impl AutoIndexer {
@@ -100,25 +114,31 @@ impl AutoIndexer {
         info!("Starting initial index of {:?}", self.project_root);
 
         let mut result = InitialIndexResult::default();
-        let mut seen_paths = std::collections::HashSet::new();
+        let mut seen_paths = HashSet::new();
+        // Where the walk failed (unreadable directory, I/O error): the files
+        // under a failed directory are absent from `seen_paths` without having
+        // vanished, and pruning them would throw their rows (and embeddings)
+        // away for nothing.
+        let mut failures = WalkFailures::default();
 
-        // Use ignore crate to walk directory respecting .gitignore
-        let walker = WalkBuilder::new(&self.project_root)
-            .hidden(true) // Skip hidden files by default
-            .git_ignore(true) // Respect .gitignore
-            .git_global(true) // Respect global gitignore
-            .git_exclude(true) // Respect .git/info/exclude
-            .filter_entry(|entry| {
-                // Skip excluded directories
-                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                    let name = entry.file_name().to_string_lossy();
-                    return !should_exclude_entry(&name);
+        // The project walk: `.gitignore` and excluded names (`exclusions.rs`).
+        for entry in project_walker(&self.project_root).build() {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // A `.gitignore` the walker could not fully parse: the walk
+                // went on with the rules it could read.
+                Err(e) if e.is_partial() => {
+                    warn!("Ignore rules partially applied: {}", e);
+                    continue;
                 }
-                true
-            })
-            .build();
+                Err(e) => {
+                    warn!("Walk error, files under it are kept in the index: {}", e);
+                    failures.record(&e, &self.project_root);
+                    result.errors += 1;
+                    continue;
+                }
+            };
 
-        for entry in walker.flatten() {
             // Skip directories
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
                 continue;
@@ -133,8 +153,7 @@ impl AutoIndexer {
             }
 
             // Get relative path (warns if `path` falls outside project_root).
-            let rel_path = crate::paths::to_relative_string(path, &self.project_root);
-            seen_paths.insert(rel_path.clone());
+            let rel_path = to_relative_string(path, &self.project_root);
 
             // Files above their size limit are never indexed. Drop a row left
             // by an older version or by a file that grew past the limit:
@@ -148,14 +167,30 @@ impl AutoIndexer {
                 continue;
             }
 
-            // Read file content to check if needs reindex
+            // Read file content to check if needs reindex. A file that is
+            // gone (between the directory listing and here) or not UTF-8 any
+            // more has a stale row, so it goes. On any other read error
+            // (permissions, interruption) nothing shows the row stale: it is
+            // kept, embeddings included, and must not be pruned either.
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
-                Err(e) => {
+                Err(e) if read_error_is_final(&e) => {
                     debug!("Skipping {}: {}", rel_path, e);
+                    if self.store.get_file_by_path(&rel_path)?.is_some() {
+                        self.store.delete_file(&rel_path)?;
+                        debug!("Removed unreadable file from index: {}", rel_path);
+                        result.removed += 1;
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Cannot read {}, its index entry is kept: {}", rel_path, e);
+                    seen_paths.insert(rel_path.clone());
+                    result.errors += 1;
                     continue;
                 }
             };
+            seen_paths.insert(rel_path.clone());
 
             // Check if file needs to be reindexed
             let needs_reindex = self
@@ -183,34 +218,50 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
-        let stale: Vec<String> = self
-            .store
-            .list_file_paths()?
-            .into_iter()
-            .filter(|path| !seen_paths.contains(path))
-            .collect();
-
-        // Safety net: a walk that found nothing indexable while the index holds
-        // files means the root is wrong (a database opened from another
-        // directory), not that every file vanished. Pruning would wipe the
-        // index; refuse instead.
-        if seen_paths.is_empty() && !stale.is_empty() {
-            bail!(
-                "no indexable file found under {} while the index holds {} files: wrong \
-                 project root? Pass `--project <root>`, or rebuild with \
-                 `semantiq index <root> --force` (also the way to go if the project really \
-                 has no indexable file left)",
-                self.project_root.display(),
-                stale.len()
-            );
+        // Not under a directory the walk could not list: a file not seen there
+        // is not necessarily gone, and the next walk that lists it prunes for
+        // real. Elsewhere pruning goes on, so that a permanently unreadable
+        // directory does not pile stale rows up forever.
+        if !failures.is_empty() {
+            warn!("Walk incomplete: files under the directories it could not list are kept");
         }
-        self.record_project_root(stale.len())?;
-        for stale in stale {
-            match self.store.delete_file(&stale) {
-                Ok(()) => result.removed += 1,
-                Err(e) => {
-                    error!("Failed to remove stale {}: {}", stale, e);
-                    result.errors += 1;
+        if failures.covers_root() {
+            // The walk failed at the root itself, or without saying where:
+            // nothing can be told stale. The root is recorded only when the
+            // walk did reach files of it.
+            if !seen_paths.is_empty() {
+                self.record_project_root(0)?;
+            }
+        } else {
+            let stale: Vec<String> = self
+                .store
+                .list_file_paths()?
+                .into_iter()
+                .filter(|path| !seen_paths.contains(path) && !failures.covers(path))
+                .collect();
+
+            // Safety net: a walk that found nothing indexable while the index
+            // holds files means the root is wrong (a database opened from
+            // another directory), not that every file vanished. Pruning would
+            // wipe the index; refuse instead.
+            if seen_paths.is_empty() && !stale.is_empty() {
+                bail!(
+                    "no indexable file found under {} while the index holds {} files: wrong \
+                     project root? Pass `--project <root>`, or rebuild with \
+                     `semantiq index <root> --force` (also the way to go if the project really \
+                     has no indexable file left)",
+                    self.project_root.display(),
+                    stale.len()
+                );
+            }
+            self.record_project_root(stale.len())?;
+            for stale in stale {
+                match self.store.delete_file(&stale) {
+                    Ok(()) => result.removed += 1,
+                    Err(e) => {
+                        error!("Failed to remove stale {}: {}", stale, e);
+                        result.errors += 1;
+                    }
                 }
             }
         }
@@ -239,11 +290,32 @@ impl AutoIndexer {
             return Ok(ProcessResult::default());
         }
 
-        let mut result = ProcessResult {
-            events: events.iter().filter(|e| concerns_indexed_file(e)).count(),
-            ..ProcessResult::default()
+        // Events on files the index could contain wake the embedder
+        // (`events`), whether or not they lead to a reindex here.
+        let events_on_indexed_files = events.iter().filter(|e| concerns_indexed_file(e)).count();
+        let mut result = self.process_file_events(events);
+        result.events = events_on_indexed_files;
+        Ok(result)
+    }
+
+    /// Apply file events as the watcher reports them: created and modified
+    /// files are (re)indexed, deleted ones removed. A created or modified
+    /// file is indexed only if the project walk would reach it (`.gitignore`,
+    /// global excludes, `.git/info/exclude`, excluded names): the watcher sees
+    /// every write, including those to generated or ignored files, and the
+    /// index must stay the one `initial_index` builds.
+    pub fn process_file_events(&self, events: Vec<FileEvent>) -> ProcessResult {
+        let mut result = ProcessResult::default();
+        let remove = |path: &Path, result: &mut ProcessResult| {
+            if let Err(e) = self.remove_file(path) {
+                error!("Failed to remove {:?}: {}", path, e);
+                result.errors += 1;
+            } else {
+                result.removed += 1;
+            }
         };
 
+        let mut changed: Vec<PathBuf> = Vec::new();
         for event in events {
             match event {
                 FileEvent::Created(path) | FileEvent::Modified(path) => {
@@ -251,29 +323,47 @@ impl AutoIndexer {
                     // (macOS FSEvents, editors' atomic saves): a path that no
                     // longer exists is a removal, not a modification.
                     if !path.exists() {
-                        if let Err(e) = self.remove_file(&path) {
-                            error!("Failed to remove {:?}: {}", path, e);
-                            result.errors += 1;
-                        } else {
-                            result.removed += 1;
-                        }
+                        remove(&path, &mut result);
                         continue;
                     }
-                    match self.index_file(&path, false) {
-                        Ok(true) => result.indexed += 1,
-                        Ok(false) => {}
-                        Err(e) => {
-                            error!("Failed to index {:?}: {}", path, e);
-                            result.errors += 1;
+                    changed.push(path);
+                }
+                FileEvent::Deleted(path) => remove(&path, &mut result),
+            }
+        }
+
+        // The watcher reports several events per save (and per file on a
+        // branch switch): one walk and one index pass per file.
+        changed.sort();
+        changed.dedup();
+
+        if !changed.is_empty() {
+            let (walked, walk_complete) = self.walked_subset(&changed);
+            for path in changed {
+                let rel_path = to_relative_string(&path, &self.project_root);
+                if !walked.contains(&rel_path) {
+                    debug!("Not part of the project walk, not indexed: {}", rel_path);
+                    // A row from before the file became ignored (or from an
+                    // older version) must go; not when the walk itself failed,
+                    // since the file may simply have been missed.
+                    if walk_complete {
+                        match self.store.get_file_by_path(&rel_path) {
+                            Ok(Some(_)) => remove(&path, &mut result),
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!("Failed to look up {}: {}", rel_path, e);
+                                result.errors += 1;
+                            }
                         }
                     }
+                    continue;
                 }
-                FileEvent::Deleted(path) => {
-                    if let Err(e) = self.remove_file(&path) {
-                        error!("Failed to remove {:?}: {}", path, e);
+                match self.index_file(&path, false) {
+                    Ok(true) => result.indexed += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        error!("Failed to index {:?}: {}", path, e);
                         result.errors += 1;
-                    } else {
-                        result.removed += 1;
                     }
                 }
             }
@@ -286,7 +376,65 @@ impl AutoIndexer {
             );
         }
 
-        Ok(result)
+        result
+    }
+
+    /// The project-relative paths among `candidates` that the project walk
+    /// reaches, and whether the walk completed. The walk is restricted to the
+    /// ancestors of the candidates and the candidates themselves, so it reads
+    /// one directory per path component and the ignore files along the way:
+    /// the same rules as `initial_index`, including nested `.gitignore`
+    /// files, without a matcher to keep in sync with them.
+    fn walked_subset(&self, candidates: &[PathBuf]) -> (HashSet<String>, bool) {
+        let root = self.project_root.clone();
+        // The candidates and every directory above them, so that the filter
+        // is one hash lookup per entry: a branch switch hands over thousands
+        // of paths in one batch.
+        let mut wanted: HashSet<String> = HashSet::with_capacity(candidates.len());
+        let mut ancestors: HashSet<String> = HashSet::new();
+        for path in candidates {
+            let rel = to_relative_string(path, &root);
+            let mut dir = Path::new(&rel).parent();
+            while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
+                // An ancestor already there brought its own ancestors along.
+                if !ancestors.insert(d.to_string_lossy().into_owned()) {
+                    break;
+                }
+                dir = d.parent();
+            }
+            wanted.insert(rel);
+        }
+        let keep_root = root.clone();
+        let walker = project_walker_with(&root, move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let rel = to_relative_string(entry.path(), &keep_root);
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                ancestors.contains(&rel)
+            } else {
+                wanted.contains(&rel)
+            }
+        })
+        .build();
+
+        let mut walked = HashSet::new();
+        let mut complete = true;
+        for entry in walker {
+            match entry {
+                Ok(entry) => {
+                    if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        walked.insert(to_relative_string(entry.path(), &root));
+                    }
+                }
+                Err(e) if e.is_partial() => warn!("Ignore rules partially applied: {}", e),
+                Err(e) => {
+                    warn!("Walk error while checking changed files: {}", e);
+                    complete = false;
+                }
+            }
+        }
+        (walked, complete)
     }
 
     /// Index a single file (phase 1). Returns `Ok(false)` when the file was
@@ -294,17 +442,17 @@ impl AutoIndexer {
     /// unchanged since last index).
     fn index_file(&self, path: &Path, force: bool) -> Result<bool> {
         // Get relative path (warns if `path` falls outside the project root).
-        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+        let rel_path = to_relative_string(path, &self.project_root);
 
-        // Skip excluded paths (hidden dirs, node_modules, large files, etc.).
+        // Skip excluded paths (.git, node_modules, large files, etc.).
         //
-        // The directory-name exclusion (hidden dirs, node_modules, ...) is
+        // The name exclusion (`.git`, `node_modules`, `.semantiq*`, ...) is
         // evaluated against the path RELATIVE to the project root, not the
-        // absolute path. Otherwise a project that simply lives under a hidden or
-        // excluded ancestor (e.g. `~/.config/app`, a CI checkout under `.cache`,
-        // or a `tempfile`-created `.tmpXXXX` dir in tests) would have every one
-        // of its files silently skipped. The file-size check still uses the real
-        // absolute `path` since it needs the on-disk metadata.
+        // absolute path. Otherwise a project that simply lives under an
+        // excluded ancestor (e.g. a CI checkout under `.cache`, a `target`
+        // directory) would have every one of its files silently skipped. The
+        // file-size check still uses the real absolute `path` since it needs
+        // the on-disk metadata.
         if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
             debug!("Skipping excluded path: {}", rel_path);
             // A file that grew past its size limit must not keep its old rows.
@@ -323,13 +471,20 @@ impl AutoIndexer {
             }
         };
 
-        // Read file content
+        // Read file content. A file that is gone or not UTF-8 any more cannot
+        // keep a row that no longer describes it; on any other read error
+        // (permissions, interruption) the row stays, see `initial_index_with`.
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
-            Err(e) => {
+            Err(e) if read_error_is_final(&e) => {
                 debug!("Skipping {}: {}", rel_path, e);
+                if self.store.get_file_by_path(&rel_path)?.is_some() {
+                    self.store.delete_file(&rel_path)?;
+                    debug!("Removed unreadable file from index: {}", rel_path);
+                }
                 return Ok(false);
             }
+            Err(e) => return Err(anyhow::Error::from(e).context(format!("reading {}", rel_path))),
         };
 
         // Skip files whose content is unchanged since the last index: watchers
@@ -408,29 +563,41 @@ impl AutoIndexer {
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
                 self.store.insert_chunks(file_id, &chunks)?;
 
-                // Extract imports and store as dependencies
+                // Extract imports and store them as the file's dependencies,
+                // in one transaction (one commit per file, not per import).
                 let imports = ImportExtractor::extract_with_context(
                     &tree,
                     &content,
                     language,
                     &self.import_context,
                 )?;
-                self.store.delete_dependencies(file_id)?;
-                for import in &imports {
-                    let resolved = if import.kind == ImportKind::Local {
-                        resolve_local_import(&rel_path, &import.path, language, &self.project_root)
-                    } else {
-                        None
-                    };
-                    self.store.insert_dependency(
-                        file_id,
-                        &import.path,
-                        import.name.as_deref(),
-                        import.kind.as_str(),
-                        resolved.as_deref(),
-                        (import.start_line, import.end_line),
-                    )?;
-                }
+                let resolved: Vec<Option<String>> = imports
+                    .iter()
+                    .map(|import| {
+                        if import.kind == ImportKind::Local {
+                            resolve_local_import(
+                                &rel_path,
+                                &import.path,
+                                language,
+                                &self.project_root,
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let dependencies: Vec<DependencyInsert<'_>> = imports
+                    .iter()
+                    .zip(&resolved)
+                    .map(|(import, resolved)| DependencyInsert {
+                        target_path: &import.path,
+                        import_name: import.name.as_deref(),
+                        kind: import.kind.as_str(),
+                        resolved_path: resolved.as_deref(),
+                        lines: (import.start_line, import.end_line),
+                    })
+                    .collect();
+                self.store.replace_dependencies(file_id, &dependencies)?;
 
                 debug!(
                     "Auto-indexed {}: {} symbols, {} chunks, {} deps",
@@ -467,7 +634,7 @@ impl AutoIndexer {
 
     /// Remove a file from the index
     fn remove_file(&self, path: &Path) -> Result<()> {
-        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+        let rel_path = to_relative_string(path, &self.project_root);
 
         self.store.delete_file(&rel_path)?;
         debug!("Removed from index: {}", rel_path);

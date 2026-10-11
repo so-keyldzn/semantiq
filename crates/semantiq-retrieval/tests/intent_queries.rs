@@ -18,8 +18,7 @@
 
 #![cfg(feature = "onnx")]
 
-use ignore::WalkBuilder;
-use semantiq_index::{IndexStore, MAX_FILE_SIZE, paths::to_relative_string, should_exclude_entry};
+use semantiq_index::{IndexStore, MAX_FILE_SIZE, paths::to_relative_string, project_walker};
 use semantiq_parser::{ChunkExtractor, Language, LanguageSupport, SymbolExtractor};
 use semantiq_retrieval::RetrievalEngine;
 use std::path::{Path, PathBuf};
@@ -47,14 +46,7 @@ fn build_index() -> Option<Arc<IndexStore>> {
         return None;
     }
 
-    let walker = WalkBuilder::new(&root)
-        .hidden(true)
-        .git_ignore(true)
-        .filter_entry(|entry| {
-            let name = entry.file_name().to_string_lossy();
-            !should_exclude_entry(&name)
-        })
-        .build();
+    let walker = project_walker(&root).build();
 
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();

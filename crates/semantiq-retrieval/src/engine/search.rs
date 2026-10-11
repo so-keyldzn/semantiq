@@ -5,8 +5,7 @@ use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use crate::text_searcher::{TextSearcher, looks_generated};
 use anyhow::Result;
-use ignore::WalkBuilder;
-use semantiq_index::should_exclude_entry;
+use semantiq_index::project_walker;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -627,20 +626,18 @@ impl RetrievalEngine {
             return Ok(Arc::clone(&cached.paths));
         }
 
-        // Rebuild the file list
-        let walker = WalkBuilder::new(root)
-            .hidden(true)
-            .git_ignore(true)
-            .filter_entry(|entry| {
-                let name = entry.file_name().to_string_lossy();
-                !should_exclude_entry(&name)
-            })
-            .build();
+        // Rebuild the file list: the same walk as the indexer (hidden
+        // directories such as `.github` included, `.gitignore` honoured).
+        // Dot-files are left out: unlike the index, which only parses known
+        // languages, this search reads files of any extension, and
+        // `.env.production`-style files are where secrets live.
+        let walker = project_walker(root).build();
 
         let paths: Arc<Vec<PathBuf>> = Arc::new(
             walker
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_file())
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
                 .map(|e| e.into_path())
                 .collect(),
         );

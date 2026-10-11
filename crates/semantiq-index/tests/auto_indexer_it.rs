@@ -285,3 +285,421 @@ fn initial_index_records_root_and_refuses_to_prune_from_a_wrong_root() {
         Some(root.canonicalize().unwrap())
     );
 }
+
+// ---------------------------------------------------------------------------
+// Walk rules: hidden directories, `.gitignore`, walk errors (#65, #36, #53).
+// ---------------------------------------------------------------------------
+
+use semantiq_index::watcher::FileEvent;
+
+/// A project with hidden tooling directories, excluded directories and a
+/// `.gitignore`. `.gitignore` is only honoured inside a git repository, so
+/// `.git` exists (an empty directory is enough for the `ignore` crate).
+fn build_hidden_dirs_project(root: &Path) {
+    build_toy_project(root);
+    fs::create_dir_all(root.join(".git")).unwrap();
+    write_file(root, ".gitignore", "generated/\n*.min.js\n");
+    write_file(
+        root,
+        ".storybook/main.ts",
+        "export function storybookMain(): number { return 1; }\n",
+    );
+    write_file(
+        root,
+        ".github/workflows/ci.yml",
+        "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+    );
+    write_file(root, ".vscode/tasks.json", "{\"version\": \"2.0.0\"}\n");
+    write_file(root, ".eslintrc.json", "{\"root\": true}\n");
+    write_file(
+        root,
+        "generated/schema.ts",
+        "export function generatedSchema(): number { return 2; }\n",
+    );
+    write_file(root, "app.min.js", "function minified(){return 3}\n");
+    write_file(root, ".idea/workspace.xml", "<project/>\n");
+    write_file(
+        root,
+        ".cache/stale.ts",
+        "export function cachedThing(): number { return 4; }\n",
+    );
+    write_file(root, "node_modules/dep/index.js", "module.exports = 1;\n");
+    // Credential files and directories, hidden like the tooling directories
+    // but never indexed.
+    write_file(root, ".env.json", "{\"envJsonToken\": \"s3cr3t\"}\n");
+    write_file(
+        root,
+        ".docker/config.json",
+        "{\"dockerConfigAuth\": \"s3cr3t\"}\n",
+    );
+}
+
+#[test]
+fn hidden_tooling_dirs_are_indexed_and_excluded_dirs_are_not() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_hidden_dirs_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+
+    let mut indexed = store.list_file_paths().unwrap();
+    indexed.sort();
+    assert_eq!(
+        indexed,
+        [
+            ".eslintrc.json",
+            ".github/workflows/ci.yml",
+            ".storybook/main.ts",
+            ".vscode/tasks.json",
+            "src/lib.rs",
+            "src/util.rs",
+        ],
+        "hidden tooling directories are indexed; .gitignore, VCS, cache, IDE, \
+         dependency and credential directories and credential files are not"
+    );
+    assert!(store.get_file_by_path(".env.json").unwrap().is_none());
+    assert!(
+        store
+            .get_file_by_path(".docker/config.json")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("envJsonToken")
+            .unwrap()
+            .is_empty(),
+        "a key of a credential file must not be a symbol"
+    );
+    assert!(
+        store
+            .find_symbol_by_name("dockerConfigAuth")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !store
+            .find_symbol_by_name("storybookMain")
+            .unwrap()
+            .is_empty(),
+        "a function in .storybook must be a symbol"
+    );
+    assert!(
+        store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.find_symbol_by_name("cachedThing").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+#[test]
+fn watcher_events_follow_gitignore_and_excluded_names() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_hidden_dirs_project(&root);
+    // A nested `.gitignore`, as monorepos have.
+    write_file(&root, "packages/.gitignore", "dist-types/\n");
+    write_file(
+        &root,
+        "packages/dist-types/index.ts",
+        "export function distTypes(): number { return 5; }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let before: Vec<String> = store.list_file_paths().unwrap();
+
+    // Saves of ignored or excluded files, as the watcher reports them.
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join("generated/schema.ts")),
+        FileEvent::Created(root.join("app.min.js")),
+        FileEvent::Modified(root.join("packages/dist-types/index.ts")),
+        FileEvent::Modified(root.join(".cache/stale.ts")),
+        FileEvent::Modified(root.join("node_modules/dep/index.js")),
+    ]);
+    assert_eq!(
+        result.indexed, 0,
+        "ignored files must not be indexed on save"
+    );
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    let mut after = store.list_file_paths().unwrap();
+    after.sort();
+    let mut expected = before.clone();
+    expected.sort();
+    assert_eq!(after, expected);
+    assert!(
+        store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.find_symbol_by_name("distTypes").unwrap().is_empty());
+
+    // Saves of project files, hidden directory included, are indexed.
+    write_file(
+        &root,
+        ".storybook/main.ts",
+        "export function storybookRenamed(): number { return 1; }\n",
+    );
+    write_file(&root, "src/new.rs", "pub fn brand_new() -> i32 { 6 }\n");
+    // Editors report several events per save: a file is indexed once.
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join(".storybook/main.ts")),
+        FileEvent::Created(root.join("src/new.rs")),
+        FileEvent::Modified(root.join("src/new.rs")),
+        FileEvent::Modified(root.join(".storybook/main.ts")),
+    ]);
+    assert_eq!(result.indexed, 2);
+    assert_eq!(result.errors, 0);
+    assert!(
+        !store
+            .find_symbol_by_name("storybookRenamed")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("storybookMain")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!store.find_symbol_by_name("brand_new").unwrap().is_empty());
+
+    // A file that became ignored since it was indexed loses its row on save.
+    write_file(&root, ".gitignore", "generated/\n*.min.js\nsrc/new.rs\n");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join("src/new.rs"))]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 1);
+    assert!(store.get_file_by_path("src/new.rs").unwrap().is_none());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+#[test]
+fn unreadable_file_loses_its_row() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
+
+    // The file is no longer valid UTF-8: `read_to_string` fails.
+    fs::write(root.join("src/util.rs"), b"pub fn helper() {}\n\xff\xfe\n").unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(
+        result.removed, 1,
+        "the stale row of an unreadable file goes"
+    );
+    assert_eq!(result.errors, 0);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert!(store.get_file_by_path("src/lib.rs").unwrap().is_some());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A file that cannot be read for a transient reason (permissions here) is
+/// an error, not a removal: its row and embeddings stay, in the walk and on a
+/// watcher event. Needs a non-root user: root reads a `chmod 000` file.
+#[cfg(unix)]
+#[test]
+fn unreadable_file_keeps_its_row_on_permission_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o644));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let before = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+
+    let util = root.join("src/util.rs");
+    fs::set_permissions(&util, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(util.clone());
+    if fs::read_to_string(&util).is_ok() {
+        eprintln!("skipped: the file is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.removed, 0, "a transient read error is not a removal");
+    assert_eq!(result.errors, 1);
+    let kept = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    assert_eq!(kept.hash, before.hash, "the row is untouched");
+
+    let result = indexer.process_file_events(vec![FileEvent::Modified(util.clone())]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 1);
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_some());
+
+    // Readable again and unchanged: nothing to do.
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A directory that cannot be listed is a walk error: its files are kept in
+/// the index (they did not vanish), the error is counted, and pruning goes
+/// on outside that directory. Needs a non-root user: root reads a
+/// `chmod 000` directory anyway.
+#[cfg(unix)]
+#[test]
+fn walk_error_keeps_files_under_the_unreadable_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Restores the directory's permissions on drop so `TempDir` can clean up.
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(
+        &root,
+        "locked/secret.rs",
+        "pub fn locked_away() -> i32 { 7 }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some()
+    );
+
+    let locked = root.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(locked.clone());
+    if fs::read_dir(&locked).is_ok() {
+        eprintln!("skipped: the directory is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    // Meanwhile a file really was deleted outside the locked directory: the
+    // walk did list its directory, so it is pruned as usual.
+    fs::remove_file(root.join("src/util.rs")).unwrap();
+
+    let result = indexer.initial_index().unwrap();
+    assert!(
+        result.errors >= 1,
+        "the unreadable directory is a walk error"
+    );
+    assert_eq!(
+        result.removed, 1,
+        "a file that vanished outside the unlisted directory is pruned"
+    );
+    assert!(store.get_file_by_path("src/util.rs").unwrap().is_none());
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some(),
+        "files under the unreadable directory keep their rows"
+    );
+
+    // Once readable again, the next walk keeps what is there...
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 0);
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_some()
+    );
+
+    // ...and prunes under it what really vanished.
+    fs::remove_file(root.join("locked/secret.rs")).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 1);
+    assert!(
+        store
+            .get_file_by_path("locked/secret.rs")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// The project root itself cannot be listed: the walk fails at depth 0 and
+/// sees nothing, which must read as "could not look", not as "every file
+/// vanished" nor as a wrong project root. Nothing is pruned, the index is
+/// untouched and `initial_index` returns `Ok`. Needs a non-root user.
+#[cfg(unix)]
+#[test]
+fn unreadable_root_keeps_the_index() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePerms(std::path::PathBuf);
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("project");
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePerms(root.clone());
+    if fs::read_dir(&root).is_ok() {
+        eprintln!("skipped: the root is readable despite chmod 000 (running as root?)");
+        return;
+    }
+
+    let result = indexer
+        .initial_index()
+        .expect("an unlistable root is not a wrong root");
+    assert!(result.errors >= 1, "the unlistable root is a walk error");
+    assert_eq!(result.removed, 0, "nothing is pruned");
+    assert_eq!(result.indexed, 0);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
+    assert_eq!(
+        store.get_project_root().unwrap(),
+        Some(root.canonicalize().unwrap()),
+        "the root recorded by the first walk is left alone"
+    );
+
+    // Readable again: everything is still there and nothing is reindexed.
+    drop(_restore);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
+}

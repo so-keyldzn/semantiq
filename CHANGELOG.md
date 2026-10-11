@@ -42,6 +42,23 @@ All notable changes to Semantiq will be documented in this file.
   defined in more than 100 files (`new` in a monorepo): their references
   linked every referencing file to every defining file (tens of millions
   of pairs) for a weight already damped to nothing (#45).
+- **Hidden directories are indexed** (#65): `.github/workflows`, `.storybook`,
+  `.vscode`, `.config`, `.husky`, `.changeset`, `.devcontainer`, `.claude`...
+  follow `.gitignore` like any other directory instead of being skipped for
+  their leading dot. What stays excluded by name is what never holds project
+  source: VCS state (`.git`, `.hg`, `.svn`, `.jj`), dependencies
+  (`node_modules`, `vendor`, `.venv`, `.yarn`...), build output (`target`,
+  `dist`, `.next`, `.nuxt`...), caches (`.cache`, `.turbo`, `.mypy_cache`...),
+  IDE state (`.idea`, `.vs`), credential stores (`.aws`, `.azure`,
+  `.docker`, `.gnupg`, `.kube`, `.ssh`) and Semantiq's own files
+  (`.semantiq*`); the full list is `EXCLUDED_DIRS`. Hidden files are indexed
+  too (`.eslintrc.json`, `.gitlab-ci.yml`), except credential files, whose
+  name starts with `.env`, `.secret` or `.credential` (`.env.json`,
+  `.env.yaml`, `.secrets.yml`, `.credentials.json`): never parsed, chunked,
+  embedded or returned by search. The initial walk, the query refresh check,
+  the text search and the watcher share one walk configuration
+  (`project_walker`). Text search still leaves dot-files out, since it reads
+  files of any extension. `PARSER_VERSION` 17: existing indexes are rebuilt.
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
@@ -156,6 +173,32 @@ All notable changes to Semantiq will be documented in this file.
   instead of the 10th percentile, so the two gates cut at the same point
   (the calibrated `max_distance` can still be stricter than the default
   1.2) (#33).
+- The watcher applies the project's ignore rules (#36): saving a file matched
+  by `.gitignore`, the global git excludes or `.git/info/exclude` (nested
+  `.gitignore` files included) no longer indexes it until the next refresh
+  prunes it; a file that became ignored since it was indexed is dropped on
+  save. `AutoIndexer::process_file_events` applies a batch of events (one
+  restricted walk per batch, duplicate events collapsed) and is what
+  `process_events` calls.
+- Walk errors no longer prune the files they hid (#53): a directory that
+  cannot be listed (permissions, mount hiccup) is logged and counted in
+  `errors`, and the files under it keep their rows and embeddings, since the
+  walk cannot tell them from files that vanished; pruning goes on everywhere
+  else, so a permanently unreadable directory (root-owned volume, restrictive
+  mount) does not disable it, and the next walk that lists the directory
+  prunes under it for real. A walk error without a path blocks pruning for
+  that run. The query refresh check applies the same rule. A previously
+  indexed file that is gone or not UTF-8 any more loses its stale row; a
+  file that cannot be read for a transient reason (permissions,
+  interruption) keeps its row and embeddings and is counted in `errors`.
+- Indexing writes less (#41): a file's imports are written in one transaction
+  (`IndexStore::replace_dependencies`, one commit per file instead of one per
+  import), and the partial index `idx_chunks_pending` (`chunks(id) WHERE
+  embedding IS NULL`, schema v10) lets `embedding_counts` and
+  `pending_embedding_chunks` skip the chunk rows and their embedding BLOBs:
+  on a 99k-chunk index with nothing pending, the counts query goes from
+  210 ms to 1 ms and the pending window from 60 ms to 1 ms, on every
+  `semantiq search` refresh and every watcher tick.
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

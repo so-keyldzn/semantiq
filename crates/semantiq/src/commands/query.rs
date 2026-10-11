@@ -8,12 +8,11 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
-use ignore::WalkBuilder;
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
 use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
 use semantiq_index::{
-    AutoIndexer, EmbeddingProgress, IndexStore, embed_pending, should_exclude_entry,
+    AutoIndexer, EmbeddingProgress, IndexStore, WalkFailures, embed_pending, project_walker,
     should_exclude_path,
 };
 use semantiq_mcp::server::{
@@ -456,24 +455,21 @@ fn refresh(store: &Arc<IndexStore>, db_path: &Path, root: &Path) -> Result<()> {
 
 /// Whether `AutoIndexer::initial_index` would change anything: a file it
 /// indexes is new or modified, or an indexed file is gone. Mirrors its walk and
-/// filters, and stops at the first difference.
+/// filters, and stops at the first difference. Like the indexer, a walk that
+/// could not cover the whole tree does not count unseen files as gone.
 fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
     let mut vanished: HashSet<String> = store.list_file_paths()?.into_iter().collect();
+    let mut failures = WalkFailures::default();
 
-    let walker = WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .filter_entry(|entry| {
-            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                return !should_exclude_entry(&entry.file_name().to_string_lossy());
+    for entry in project_walker(root).build() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                failures.record(&e, root);
+                tracing::debug!("Walk error while checking the index: {}", e);
+                continue;
             }
-            true
-        })
-        .build();
-
-    for entry in walker.flatten() {
+        };
         if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
             continue;
         }
@@ -502,6 +498,10 @@ fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
         }
     }
 
+    // Files under a directory the walk could not list did not necessarily
+    // vanish: the indexer keeps their rows (`initial_index`), so they do not
+    // make the index stale either.
+    vanished.retain(|path| !failures.covers(path));
     if let Some(path) = vanished.iter().next() {
         tracing::debug!("Index stale: {} removed", path);
     }

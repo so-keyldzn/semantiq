@@ -263,10 +263,16 @@ impl IndexStore {
     }
 
     /// Progress of phase 2: chunks with an embedding, and all chunks.
+    ///
+    /// Neither count reads the rows (and their embedding BLOBs): `COUNT(*)`
+    /// walks the smallest index of `chunks`, the pending count walks the
+    /// partial index `idx_chunks_pending` (`WHERE embedding IS NULL`), empty
+    /// once phase 2 is done.
     pub fn embedding_counts(&self) -> Result<EmbeddingCounts> {
         self.with_conn(|conn| {
             conn.query_row(
-                "SELECT COUNT(*), COUNT(*) - COUNT(embedding) FROM chunks",
+                "SELECT (SELECT COUNT(*) FROM chunks),
+                        (SELECT COUNT(*) FROM chunks WHERE embedding IS NULL)",
                 [],
                 |row| {
                     let total = row.get::<_, i64>(0)? as usize;
