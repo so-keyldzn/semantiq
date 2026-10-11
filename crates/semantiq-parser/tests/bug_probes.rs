@@ -484,4 +484,30 @@ public:
         );
         assert_eq!(e.imports[2].1, None, "wildcard has no binding name");
     }
+
+    // B13 (#57): `import X as Y` and `import a, b`.
+    #[test]
+    fn b13_python_aliased_and_multi_imports() {
+        let e = extract_file(
+            "pkg/mod.py",
+            "import numpy as np\nimport os, sys\nfrom . import sibling\n",
+        );
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "numpy".to_string(),
+                    Some("np".to_string()),
+                    ImportKind::External
+                ),
+                ("os".to_string(), Some("os".to_string()), ImportKind::Std),
+                ("sys".to_string(), Some("sys".to_string()), ImportKind::Std),
+                (
+                    ".".to_string(),
+                    Some("sibling".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+    }
 }

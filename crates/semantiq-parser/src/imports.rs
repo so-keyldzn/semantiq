@@ -89,9 +89,7 @@ impl ImportExtractor {
             Language::TypeScript | Language::JavaScript => {
                 Self::extract_ts_import(node, source).into_iter().collect()
             }
-            Language::Python => Self::extract_python_import(node, source)
-                .into_iter()
-                .collect(),
+            Language::Python => Self::extract_python_import(node, source),
             Language::Go => Self::extract_go_import(node, source).into_iter().collect(),
             Language::Java => Self::extract_java_import(node, source)
                 .into_iter()
@@ -403,59 +401,82 @@ impl ImportExtractor {
         None
     }
 
-    fn extract_python_import(node: &Node, source: &str) -> Option<Import> {
+    /// One `Import` per imported module: `import a, b` and `import numpy as np`
+    /// (an `aliased_import` whose `name` field holds the `dotted_name`) each
+    /// yield their own entry, the alias being the binding `name`. A `from`
+    /// import yields one entry for its module, except `from . import a, b`
+    /// where the imported names are the modules: one entry per name, path `.`.
+    fn extract_python_import(node: &Node, source: &str) -> Vec<Import> {
+        let src = source.as_bytes();
+        let start_line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+        // `dotted_name` or `aliased_import` → (dotted path, binding name).
+        let target = |n: Node| -> Option<(String, Option<String>)> {
+            match n.kind() {
+                "dotted_name" => {
+                    let path = text(n)?;
+                    let name = path.split('.').next_back().map(String::from);
+                    Some((path, name))
+                }
+                "aliased_import" => {
+                    let path = text(n.child_by_field_name("name")?)?;
+                    let alias = n.child_by_field_name("alias").and_then(text);
+                    Some((path, alias))
+                }
+                _ => None,
+            }
+        };
+
         match node.kind() {
             "import_statement" => {
-                let start_line = node.start_position().row + 1;
-                let end_line = node.end_position().row + 1;
-
-                // Find the dotted_name child
                 let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "dotted_name" {
-                        let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
-                        let kind = Self::classify_python_import(&path);
-                        let name = path.split('.').next_back().map(String::from);
-
-                        return Some(Import {
-                            path,
-                            name,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
-                    }
-                }
-                None
+                node.children_by_field_name("name", &mut cursor)
+                    .filter_map(target)
+                    .map(|(path, name)| Import {
+                        kind: Self::classify_python_import(&path),
+                        path,
+                        name,
+                        start_line,
+                        end_line,
+                    })
+                    .collect()
             }
             "import_from_statement" => {
-                let start_line = node.start_position().row + 1;
-                let end_line = node.end_position().row + 1;
-
-                // Find the module_name child
+                let Some(module) = node.child_by_field_name("module_name") else {
+                    return Vec::new();
+                };
+                let Some(path) = text(module) else {
+                    return Vec::new();
+                };
+                let kind = if path.starts_with('.') {
+                    ImportKind::Local
+                } else {
+                    Self::classify_python_import(&path)
+                };
+                let bare_relative = path.chars().all(|c| c == '.');
                 let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "dotted_name" || child.kind() == "relative_import" {
-                        let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
-                        let kind = if path.starts_with('.') {
-                            ImportKind::Local
-                        } else {
-                            Self::classify_python_import(&path)
-                        };
-                        let name = path.split('.').next_back().map(String::from);
-
-                        return Some(Import {
-                            path,
-                            name,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
-                    }
-                }
-                None
+                let names: Vec<Option<String>> = if bare_relative {
+                    // `from . import a, b`: the imported names are the modules.
+                    node.children_by_field_name("name", &mut cursor)
+                        .filter_map(target)
+                        .map(|(_, name)| name)
+                        .collect()
+                } else {
+                    vec![path.split('.').next_back().map(String::from)]
+                };
+                names
+                    .into_iter()
+                    .map(|name| Import {
+                        path: path.clone(),
+                        name,
+                        kind,
+                        start_line,
+                        end_line,
+                    })
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         }
     }
 
@@ -1295,6 +1316,25 @@ use super::parent_module;
                 import("kotlin.collections.List", Some("KList"), ImportKind::Std),
                 import("foo", None, ImportKind::External),
                 import("javax.inject.Inject", Some("Inject"), ImportKind::Std),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_python_import_alias_and_list() {
+        let source = "import numpy as np\nimport os, sys\nimport os.path as osp\nfrom . import sibling\nfrom .. import a, b\nfrom .mod import x as y\nfrom collections import defaultdict\n";
+        assert_eq!(
+            imports(Language::Python, source),
+            vec![
+                import("numpy", Some("np"), ImportKind::External),
+                import("os", Some("os"), ImportKind::Std),
+                import("sys", Some("sys"), ImportKind::Std),
+                import("os.path", Some("osp"), ImportKind::Std),
+                import(".", Some("sibling"), ImportKind::Local),
+                import("..", Some("a"), ImportKind::Local),
+                import("..", Some("b"), ImportKind::Local),
+                import(".mod", Some("mod"), ImportKind::Local),
+                import("collections", Some("collections"), ImportKind::Std),
             ]
         );
     }

@@ -180,6 +180,9 @@ All notable changes to Semantiq will be documented in this file.
 - Kotlin imports are extracted (#56): the extractor matched the old
   `import_header` node, so `deps` and the repo map had nothing for Kotlin
   files. Aliases (`import a.B as C`) and wildcards are handled.
+- Python `import numpy as np` and `import os, sys` yield one import per module,
+  with the alias as its name; `from . import a, b` yields one import per name
+  with path `.` (#57).
 
 ## [0.11.0] - 2026-10-07
 
