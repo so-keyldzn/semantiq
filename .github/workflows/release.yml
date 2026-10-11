@@ -16,6 +16,9 @@ jobs:
   check-version:
     name: Check tag matches versions
     runs-on: ubuntu-latest
+    # Only reads the repository; the workflow default is `contents: write`.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
