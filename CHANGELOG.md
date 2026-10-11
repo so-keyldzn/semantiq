@@ -107,6 +107,10 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- Text search no longer returns the whole line of a minified or generated
+  file (up to 1 MB) as a hit's `content`: files whose lines average more
+  than 500 characters, or that hold a NUL byte, are skipped, and a hit on a
+  longer line is cut to a 500-character window around the match (#44).
 - The text fallback of `find_refs` / `explain` (names unknown to the syntax
   index, such as keys of data files) matches the whole identifier,
   case-sensitive: `id` no longer reports `uuid`, `width`, `provider` or

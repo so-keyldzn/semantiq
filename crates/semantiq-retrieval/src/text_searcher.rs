@@ -3,6 +3,31 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, Sink, SinkMatch};
 use std::io;
 
+/// Longest line content returned by a match. Longer lines (minified or
+/// generated code) are cut to a window of this many characters around the
+/// first match, marked with `…` on the cut sides.
+pub const MAX_LINE_CHARS: usize = 500;
+
+/// A file whose lines average more characters than this is minified or
+/// generated (bundles, source maps, SVG sprites, one-line HTML): text search
+/// skips it rather than return its whole content as a hit.
+pub const MAX_AVERAGE_LINE_CHARS: usize = 500;
+
+/// Bytes inspected for a NUL byte, the mark of a binary file.
+const BINARY_PROBE_BYTES: usize = 1024;
+
+/// Whether `content` is binary, minified or generated text that text search
+/// should skip: a NUL byte in the first KB, or lines averaging more than
+/// [`MAX_AVERAGE_LINE_CHARS`] characters.
+pub fn looks_generated(content: &str) -> bool {
+    let probe = &content.as_bytes()[..content.len().min(BINARY_PROBE_BYTES)];
+    if probe.contains(&0) {
+        return true;
+    }
+    let lines = content.lines().count().max(1);
+    content.chars().count() / lines > MAX_AVERAGE_LINE_CHARS
+}
+
 /// A text match result from ripgrep-based search
 #[derive(Debug, Clone)]
 pub struct TextMatch {
@@ -217,9 +242,10 @@ impl Sink for MatchSink<'_> {
         // Find match position within line for scoring
         let match_start = self.match_start(&line_content).unwrap_or(0);
 
-        let match_end = match_start + self.pattern.len();
-
+        // Scored on the whole line, then cut around the match if too long.
         let score = self.calculate_score(&line_content, match_start);
+        let (line_content, match_start) = snippet_around(line_content, match_start);
+        let match_end = match_start + self.pattern.len();
 
         self.matches.push(TextMatch {
             line_number,
@@ -231,6 +257,38 @@ impl Sink for MatchSink<'_> {
 
         Ok(true)
     }
+}
+
+/// Cut `line` to [`MAX_LINE_CHARS`] characters around the match starting at
+/// byte `match_start`, with a quarter of the window before the match.
+/// Returns the snippet and the match's byte offset in it.
+fn snippet_around(line: String, match_start: usize) -> (String, usize) {
+    let total = line.chars().count();
+    if total <= MAX_LINE_CHARS {
+        return (line, match_start);
+    }
+    let match_char = line[..match_start.min(line.len())].chars().count();
+    let start = match_char
+        .saturating_sub(MAX_LINE_CHARS / 4)
+        .min(total - MAX_LINE_CHARS);
+    let end = start + MAX_LINE_CHARS;
+
+    let mut snippet = String::with_capacity(MAX_LINE_CHARS + 6);
+    if start > 0 {
+        snippet.push('…');
+    }
+    let prefix_len = snippet.len();
+    snippet.extend(line.chars().skip(start).take(MAX_LINE_CHARS));
+    if end < total {
+        snippet.push('…');
+    }
+    let offset: usize = line
+        .chars()
+        .skip(start)
+        .take(match_char - start)
+        .map(char::len_utf8)
+        .sum();
+    (snippet, prefix_len + offset)
 }
 
 #[cfg(test)]
@@ -311,6 +369,62 @@ mod tests {
             .map(|m| m.line_number)
             .collect();
         assert_eq!(lines, vec![1]);
+    }
+
+    #[test]
+    fn test_long_line_is_cut_around_the_match() {
+        // Regression for #44: the whole line of a minified file came back.
+        let searcher = TextSearcher::new(true);
+        let line = format!("{}needle(){}", "a".repeat(3000), "b".repeat(3000));
+        let content = format!("short needle\n{line}\n");
+
+        let matches = searcher.search(&content, "needle").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].line_content, "short needle");
+
+        let long = &matches[1];
+        assert!(long.line_content.chars().count() <= MAX_LINE_CHARS + 2);
+        assert!(long.line_content.starts_with('…') && long.line_content.ends_with('…'));
+        assert_eq!(
+            &long.line_content[long.match_start..long.match_end],
+            "needle",
+            "{}",
+            long.line_content
+        );
+        // A quarter of the window of context before the match.
+        assert_eq!(
+            long.line_content[..long.match_start].chars().count(),
+            MAX_LINE_CHARS / 4 + 1
+        );
+    }
+
+    #[test]
+    fn test_long_line_near_its_end_keeps_a_full_window() {
+        let searcher = TextSearcher::new(true);
+        let content = format!("{}needle", "x".repeat(2000));
+        let m = &searcher.search(&content, "needle").unwrap()[0];
+        assert_eq!(m.line_content.chars().count(), MAX_LINE_CHARS + 1);
+        assert!(m.line_content.starts_with('…') && m.line_content.ends_with("needle"));
+        assert_eq!(&m.line_content[m.match_start..m.match_end], "needle");
+    }
+
+    #[test]
+    fn test_looks_generated() {
+        assert!(!looks_generated("fn main() {\n    println!(\"hi\");\n}\n"));
+        assert!(!looks_generated(""));
+        // One minified line.
+        assert!(looks_generated(&format!(
+            "!function(){{{}}}();",
+            "a=1;".repeat(2000)
+        )));
+        // A short file with a huge embedded line still averages too long.
+        assert!(looks_generated(&format!("x\n{}\n", "y".repeat(5000))));
+        // Binary marker.
+        assert!(looks_generated("ab\0cd\n"));
+        // Long but normal lines are fine.
+        assert!(!looks_generated(
+            &"let value = compute(argument_one, argument_two, argument_three);\n".repeat(50)
+        ));
     }
 
     #[test]

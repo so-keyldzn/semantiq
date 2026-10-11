@@ -3,7 +3,7 @@
 use super::RetrievalEngine;
 use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
-use crate::text_searcher::TextSearcher;
+use crate::text_searcher::{TextSearcher, looks_generated};
 use anyhow::Result;
 use ignore::WalkBuilder;
 use semantiq_index::should_exclude_entry;
@@ -603,6 +603,11 @@ impl RetrievalEngine {
             }
 
             if let Ok(content) = fs::read_to_string(path) {
+                // Minified / generated files would return their whole
+                // content as one hit.
+                if looks_generated(&content) {
+                    continue;
+                }
                 let matches = Self::find_text_matches_compiled(searcher, &content, compiled);
                 if matches.is_empty() {
                     continue;

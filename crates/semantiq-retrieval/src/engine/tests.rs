@@ -432,6 +432,46 @@ fn test_text_fallback_matches_whole_identifiers_case_sensitively() {
 }
 
 #[test]
+fn test_text_search_skips_minified_files_and_cuts_long_lines() {
+    // Regression for #44: a minified bundle returned its whole line as the
+    // hit's content.
+    let root = tempfile::Builder::new()
+        .prefix("semantiq-text")
+        .tempdir()
+        .unwrap();
+    let minified = format!("!function(){{var needle=1;{}}}();\n", "a=1;".repeat(2000));
+    std::fs::write(root.path().join("vendor.min.js"), minified).unwrap();
+    std::fs::write(
+        root.path().join("app.js"),
+        "function run() {\n  return needle();\n}\n",
+    )
+    .unwrap();
+    // A normal file with one long generated line: the hit is cut, not dropped.
+    let long_line = format!(
+        "const TABLE = [{}needle{}];",
+        "0,".repeat(1000),
+        ",0".repeat(1000)
+    );
+    let filler = "function helper_number_x(value) { return value + 1; }\n".repeat(20);
+    std::fs::write(
+        root.path().join("table.js"),
+        format!("{filler}{long_line}\n{filler}"),
+    )
+    .unwrap();
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+
+    let results = engine.search("needle", 10, None).unwrap().results;
+    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    assert!(files.contains(&"app.js"), "{files:?}");
+    assert!(files.contains(&"table.js"), "{files:?}");
+    assert!(!files.contains(&"vendor.min.js"), "{files:?}");
+    let cut = results.iter().find(|r| r.file_path == "table.js").unwrap();
+    assert!(cut.content.chars().count() <= crate::text_searcher::MAX_LINE_CHARS + 2);
+    assert!(cut.content.contains("needle"));
+}
+
+#[test]
 fn test_explain_usage_count_from_ast() {
     let (engine, _root) = index_rust_project(&[(
         "lib.rs",

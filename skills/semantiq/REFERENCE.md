@@ -34,6 +34,9 @@ project root and use `/` on every platform (Windows included); a path argument
   `symbol_name`, else the line holding most query words), trimmed and cut to
   120 characters.
 - `content`: the hit's code, only with `--snippets` (MCP: `snippets: true`).
+  A text hit on a line longer than 500 characters is cut to a window around
+  the match (`…` on the cut sides); minified or generated files (lines
+  averaging more than 500 characters, or binary) are not searched.
 - `truncated`: more results exist beyond `--limit` (default 10).
 
 ## `semantiq refs <symbol> --json`
