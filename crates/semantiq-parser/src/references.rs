@@ -342,8 +342,9 @@ fn classify(node: Node, text: &str, source: &[u8], language: Language) -> Option
 
 /// Mots-clés Elixir qui déclarent un symbole : `def foo(x)` est un `call` dont
 /// le `target` est `def` et dont le premier argument porte le nom déclaré.
-/// Même liste que `queries/elixir/tags.scm`, plus `defimpl`.
-const ELIXIR_DEFINERS: [&str; 13] = [
+/// Même liste que `queries/elixir/tags.scm`, plus `defimpl` et les mots-clés
+/// sans nom déclaré (`defstruct`, `defexception`, `defoverridable`).
+const ELIXIR_DEFINERS: [&str; 15] = [
     "defmodule",
     "defprotocol",
     "defimpl",
@@ -357,6 +358,8 @@ const ELIXIR_DEFINERS: [&str; 13] = [
     "defn",
     "defnp",
     "defstruct",
+    "defexception",
+    "defoverridable",
 ];
 
 /// Directives Elixir : leurs arguments sont des imports, pas des appels.
@@ -702,7 +705,7 @@ mod tests {
     fn test_elixir_definitions_are_not_calls() {
         let r = refs(
             Language::Elixir,
-            "defmodule Mod do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\n  def baz(x) when is_integer(x), do: x\n  def noparen, do: :ok\n  alias A.B\n  import Enum\nend\n",
+            "defmodule Mod do\n  def foo(x) do\n    bar(x)\n  end\n  defp bar(x), do: x\n  def baz(x) when is_integer(x), do: x\n  def noparen, do: :ok\n  alias A.B\n  import Enum\n  defstruct [:name]\n  defexception [:message]\n  defoverridable foo: 1\nend\n",
         );
         assert_eq!(kinds_of(&r, "Mod"), vec![(1, ReferenceKind::Definition)]);
         assert_eq!(kinds_of(&r, "foo"), vec![(2, ReferenceKind::Definition)]);
@@ -718,7 +721,16 @@ mod tests {
         );
         assert_eq!(kinds_of(&r, "A.B"), vec![(8, ReferenceKind::Import)]);
         assert_eq!(kinds_of(&r, "Enum"), vec![(9, ReferenceKind::Import)]);
-        for keyword in ["defmodule", "def", "defp", "alias", "import"] {
+        for keyword in [
+            "defmodule",
+            "def",
+            "defp",
+            "alias",
+            "import",
+            "defstruct",
+            "defexception",
+            "defoverridable",
+        ] {
             assert!(kinds_of(&r, keyword).is_empty(), "{keyword} indexed");
         }
     }
