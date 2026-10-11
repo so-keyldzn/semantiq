@@ -1,5 +1,6 @@
 use crate::IndexStore;
 use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
+use crate::store::DependencyInsert;
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::{Result, bail};
 use ignore::WalkBuilder;
@@ -408,29 +409,41 @@ impl AutoIndexer {
                 let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
                 self.store.insert_chunks(file_id, &chunks)?;
 
-                // Extract imports and store as dependencies
+                // Extract imports and store them as the file's dependencies,
+                // in one transaction (one commit per file, not per import).
                 let imports = ImportExtractor::extract_with_context(
                     &tree,
                     &content,
                     language,
                     &self.import_context,
                 )?;
-                self.store.delete_dependencies(file_id)?;
-                for import in &imports {
-                    let resolved = if import.kind == ImportKind::Local {
-                        resolve_local_import(&rel_path, &import.path, language, &self.project_root)
-                    } else {
-                        None
-                    };
-                    self.store.insert_dependency(
-                        file_id,
-                        &import.path,
-                        import.name.as_deref(),
-                        import.kind.as_str(),
-                        resolved.as_deref(),
-                        (import.start_line, import.end_line),
-                    )?;
-                }
+                let resolved: Vec<Option<String>> = imports
+                    .iter()
+                    .map(|import| {
+                        if import.kind == ImportKind::Local {
+                            resolve_local_import(
+                                &rel_path,
+                                &import.path,
+                                language,
+                                &self.project_root,
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let dependencies: Vec<DependencyInsert<'_>> = imports
+                    .iter()
+                    .zip(&resolved)
+                    .map(|(import, resolved)| DependencyInsert {
+                        target_path: &import.path,
+                        import_name: import.name.as_deref(),
+                        kind: import.kind.as_str(),
+                        resolved_path: resolved.as_deref(),
+                        lines: (import.start_line, import.end_line),
+                    })
+                    .collect();
+                self.store.replace_dependencies(file_id, &dependencies)?;
 
                 debug!(
                     "Auto-indexed {}: {} symbols, {} chunks, {} deps",

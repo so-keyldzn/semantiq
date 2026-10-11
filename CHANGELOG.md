@@ -156,6 +156,14 @@ All notable changes to Semantiq will be documented in this file.
   instead of the 10th percentile, so the two gates cut at the same point
   (the calibrated `max_distance` can still be stricter than the default
   1.2) (#33).
+- Indexing writes less (#41): a file's imports are written in one transaction
+  (`IndexStore::replace_dependencies`, one commit per file instead of one per
+  import), and the partial index `idx_chunks_pending` (`chunks(id) WHERE
+  embedding IS NULL`, schema v10) lets `embedding_counts` and
+  `pending_embedding_chunks` skip the chunk rows and their embedding BLOBs:
+  on a 99k-chunk index with nothing pending, the counts query goes from
+  210 ms to 1 ms and the pending window from 60 ms to 1 ms, on every
+  `semantiq search` refresh and every watcher tick.
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

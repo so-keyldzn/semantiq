@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
@@ -228,8 +228,22 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
         }
     }
 
+    // v9 -> v10: partial index on the chunks still waiting for an embedding
+    // (`embedding IS NULL`), so that phase 2's `pending_embedding_chunks` and
+    // `embedding_counts` no longer scan every chunk row (and its BLOB) on each
+    // pass. Also created by `init_schema()` (IF NOT EXISTS); no data to move.
+    if stored < 10 && target >= 10 {
+        tracing::info!(
+            "Migrating schema v{} -> v10: adding idx_chunks_pending",
+            stored
+        );
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_pending ON chunks(id) WHERE embedding IS NULL;",
+        )?;
+    }
+
     // Future migrations go here:
-    // if stored < 10 && target >= 10 { ... }
+    // if stored < 11 && target >= 11 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
@@ -454,6 +468,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
         CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+        -- Phase 2's work list: only the chunks without an embedding, by id.
+        CREATE INDEX IF NOT EXISTS idx_chunks_pending ON chunks(id) WHERE embedding IS NULL;
         CREATE INDEX IF NOT EXISTS idx_deps_source ON dependencies(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_deps_target ON dependencies(target_path);
         CREATE INDEX IF NOT EXISTS idx_deps_resolved ON dependencies(resolved_path);
@@ -962,6 +978,96 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stamp, newer.to_string());
+    }
+
+    /// v9 -> v10: the partial index on pending chunks appears, and the two
+    /// phase-2 queries use it instead of scanning `chunks`.
+    #[test]
+    fn test_migrate_v9_to_v10_adds_pending_chunks_index() {
+        crate::store::init_sqlite_vec();
+        let conn = Connection::open_in_memory().unwrap();
+        // A v9 database, as `init_schema` left it before this version: only
+        // the tables and indexes the test needs.
+        conn.execute_batch(
+            "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO metadata (key, value) VALUES ('schema_version', '9');
+             CREATE TABLE files (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path TEXT NOT NULL UNIQUE,
+                 language TEXT,
+                 hash TEXT NOT NULL,
+                 last_modified INTEGER NOT NULL,
+                 indexed_at INTEGER NOT NULL
+             );
+             CREATE TABLE chunks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 file_id INTEGER NOT NULL,
+                 content TEXT NOT NULL,
+                 start_line INTEGER NOT NULL,
+                 end_line INTEGER NOT NULL,
+                 symbols_json TEXT,
+                 embedding BLOB,
+                 FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+             );
+             CREATE INDEX idx_chunks_file_id ON chunks(file_id);
+             INSERT INTO files (path, language, hash, last_modified, indexed_at)
+                 VALUES ('a.rs', 'rust', 'h', 0, 0);
+             INSERT INTO chunks (file_id, content, start_line, end_line, embedding)
+                 VALUES (1, 'done', 1, 1, X'00000000'), (1, 'pending', 2, 2, NULL);",
+        )
+        .unwrap();
+
+        migrate_schema_to(&conn, 10).unwrap();
+
+        let indexes = |table: &str| -> Vec<String> {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1")
+                .unwrap();
+            stmt.query_map([table], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert!(indexes("chunks").contains(&"idx_chunks_pending".to_string()));
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "10");
+
+        // The queries of phase 2 go through the partial index.
+        let plan = |sql: &str| -> String {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        let pending_plan = plan(
+            "SELECT id, file_id, content FROM chunks
+             WHERE id > 0 AND embedding IS NULL ORDER BY id LIMIT 10",
+        );
+        assert!(
+            pending_plan.contains("idx_chunks_pending"),
+            "pending chunks plan: {pending_plan}"
+        );
+        let count_plan = plan("SELECT COUNT(*) FROM chunks WHERE embedding IS NULL");
+        assert!(
+            count_plan.contains("idx_chunks_pending"),
+            "pending count plan: {count_plan}"
+        );
+        let pending: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 1);
     }
 
     #[test]
