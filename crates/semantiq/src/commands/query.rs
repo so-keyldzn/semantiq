@@ -352,7 +352,7 @@ fn open_engine_with_store(
 /// once opened ([`recorded_project_root`]). Defaulting it to a directory
 /// (the database's parent, as before) made the refresh walk a directory
 /// holding none of the indexed files and prune them all (#32).
-fn locate_index(index: &IndexArgs) -> Result<(PathBuf, Option<PathBuf>)> {
+pub(super) fn locate_index(index: &IndexArgs) -> Result<(PathBuf, Option<PathBuf>)> {
     let cwd = std::env::current_dir()?;
     let (db_path, root) = match (&index.database, &index.project) {
         (Some(db), project) => (cwd.join(db), project.as_ref().map(|p| cwd.join(p))),

@@ -1,21 +1,20 @@
 //! Show index statistics
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use semantiq_index::IndexStore;
 use std::path::PathBuf;
 
-use super::common::resolve_db_path;
+use super::query::{IndexArgs, locate_index};
 
 pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let db_path = resolve_db_path(database, &cwd);
-
-    if !db_path.exists() {
-        anyhow::bail!(
-            "Database not found: {:?}. Run 'semantiq index' first.",
-            db_path
-        );
-    }
+    // Same lookup as the query commands (`--database`, else `.semantiq.db` in
+    // the current directory or a parent): from a subdirectory of an indexed
+    // project, `stats` must find the index `refs` would use rather than
+    // suggest a second, nested one.
+    let (db_path, _root) = locate_index(&IndexArgs {
+        database,
+        ..IndexArgs::default()
+    })?;
 
     let store = IndexStore::open(&db_path)?;
     let stats = store.get_stats()?;
@@ -30,6 +29,9 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     println!("  Symbols: {}", stats.symbol_count);
     println!("  Chunks: {}", stats.chunk_count);
     println!("  Dependencies: {}", stats.dependency_count);
+    println!("  References: {}", stats.ref_count);
+    println!("  Call edges: {}", stats.call_edge_count);
+    println!("  Type relations: {}", stats.type_relation_count);
 
     println!();
     println!("Embeddings:");

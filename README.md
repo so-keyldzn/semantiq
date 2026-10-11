@@ -292,7 +292,9 @@ Options:
 
 ### `semantiq stats`
 
-Display index statistics.
+Display index statistics. The index is found like the query commands find
+it: `.semantiq.db` in the current directory or the nearest parent that has
+one, or `--database`.
 
 ```bash
 semantiq stats
@@ -304,11 +306,21 @@ Output:
 Semantiq Index Statistics
 ========================
 Database: /path/to/.semantiq.db
-Files indexed: 26
-Symbols: 313
-Chunks: 85
-Dependencies: 142
+
+Index:
+  Files indexed: 26
+  Symbols: 313
+  Chunks: 85
+  Dependencies: 142
+  References: 4870
+  Call edges: 1210
+  Type relations: 38
 ```
+
+`References`, `Call edges` and `Type relations` are the tables behind
+`refs` / `impact` / `dead-code`, `calls` and `hierarchy`; `GET /stats`
+reports them as `indexed_refs`, `indexed_call_edges` and
+`indexed_type_relations`.
 
 ## MCP Tools
 

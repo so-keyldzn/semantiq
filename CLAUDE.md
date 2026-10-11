@@ -61,7 +61,7 @@ cargo run -- update --check                  # Only report whether an update is 
 
 Semantiq is a Rust workspace providing semantic code understanding for AI coding assistants via MCP (Model Context Protocol).
 
-Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
+Query commands (`commands/query.rs`) locate `.semantiq.db` in the cwd or a parent (`locate_index`, also used by `stats`; exit 1 + hint if missing/empty), refresh changed files via `AutoIndexer::initial_index` only when a cheap hash walk finds a difference (`--no-refresh` skips it), and call the same `*_output()` builders as the MCP handlers (`semantiq-mcp/src/server/outputs.rs`). Only `search` loads the embedding model; the others use `RetrievalEngine::without_embeddings`. The Agent Skill lives in `skills/semantiq/` and is embedded by `init` via `include_str!` (the Dockerfile copies `skills/`).
 
 ### Crate Structure
 

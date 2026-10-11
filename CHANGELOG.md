@@ -16,6 +16,12 @@ All notable changes to Semantiq will be documented in this file.
   `Security` workflow is green again; its remaining ignores are the three
   unmaintained-only advisories without a fixed release (#39).
 
+### Added
+- `semantiq stats` reports the structure tables: `References`, `Call edges`
+  and `Type relations` (the data behind `refs` / `impact` / `dead-code`,
+  `calls` and `hierarchy`); `GET /stats` gains `indexed_refs`,
+  `indexed_call_edges` and `indexed_type_relations` (#50).
+
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead
   of calls: `refs foo` shows the definition line, `calls foo` no longer lists
@@ -94,6 +100,10 @@ All notable changes to Semantiq will be documented in this file.
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
 - `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
+- `semantiq stats` finds the index the way the query commands do:
+  `.semantiq.db` in the current directory or a parent, or `--database`. From
+  a subdirectory of an indexed project it no longer fails with a hint that
+  would create a second, nested index (#50).
 - `semantiq map --json | head -5` (any query command, `--json` or markdown)
   ends quietly with exit code 0 when the reader closes the pipe early,
   instead of panicking with `Broken pipe` and exit code 101 (#49).
