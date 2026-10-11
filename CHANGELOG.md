@@ -14,11 +14,13 @@ All notable changes to Semantiq will be documented in this file.
   are `call` references: `calls compute --direction callers` finds functions
   exercised only through macros, and `impact` follows them beyond depth 1 (#60).
 - Functions named only in attribute strings (`#[serde(default = "f")]`,
-  `deserialize_with`, `with`, `skip_serializing_if`, Python decorator and
-  Java / Kotlin / C# annotation arguments) get a `reference` occurrence, so
-  `dead-code` no longer reports serde helpers with high confidence. Only
-  identifier-shaped strings inside attribute arguments count: strings elsewhere
-  still never match (#64).
+  `deserialize_with`, `with`, `skip_serializing_if`, `validate(custom = ...)`,
+  Python decorator and Java / Kotlin / C# annotation arguments) get a
+  `reference` occurrence, so `dead-code` no longer reports serde helpers with
+  high confidence. Only identifier-shaped values of function-path keys count in
+  Rust (`#[cfg(feature = "x")]`, `#[serde(rename = "x")]` reference nothing),
+  attributes naming JSON properties, columns, routes or warnings are skipped
+  elsewhere, and strings outside attributes still never match (#64).
 - Doc comments are attached to exported TypeScript / JavaScript symbols
   (`/** Doc */ export function f()`, `export default class`, `declare`),
   to decorated Python functions (comment above the decorator) and to Rust items

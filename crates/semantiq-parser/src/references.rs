@@ -148,11 +148,91 @@ fn attribute_kind(language: Language) -> Option<&'static str> {
     }
 }
 
+/// Rust : clés d'attribut dont la valeur est un chemin de fonction
+/// (`#[serde(default = "f")]`, `deserialize_with`, `validate(custom = "g")`,
+/// `schemars(schema_with = "h")`, `getset(getter = "i")`). Toute autre clé
+/// (`rename`, `feature`, `target_os`, `tag`…) nomme une chaîne, pas un symbole.
+const RUST_FUNCTION_PATH_KEYS: [&str; 9] = [
+    "default",
+    "with",
+    "serialize_with",
+    "deserialize_with",
+    "skip_serializing_if",
+    "custom",
+    "function",
+    "schema_with",
+    "getter",
+];
+
+/// Décorateurs / annotations dont les chaînes ne nomment jamais un symbole du
+/// projet : noms de colonnes, de propriétés JSON, de routes, d'avertissements.
+const NON_SYMBOL_ATTRIBUTES: [&str; 26] = [
+    "Suppress",
+    "SuppressWarnings",
+    "SuppressMessage",
+    "JsonProperty",
+    "JsonPropertyName",
+    "JsonAlias",
+    "SerializedName",
+    "Column",
+    "JoinColumn",
+    "Table",
+    "Entity",
+    "RequestMapping",
+    "GetMapping",
+    "PostMapping",
+    "PutMapping",
+    "PatchMapping",
+    "DeleteMapping",
+    "RequestParam",
+    "PathVariable",
+    "Route",
+    "HttpGet",
+    "HttpPost",
+    "Obsolete",
+    "Display",
+    "DisplayName",
+    "parametrize",
+];
+
+/// Nom nu d'un attribut : `@pytest.mark.parametrize(...)` → `parametrize`,
+/// `[JsonProperty("x")]` → `JsonProperty`, `@Suppress("X")` → `Suppress`.
+fn attribute_name<'a>(attribute: Node, source: &'a str) -> Option<&'a str> {
+    let text = attribute.utf8_text(source.as_bytes()).ok()?;
+    let head = text.split('(').next()?.trim();
+    head.rsplit(['.', '@', '[', ' ']).next().map(str::trim)
+}
+
+/// Rust : la chaîne est-elle la valeur d'une clé `key = "..."` de
+/// [`RUST_FUNCTION_PATH_KEYS`] ? Dans le `token_tree`, les frères précédents
+/// du `string_literal` sont `=` puis le jeton de la clé (un `identifier`, ou
+/// un mot-clé comme `default` dont le kind est le texte lui-même).
+fn is_rust_function_path_value(string_literal: Node, source: &str) -> bool {
+    let Some(eq) = string_literal.prev_sibling() else {
+        return false;
+    };
+    if eq.kind() != "=" {
+        return false;
+    }
+    eq.prev_sibling().is_some_and(|key| {
+        key.kind() != "token_tree"
+            && key
+                .utf8_text(source.as_bytes())
+                .is_ok_and(|k| RUST_FUNCTION_PATH_KEYS.contains(&k))
+    })
+}
+
 /// Le contenu d'une chaîne littérale située dans les arguments d'un attribut,
 /// s'il a la forme d'un identifiant ou d'un chemin (`default_true`,
 /// `Default::default`, `my_mod::serialize`) : la fonction qu'il nomme est
 /// utilisée par la macro ou le framework, donc référencée. Retourne le dernier
-/// segment du chemin. `#[doc = "..."]` est un commentaire, pas un argument.
+/// segment du chemin.
+///
+/// Périmètre volontairement étroit, pour ne pas inventer d'usages dans
+/// `find_refs` / `impact` / repo map : en Rust seules les valeurs des clés de
+/// [`RUST_FUNCTION_PATH_KEYS`] comptent (`#[cfg(feature = "x")]` et
+/// `#[serde(rename = "x")]` ne référencent rien) ; pour les décorateurs et
+/// annotations, les attributs de [`NON_SYMBOL_ATTRIBUTES`] sont ignorés.
 fn attribute_string_name<'a>(node: Node, source: &'a str, language: Language) -> Option<&'a str> {
     // Rust / Python / Kotlin `string_content`, Java `string_fragment`,
     // C# (tree-sitter-c-sharp 0.23) `string_literal_content`.
@@ -170,8 +250,12 @@ fn attribute_string_name<'a>(node: Node, source: &'a str, language: Language) ->
             break;
         };
         if n.kind() == wanted {
-            // Rust : `#[doc = "..."]` porte un champ `value`, pas `arguments`.
-            if language == Language::Rust && n.child_by_field_name("arguments").is_none() {
+            if language == Language::Rust {
+                if !is_rust_function_path_value(node.parent()?, source) {
+                    return None;
+                }
+            } else if attribute_name(n, source).is_some_and(|a| NON_SYMBOL_ATTRIBUTES.contains(&a))
+            {
                 return None;
             }
             found = true;
@@ -675,63 +759,81 @@ mod tests {
     fn test_rust_attribute_strings_reference_functions() {
         let r = refs(
             Language::Rust,
-            "fn default_true() -> bool { true }\n#[derive(serde::Deserialize)]\npub struct Cfg {\n    #[serde(default = \"default_true\", skip_serializing_if = \"is_false\")]\n    pub on: bool,\n    #[serde(with = \"my_mod::as_str\", rename = \"not an identifier\")]\n    pub w: u8,\n}\n#[doc = \"hidden\"]\nfn g() { let s = \"default_true\"; }\n",
+            "fn default_true() -> bool { true }\n#[derive(serde::Deserialize)]\n#[serde(rename_all = \"camelCase\", tag = \"kind\")]\npub struct Cfg {\n    #[serde(default = \"default_true\", skip_serializing_if = \"is_false\")]\n    pub on: bool,\n    #[serde(with = \"my_mod::as_str\", rename = \"wire_name\")]\n    pub w: u8,\n}\n#[doc = \"hidden\"]\n#[cfg(feature = \"onnx\")]\n#[validate(custom(function = \"check\"))]\nfn g() { let s = \"default_true\"; }\n",
         );
         assert_eq!(
             kinds_of(&r, "default_true"),
             vec![
                 (1, ReferenceKind::Definition),
-                (4, ReferenceKind::Reference)
+                (5, ReferenceKind::Reference)
             ]
         );
         assert_eq!(
             kinds_of(&r, "is_false"),
-            vec![(4, ReferenceKind::Reference)]
+            vec![(5, ReferenceKind::Reference)]
         );
-        assert_eq!(kinds_of(&r, "as_str"), vec![(6, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "as_str"), vec![(7, ReferenceKind::Reference)]);
+        assert_eq!(kinds_of(&r, "check"), vec![(12, ReferenceKind::Reference)]);
         assert!(kinds_of(&r, "my_mod::as_str").is_empty());
-        assert!(kinds_of(&r, "not an identifier").is_empty());
-        assert!(kinds_of(&r, "hidden").is_empty());
+        // Keys that name strings, not symbols.
+        for name in ["camelCase", "kind", "wire_name", "hidden", "onnx"] {
+            assert!(kinds_of(&r, name).is_empty(), "{name} referenced");
+        }
+    }
+
+    #[test]
+    fn test_rust_attribute_scope_pins() {
+        let r = refs(
+            Language::Rust,
+            "#[cfg(feature = \"xx\")]\nfn a() {}\n#[serde(rename = \"xx\")]\nfn b() {}\n#[serde(default = \"ff\")]\nfn c() {}\n",
+        );
+        assert!(kinds_of(&r, "xx").is_empty());
+        assert_eq!(kinds_of(&r, "ff"), vec![(5, ReferenceKind::Reference)]);
     }
 
     #[test]
     fn test_decorator_and_annotation_strings_reference_names() {
         let py = refs(
             Language::Python,
-            "@pytest.fixture(name=\"session_db\")\ndef db(): pass\n@app.route(\"/users\")\ndef users(): return \"session_db\"\n",
+            "@pytest.fixture(name=\"session_db\")\ndef db(): pass\n@app.route(\"/users\")\ndef users(): return \"session_db\"\n@pytest.mark.parametrize(\"value\", [1])\ndef t(value): pass\n",
         );
         assert_eq!(
             kinds_of(&py, "session_db"),
             vec![(1, ReferenceKind::Reference)]
         );
         assert!(kinds_of(&py, "/users").is_empty());
+        // `parametrize` names a parameter: only the parameter itself counts.
+        assert_eq!(kinds_of(&py, "value"), vec![(6, ReferenceKind::Reference)]);
 
         let java = refs(
             Language::Java,
-            "class C {\n  @DependsOn(\"initCache\")\n  void run() { String s = \"initCache\"; }\n}",
+            "class C {\n  @DependsOn(\"initCache\")\n  @JsonProperty(\"user_id\")\n  void run() { String s = \"initCache\"; }\n}",
         );
         assert_eq!(
             kinds_of(&java, "initCache"),
             vec![(2, ReferenceKind::Reference)]
         );
+        assert!(kinds_of(&java, "user_id").is_empty());
 
         let csharp = refs(
             Language::CSharp,
-            "class C {\n  [DependsOn(\"initCache\")]\n  void Run() { var s = \"initCache\"; }\n}",
+            "class C {\n  [DependsOn(\"initCache\")]\n  [JsonPropertyName(\"user_id\")]\n  void Run() { var s = \"initCache\"; }\n}",
         );
         assert_eq!(
             kinds_of(&csharp, "initCache"),
             vec![(2, ReferenceKind::Reference)]
         );
+        assert!(kinds_of(&csharp, "user_id").is_empty());
 
         let kotlin = refs(
             Language::Kotlin,
-            "class C {\n  @Named(\"initCache\")\n  fun run() { val s = \"initCache\" }\n}",
+            "class C {\n  @Named(\"initCache\")\n  @Suppress(\"UNCHECKED_CAST\")\n  fun run() { val s = \"initCache\" }\n}",
         );
         assert_eq!(
             kinds_of(&kotlin, "initCache"),
             vec![(2, ReferenceKind::Reference)]
         );
+        assert!(kinds_of(&kotlin, "UNCHECKED_CAST").is_empty());
     }
 
     #[test]
