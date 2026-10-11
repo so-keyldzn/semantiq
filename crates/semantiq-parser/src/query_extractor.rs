@@ -589,22 +589,40 @@ const DOC_TRANSPARENT_SIBLINGS: [&str; 1] = ["attribute_item"];
 
 /// Extrait les doc comments précédant le nœud.
 ///
-/// Le point de départ est l'enveloppe la plus externe du nœud parmi
-/// [`DECLARATION_WRAPPERS`] (sinon le nœud lui-même) ; les attributs Rust
-/// intercalés sont traversés. On remonte ensuite les frères-commentaires
+/// Les frères-commentaires du nœud lui-même sont lus d'abord (un commentaire
+/// entre un décorateur Python et son `def`), puis, à défaut, ceux de
+/// l'enveloppe la plus externe du nœud parmi [`DECLARATION_WRAPPERS`]
+/// (`/** doc */ export function f()`, `# doc\n@route def f()`) ; les
+/// attributs Rust intercalés sont traversés. On remonte les commentaires
 /// contigus. Une ligne vide entre deux commentaires (écart de `row` > 1) rompt
 /// l'agrégation : ça évite d'absorber un en-tête de licence séparé du doc du
 /// symbole par une ligne blanche, p.ex. `// Copyright …\n\n/// Doc du
 /// symbole\nfn foo() {}` ne doit pas coller la licence au doc.
 pub(crate) fn doc_comment_of(node: &Node, source: &str) -> Option<String> {
-    let source_bytes = source.as_bytes();
-    let mut start = *node;
-    while let Some(parent) = start.parent() {
-        if !DECLARATION_WRAPPERS.contains(&parent.kind()) {
-            break;
+    let mut comments = comments_above(*node, source);
+    if comments.is_empty() {
+        let mut wrapper = *node;
+        while let Some(parent) = wrapper.parent() {
+            if !DECLARATION_WRAPPERS.contains(&parent.kind()) {
+                break;
+            }
+            wrapper = parent;
         }
-        start = parent;
+        if wrapper != *node {
+            comments = comments_above(wrapper, source);
+        }
     }
+    if comments.is_empty() {
+        None
+    } else {
+        Some(comments.join("\n"))
+    }
+}
+
+/// Bloc de commentaires contigus juste au-dessus de `start`, dans l'ordre du
+/// source (vide s'il n'y en a pas).
+fn comments_above(start: Node, source: &str) -> Vec<String> {
+    let source_bytes = source.as_bytes();
     let mut prev = start.prev_sibling();
     let mut comments = Vec::new();
     // Ligne de début du dernier commentaire accepté. Sert à mesurer l'écart
@@ -644,12 +662,8 @@ pub(crate) fn doc_comment_of(node: &Node, source: &str) -> Option<String> {
         }
     }
 
-    if comments.is_empty() {
-        None
-    } else {
-        comments.reverse();
-        Some(comments.join("\n"))
-    }
+    comments.reverse();
+    comments
 }
 
 /// Représentation intermédiaire d'un symbole extrait par query.
@@ -923,6 +937,17 @@ const MAX_SIZE: usize = 100;
             )
             .as_deref(),
             Some("# Handles the route")
+        );
+        // A comment between the decorator and the `def` wins over the one
+        // above the decorator.
+        assert_eq!(
+            doc_of(
+                Language::Python,
+                "# Above\n@app.route('/')\n# Between\ndef index():\n    pass\n",
+                "index"
+            )
+            .as_deref(),
+            Some("# Between")
         );
         assert_eq!(
             doc_of(
