@@ -65,11 +65,16 @@ impl RetrievalEngine {
                 .store
                 .get_file_by_path(&self.get_file_path(symbol.file_id)?)?
             {
-                let content = self.read_file_lines(
-                    &file.path,
-                    symbol.start_line as usize,
-                    symbol.end_line as usize,
-                )?;
+                // A definition whose file is gone (renamed before the watcher
+                // caught up, `--no-refresh`) keeps its index data; only its
+                // snippet is missing.
+                let content = self
+                    .read_file_lines(
+                        &file.path,
+                        symbol.start_line as usize,
+                        symbol.end_line as usize,
+                    )
+                    .unwrap_or_default();
 
                 definition_spans.push((file.path.clone(), symbol.start_line, symbol.end_line));
                 results.push(

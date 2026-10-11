@@ -180,7 +180,13 @@ impl RetrievalEngine {
 
         let mut sites = Vec::new();
         let mut truncated = false;
-        let mut visited: HashSet<(String, i64)> = HashSet::new();
+        // The analysed symbol is visited from the start: through mutual
+        // recursion (`a` calls `b`, `b` calls `a`) it would otherwise be
+        // enqueued again at depth 2 and its depth-1 sites reported twice.
+        let mut visited: HashSet<(String, i64)> = root_files
+            .iter()
+            .map(|(file_id, _)| (symbol_name.to_string(), *file_id))
+            .collect();
         let callable = !definitions.is_empty() && definitions.iter().all(|d| is_callable(&d.kind));
         let mut queue = VecDeque::from([Node {
             name: symbol_name.to_string(),

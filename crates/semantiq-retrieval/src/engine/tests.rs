@@ -487,6 +487,58 @@ fn test_impact_does_not_propagate_through_homonyms() {
 }
 
 #[test]
+fn test_impact_mutual_recursion_reports_each_site_once() {
+    // Regression for #46: the analysed symbol was never marked visited, so
+    // `ping` <-> `pong` re-walked every reference to `ping` at depth 3 and reported
+    // the depth-1 sites again.
+    let (engine, _root) = index_rust_project(&[
+        (
+            "lib.rs",
+            "pub fn ping(n: u32) { if n > 0 { pong(n - 1); } }\npub fn pong(n: u32) { if n > 0 { ping(n - 1); } }\n",
+        ),
+        ("main.rs", "fn main() { ping(3); }\n"),
+    ]);
+
+    let analysis = engine.analyze_impact("ping", None, 3, 100).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![
+            (1, "lib.rs", 2, "same_file"),
+            (1, "main.rs", 1, "unique_name"),
+            (2, "lib.rs", 1, "same_file"),
+        ],
+        "{:?}",
+        analysis.sites
+    );
+    assert!(!analysis.truncated);
+
+    // With a cap of 3 the duplicates used to set `truncated`.
+    let capped = engine.analyze_impact("ping", None, 3, 3).unwrap();
+    assert_eq!(capped.sites.len(), 3);
+    assert!(!capped.truncated);
+}
+
+#[test]
+fn test_find_references_tolerates_a_missing_definition_file() {
+    let (engine, root) = index_rust_project(&[
+        ("lib.rs", "pub fn compute() -> u32 { 1 }\n"),
+        ("main.rs", "fn main() { compute(); }\n"),
+    ]);
+    std::fs::remove_file(root.path().join("lib.rs")).unwrap();
+
+    let results = engine.find_references("compute", 50).unwrap();
+    let hits: Vec<_> = results
+        .results
+        .iter()
+        .map(|r| (r.file_path.as_str(), r.content.as_str()))
+        .collect();
+    assert_eq!(
+        hits,
+        vec![("lib.rs", ""), ("main.rs", "fn main() { compute(); }")]
+    );
+}
+
+#[test]
 fn test_impact_respects_depth_and_site_limits() {
     let (engine, _root) = index_rust_project(&[(
         "lib.rs",

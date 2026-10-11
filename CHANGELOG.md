@@ -107,6 +107,12 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- `impact`: the analysed symbol counts as visited from the start, so mutual
+  recursion (`a` calls `b`, `b` calls `a`) no longer reports the depth-1
+  sites again at depth 3, eating the site budget. `find_refs` no longer
+  fails when a definition's file cannot be read (renamed before the watcher
+  caught up, `--no-refresh`): the definition is listed with an empty
+  snippet (#46).
 - Search ranking: each strategy's scores are only weighted (symbol 1.0,
   semantic 0.95, text 0.75), no longer min-max normalized per strategy. The
   weakest symbol hit of a query (`parse_configuration` for `parse_config`)
