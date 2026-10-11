@@ -7,11 +7,7 @@ use semantiq_parser::query_extractor::QuerySymbolExtractor;
 use semantiq_parser::symbols::SymbolKind;
 
 fn run(lang: Language, src: &str) -> Vec<(String, SymbolKind, Option<String>)> {
-    run_with(
-        lang.grammar_for_path(std::path::Path::new("sample")),
-        lang,
-        src,
-    )
+    run_with(Grammar::Language(lang), lang, src)
 }
 
 fn run_with(
