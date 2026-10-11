@@ -616,18 +616,26 @@ pub(crate) fn doc_comment_of(node: &Node, source: &str) -> Option<String> {
 
     while let Some(sibling) = prev {
         if sibling.kind().contains("comment") {
+            // tree-sitter-rust includes the newline in `line_comment`, so
+            // `end_position().row` would be the next row: measure the end on
+            // the trimmed text instead.
+            let comment = sibling.utf8_text(source_bytes).ok().map(str::trim_end);
+            let start_row = sibling.start_position().row;
+            let end_row = start_row
+                + comment
+                    .map(|c| c.lines().count().saturating_sub(1))
+                    .unwrap_or(0);
             if let Some(last) = last_start_row {
                 // Écart de plus d'une ligne entre ce commentaire (au-dessus)
                 // et le bloc déjà agrégé : ligne vide intercalée → on coupe.
-                if sibling.end_position().row + 1 < last {
+                if end_row + 1 < last {
                     break;
                 }
             }
-            if let Ok(comment) = sibling.utf8_text(source_bytes) {
-                // tree-sitter-rust includes the newline in `line_comment`.
-                comments.push(comment.trim_end().to_string());
+            if let Some(comment) = comment {
+                comments.push(comment.to_string());
             }
-            last_start_row = Some(sibling.start_position().row);
+            last_start_row = Some(start_row);
             prev = sibling.prev_sibling();
         } else if comments.is_empty() && DOC_TRANSPARENT_SIBLINGS.contains(&sibling.kind()) {
             prev = sibling.prev_sibling();
@@ -930,6 +938,18 @@ const MAX_SIZE: usize = 100;
             doc_of(Language::Rust, "fn a() {}\n#[inline]\nfn b() {}\n", "b"),
             None
         );
+    }
+
+    #[test]
+    fn test_query_doc_comment_blank_line_between_rust_doc_blocks() {
+        // `line_comment` spans to the next row in tree-sitter-rust: the gap
+        // must be measured on the trimmed text or the blank line is invisible.
+        let symbols = extract_via_query(Language::Rust, "/// A\n\n/// B\nfn f() {}\n");
+        let f = symbols.iter().find(|s| s.name == "f").unwrap();
+        assert_eq!(f.doc_comment.as_deref(), Some("/// B"));
+        let symbols = extract_via_query(Language::Rust, "/// A\n/// B\nfn g() {}\n");
+        let g = symbols.iter().find(|s| s.name == "g").unwrap();
+        assert_eq!(g.doc_comment.as_deref(), Some("/// A\n/// B"));
     }
 
     #[test]
