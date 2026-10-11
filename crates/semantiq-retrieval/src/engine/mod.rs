@@ -143,6 +143,17 @@ impl RetrievalEngine {
             ),
             Err(e) => warn!("could not count orphan chunk vectors: {e}"),
         }
+        // The opposite direction: chunks marked embedded without a vector are
+        // skipped by phase 2 and absent from semantic search.
+        match store.count_chunks_missing_vectors() {
+            Ok(0) => {}
+            Ok(n) => warn!(
+                chunks_missing_vectors = n,
+                "chunks have an embedding but no chunks_vec row; they are missing from \
+                 semantic search. Run `semantiq index --force` to repair."
+            ),
+            Err(e) => warn!("could not count chunks missing vectors: {e}"),
+        }
 
         // Create distance collector if enabled, initialized with existing count
         let distance_collector = if enable_collection {
