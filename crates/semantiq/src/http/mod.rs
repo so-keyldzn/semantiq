@@ -4,6 +4,7 @@
 //! demo) and the MCP Streamable HTTP transport at `/mcp`, so remote MCP
 //! clients can connect without spawning a stdio process.
 
+mod host;
 mod routes;
 #[cfg(test)]
 mod tests;
@@ -11,9 +12,12 @@ mod types;
 
 pub(crate) use routes::create_router;
 
+use host::require_loopback_host;
+
 use anyhow::Result;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -39,8 +43,9 @@ pub(crate) async fn serve_http(
     cors_origin: Option<String>,
 ) -> Result<()> {
     // The MCP transport validates the `Host` header against loopback names to
-    // block DNS rebinding. When the user explicitly binds beyond loopback, the
-    // Host will be this machine's address, so the check has to go.
+    // block DNS rebinding; `require_loopback_host` below does the same for the
+    // REST endpoints. When the user explicitly binds beyond loopback, the Host
+    // will be this machine's address, so both checks have to go.
     let mut mcp_config = StreamableHttpServerConfig::default();
     if !host.is_loopback() {
         mcp_config = mcp_config.disable_allowed_hosts();
@@ -77,12 +82,15 @@ pub(crate) async fn serve_http(
         CorsLayer::new()
     };
 
-    let app: Router = create_router(server)
+    let mut app: Router = create_router(server)
         .nest_service("/mcp", mcp_service)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
+    if host.is_loopback() {
+        app = app.layer(middleware::from_fn(require_loopback_host));
+    }
 
     // The API has no authentication, so binding beyond loopback exposes the
     // indexed source code to anyone who can reach this host.
