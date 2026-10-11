@@ -183,6 +183,10 @@ All notable changes to Semantiq will be documented in this file.
 - Python `import numpy as np` and `import os, sys` yield one import per module,
   with the alias as its name; `from . import a, b` yields one import per name
   with path `.` (#57).
+- TS/JS barrel files (#58): `export * from './x'`, `export { a } from './x'`
+  and `require('./x')` are imports (`deps`, repo map edges), and a re-exported
+  name is an import (or a plain reference for `export { a }`), no longer a
+  definition site in `refs`, `explain`, `impact` and `dead-code`.
 
 ## [0.11.0] - 2026-10-07
 

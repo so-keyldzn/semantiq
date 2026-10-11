@@ -425,12 +425,16 @@ fn is_field(parent: Node, child: Node, field: &str) -> bool {
 /// Le nœud est-il le nom déclaré par une définition (`fn foo`, `class Foo`…) ?
 ///
 /// Le champ `name` existe aussi hors définitions (`Foo::new`, `obj.meth()` en
-/// Java), d'où le filtre sur le type du parent.
+/// Java), d'où le filtre sur le type du parent. Un `export_specifier`
+/// (`export { foo }`) réexporte un nom sans le définir.
 fn is_definition_name(node: Node) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
     let kind = parent.kind();
+    if kind == "export_specifier" {
+        return false;
+    }
 
     // C/C++ : `int foo(...)` → function_declarator(declarator: identifier)
     if kind == "function_declarator" {
@@ -466,6 +470,8 @@ fn in_import(node: Node) -> bool {
                     | "namespace_use_declaration"
                     | "preproc_include"
             )
+            // `export { a } from './a'` : réexport d'un nom importé.
+            || (kind == "export_statement" && n.child_by_field_name("source").is_some())
         {
             return true;
         }

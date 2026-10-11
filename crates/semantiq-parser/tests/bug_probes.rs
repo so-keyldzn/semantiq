@@ -510,4 +510,53 @@ public:
             ]
         );
     }
+
+    // B14 (#58): barrel files. Re-exports and `require()` are imports; a
+    // re-exported name is not a definition (it is an import when it has a
+    // source, a plain reference for `export { qux }`).
+    #[test]
+    fn b14_ts_barrel_reexports() {
+        let e = extract_file(
+            "src/index.ts",
+            "export { greet, Foo as Bar } from './foo';\nexport * from './bar';\nexport { qux };\nconst { helper } = require('./util');\n",
+        );
+        assert_eq!(
+            e.imports
+                .iter()
+                .map(|(p, _, k)| (p.as_str(), *k))
+                .collect::<Vec<_>>(),
+            vec![
+                ("./foo", ImportKind::Local),
+                ("./bar", ImportKind::Local),
+                ("./util", ImportKind::Local),
+            ]
+        );
+        assert!(
+            !e.symbols.iter().any(|s| s.kind != SymbolKind::Import
+                && matches!(s.name.as_str(), "greet" | "Foo" | "Bar" | "qux")),
+            "re-exported names are not symbol definitions: {:?}",
+            e.symbols
+        );
+        for (name, kind) in [
+            ("greet", ReferenceKind::Import),
+            ("Foo", ReferenceKind::Import),
+            ("Bar", ReferenceKind::Import),
+        ] {
+            assert_eq!(
+                reference(&e.refs, name, 1).map(|r| r.kind),
+                Some(kind),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            reference(&e.refs, "qux", 3).map(|r| r.kind),
+            Some(ReferenceKind::Reference)
+        );
+        assert!(
+            !e.refs.iter().any(|r| r.kind == ReferenceKind::Definition
+                && matches!(r.name.as_str(), "greet" | "Foo" | "Bar" | "qux")),
+            "{:?}",
+            e.refs
+        );
+    }
 }

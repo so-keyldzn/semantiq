@@ -363,42 +363,59 @@ impl ImportExtractor {
         }
     }
 
+    /// `import ... from 'x'`, the re-exports of barrel files (`export * from
+    /// 'x'`, `export { a } from 'x'`: an `export_statement` with a `source`)
+    /// and CommonJS `require('x')` calls. `.`-prefixed paths are `Local`.
     fn extract_ts_import(node: &Node, source: &str) -> Option<Import> {
-        if node.kind() != "import_statement" {
+        let module = match node.kind() {
+            "import_statement" => Self::ts_module_string(node),
+            "export_statement" => node.child_by_field_name("source"),
+            "call_expression" => Self::require_argument(node, source),
+            _ => None,
+        }?;
+        let path_text = module.utf8_text(source.as_bytes()).ok()?;
+        let path = path_text
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
+
+        let kind = if path.starts_with('.') {
+            ImportKind::Local
+        } else {
+            ImportKind::External
+        };
+
+        let name = path.split('/').next_back().map(String::from);
+
+        Some(Import {
+            path,
+            name,
+            kind,
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+        })
+    }
+
+    /// The `string` child of an `import_statement` (its `source` field).
+    fn ts_module_string<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).find(|c| c.kind() == "string")
+    }
+
+    /// The string argument of `require('x')`.
+    fn require_argument<'a>(node: &Node<'a>, source: &str) -> Option<Node<'a>> {
+        let function = node.child_by_field_name("function")?;
+        if function.kind() != "identifier"
+            || function.utf8_text(source.as_bytes()).ok()? != "require"
+        {
             return None;
         }
-
-        let start_line = node.start_position().row + 1;
-        let end_line = node.end_position().row + 1;
-
-        // Find the source (string) child
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "string" {
-                let path_text = child.utf8_text(source.as_bytes()).ok()?;
-                let path = path_text
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_string();
-
-                let kind = if path.starts_with('.') {
-                    ImportKind::Local
-                } else {
-                    ImportKind::External
-                };
-
-                let name = path.split('/').next_back().map(String::from);
-
-                return Some(Import {
-                    path,
-                    name,
-                    kind,
-                    start_line,
-                    end_line,
-                });
-            }
+        let arguments = node.child_by_field_name("arguments")?;
+        if arguments.named_child_count() != 1 {
+            return None;
         }
-
-        None
+        arguments
+            .named_child(0)
+            .filter(|arg| arg.kind() == "string")
     }
 
     /// One `Import` per imported module: `import a, b` and `import numpy as np`
@@ -1335,6 +1352,31 @@ use super::parent_module;
                 import("..", Some("b"), ImportKind::Local),
                 import(".mod", Some("mod"), ImportKind::Local),
                 import("collections", Some("collections"), ImportKind::Std),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ts_reexports_and_require_are_imports() {
+        let source = "export { greet, Foo as Bar } from './foo';\nexport * from './bar';\nexport * as ns from './ns';\nexport { qux };\nexport type { T } from './t';\nconst { helper } = require('./util');\nconst fs = require('fs');\nconst x = require(name);\nexport function f() {}\n";
+        assert_eq!(
+            imports(Language::TypeScript, source),
+            vec![
+                import("./foo", Some("foo"), ImportKind::Local),
+                import("./bar", Some("bar"), ImportKind::Local),
+                import("./ns", Some("ns"), ImportKind::Local),
+                import("./t", Some("t"), ImportKind::Local),
+                import("./util", Some("util"), ImportKind::Local),
+                import("fs", Some("fs"), ImportKind::External),
+            ]
+        );
+        let js = "const { helper } = require('./util');\nmodule.exports = require('./x');\nexport { a } from './a';\n";
+        assert_eq!(
+            imports(Language::JavaScript, js),
+            vec![
+                import("./util", Some("util"), ImportKind::Local),
+                import("./x", Some("x"), ImportKind::Local),
+                import("./a", Some("a"), ImportKind::Local),
             ]
         );
     }
