@@ -154,7 +154,12 @@ fn attribute_kind(language: Language) -> Option<&'static str> {
 /// utilisée par la macro ou le framework, donc référencée. Retourne le dernier
 /// segment du chemin. `#[doc = "..."]` est un commentaire, pas un argument.
 fn attribute_string_name<'a>(node: Node, source: &'a str, language: Language) -> Option<&'a str> {
-    if !matches!(node.kind(), "string_content" | "string_fragment") {
+    // Rust / Python / Kotlin `string_content`, Java `string_fragment`,
+    // C# (tree-sitter-c-sharp 0.23) `string_literal_content`.
+    if !matches!(
+        node.kind(),
+        "string_content" | "string_fragment" | "string_literal_content"
+    ) {
         return None;
     }
     let wanted = attribute_kind(language)?;
@@ -707,6 +712,24 @@ mod tests {
         );
         assert_eq!(
             kinds_of(&java, "initCache"),
+            vec![(2, ReferenceKind::Reference)]
+        );
+
+        let csharp = refs(
+            Language::CSharp,
+            "class C {\n  [DependsOn(\"initCache\")]\n  void Run() { var s = \"initCache\"; }\n}",
+        );
+        assert_eq!(
+            kinds_of(&csharp, "initCache"),
+            vec![(2, ReferenceKind::Reference)]
+        );
+
+        let kotlin = refs(
+            Language::Kotlin,
+            "class C {\n  @Named(\"initCache\")\n  fun run() { val s = \"initCache\" }\n}",
+        );
+        assert_eq!(
+            kinds_of(&kotlin, "initCache"),
             vec![(2, ReferenceKind::Reference)]
         );
     }
