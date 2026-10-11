@@ -33,6 +33,11 @@ All notable changes to Semantiq will be documented in this file.
   embedding only covered its first 512 tokens: semantic search can now hit the
   whole body, and a hit returns a window rather than a 3000-line chunk. The
   embedding carry-over on edit is per window (#62).
+- `delete_file` purges the `chunks_vec` rows and deletes the file in one
+  transaction: a crash or `SQLITE_BUSY` between the two statements can no
+  longer leave a chunk with an embedding but no vector, invisible to both
+  phase 2 and semantic search. `IndexStore::count_chunks_missing_vectors`
+  pins that direction of the invariant (#40).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by

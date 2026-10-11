@@ -96,23 +96,41 @@ impl IndexStore {
     /// Also purges the corresponding `chunks_vec` rows: sqlite-vec virtual tables
     /// don't honor FK / ON DELETE CASCADE, so without this purge old embeddings
     /// linger as orphans and pollute KNN results.
+    ///
+    /// Both statements run in one transaction. Committing the purge alone (a
+    /// crash or `SQLITE_BUSY` before the second statement) would leave chunks
+    /// whose `embedding` BLOB is set but whose vector is gone: neither pending
+    /// for phase 2 nor searchable, and carried over as "already embedded" by
+    /// `insert_chunks` for unchanged content.
     pub fn delete_file(&self, path: &str) -> Result<()> {
         self.with_conn(|conn| {
-            // Purge vec0 rows BEFORE the FK cascade fires — once `files` is
-            // deleted the dependent `chunks` rows are gone and the subquery
-            // would see nothing.
-            conn.execute(
-                "DELETE FROM chunks_vec
-                 WHERE chunk_id IN (
-                     SELECT c.id FROM chunks c
-                     JOIN files f ON f.id = c.file_id
-                     WHERE f.path = ?1
-                 )",
-                [path],
-            )?;
-
-            conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
-            Ok(())
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<()> {
+                // Purge vec0 rows BEFORE the FK cascade fires — once `files` is
+                // deleted the dependent `chunks` rows are gone and the subquery
+                // would see nothing.
+                conn.execute(
+                    "DELETE FROM chunks_vec
+                     WHERE chunk_id IN (
+                         SELECT c.id FROM chunks c
+                         JOIN files f ON f.id = c.file_id
+                         WHERE f.path = ?1
+                     )",
+                    [path],
+                )?;
+                conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", [])?;
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
         })
     }
 

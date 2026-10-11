@@ -29,6 +29,13 @@ fn make_embedding(seed: f32) -> Vec<f32> {
 fn assert_no_orphans(store: &IndexStore, ctx: &str) {
     let n = store.count_orphan_chunk_vectors().expect("count orphans");
     assert_eq!(n, 0, "{ctx}: found {n} orphan rows in chunks_vec");
+    let m = store
+        .count_chunks_missing_vectors()
+        .expect("count chunks missing vectors");
+    assert_eq!(
+        m, 0,
+        "{ctx}: found {m} embedded chunks without a chunks_vec row"
+    );
 }
 
 #[test]
@@ -209,4 +216,40 @@ fn many_reindexes_keep_invariant() {
     }
 
     assert_no_orphans(&store, "after 50 reindex cycles");
+}
+
+/// #40: `delete_file` purges `chunks_vec` and deletes the file in ONE
+/// transaction. The other files' embedded chunks keep their vectors, and no
+/// chunk is left with an `embedding` BLOB but no vector (the state a commit
+/// between the two statements would produce).
+#[test]
+fn delete_file_keeps_other_files_vectors_and_both_directions() {
+    let store = IndexStore::open_in_memory().unwrap();
+    let keep = store
+        .insert_file("keep.rs", Some("rust"), "fn k() {}", 1000)
+        .unwrap();
+    let gone = store
+        .insert_file("gone.rs", Some("rust"), "fn g() {}", 1000)
+        .unwrap();
+    for (file_id, seed) in [(keep, 1.0), (gone, 2.0)] {
+        store
+            .insert_chunks(file_id, &[make_chunk("fn x() {}", 1, 1)])
+            .unwrap();
+        for c in store.get_chunks_by_file(file_id).unwrap() {
+            store
+                .store_chunk_embeddings(&[(c.id, make_embedding(seed).as_slice())])
+                .unwrap();
+        }
+    }
+    assert_eq!(store.count_chunks_missing_vectors().unwrap(), 0);
+
+    store.delete_file("gone.rs").unwrap();
+    // Deleting a path that is not indexed is a no-op, not an error.
+    store.delete_file("never-indexed.rs").unwrap();
+
+    assert!(store.get_file_by_path("gone.rs").unwrap().is_none());
+    assert_eq!(store.get_chunks_by_file(gone).unwrap().len(), 0);
+    assert_eq!(store.get_chunks_by_file(keep).unwrap().len(), 1);
+    assert_eq!(store.embedding_counts().unwrap().embedded, 1);
+    assert_no_orphans(&store, "after delete_file of one of two files");
 }

@@ -204,6 +204,26 @@ impl IndexStore {
         })
     }
 
+    /// Count chunks whose `embedding` BLOB is set but which have no `chunks_vec`
+    /// row: the opposite direction of [`Self::count_orphan_chunk_vectors`].
+    ///
+    /// Such a chunk is invisible to both phase 2 (not pending) and to vector
+    /// search (no vector), and `insert_chunks` would carry its BLOB over as
+    /// "already embedded". Every write pairing the two tables runs in one
+    /// transaction so this count must remain 0.
+    pub fn count_chunks_missing_vectors(&self) -> Result<i64> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM chunks c
+                 LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+                 WHERE c.embedding IS NOT NULL AND v.chunk_id IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(Into::into)
+        })
+    }
+
     /// Escapes a query string for safe use with FTS5 MATCH.
     ///
     /// FTS5 has several special characters and operators that need handling:
