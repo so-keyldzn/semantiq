@@ -107,6 +107,14 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- `calls` and `impact` on a common name (`new`, `get`, `run`) are no longer
+  silently partial: the store lookups put the occurrences in the defining
+  files and in files importing them first instead of plain path order, so
+  the cap (5 × the limit) only cuts name-only homonyms; `callees` filters
+  the caller's location in SQL before the cap instead of after it; and
+  `truncated` is set whenever a lookup hit its cap. `hierarchy` flags a type
+  with more relations than `--limit` as truncated instead of cutting
+  silently (#42).
 - Text search no longer returns the whole line of a minified or generated
   file (up to 1 MB) as a hit's `content`: files whose lines average more
   than 500 characters, or that hold a NUL byte, are skipped, and a hit on a

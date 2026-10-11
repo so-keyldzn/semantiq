@@ -1261,3 +1261,79 @@ fn test_references_insert_find_count_and_cascade() {
     store.delete_file("b.rs").unwrap();
     assert!(store.find_references_by_name("bar", 10).unwrap().is_empty());
 }
+
+#[test]
+fn test_references_near_files_come_first() {
+    // Regression for #42: a capped lookup in path order cut the occurrences
+    // in the defining file when homonyms sorted before it.
+    use semantiq_parser::{Reference, ReferenceKind};
+
+    let store = IndexStore::open_in_memory().unwrap();
+    let r = |name: &str, line: usize, kind| Reference {
+        name: name.to_string(),
+        line,
+        kind,
+        count: 1,
+    };
+    for i in 0..6 {
+        let id = store
+            .insert_file(&format!("a{i}.rs"), Some("rust"), "x", 0)
+            .unwrap();
+        store
+            .insert_references(id, &[r("mid", 1, ReferenceKind::Call)])
+            .unwrap();
+    }
+    // Imports the name without a resolved path.
+    let by_name = store.insert_file("m.rs", Some("rust"), "x", 0).unwrap();
+    store
+        .insert_references(by_name, &[r("mid", 4, ReferenceKind::Call)])
+        .unwrap();
+    store
+        .insert_dependency(by_name, "crate::zz::mid", None, "local", None, (1, 1))
+        .unwrap();
+    // Imports the defining file.
+    let by_path = store.insert_file("p.rs", Some("rust"), "x", 0).unwrap();
+    store
+        .insert_references(by_path, &[r("mid", 5, ReferenceKind::Call)])
+        .unwrap();
+    store
+        .insert_dependency(by_path, "crate::zz", None, "local", Some("zz.rs"), (1, 1))
+        .unwrap();
+    // A suffix that is not the last segment does not count.
+    let suffix = store.insert_file("s.rs", Some("rust"), "x", 0).unwrap();
+    store
+        .insert_references(suffix, &[r("mid", 6, ReferenceKind::Call)])
+        .unwrap();
+    store
+        .insert_dependency(suffix, "crate::pyramid", None, "local", None, (1, 1))
+        .unwrap();
+    let z = store.insert_file("zz.rs", Some("rust"), "x", 0).unwrap();
+    store
+        .insert_references(
+            z,
+            &[
+                r("mid", 2, ReferenceKind::Definition),
+                r("mid", 3, ReferenceKind::Call),
+            ],
+        )
+        .unwrap();
+
+    let found = store.find_references_by_name_near("mid", &[z], 5).unwrap();
+    let got: Vec<_> = found
+        .iter()
+        .map(|f| (f.file_path.as_str(), f.line))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("zz.rs", 2),
+            ("zz.rs", 3),
+            ("m.rs", 4),
+            ("p.rs", 5),
+            ("a0.rs", 1)
+        ]
+    );
+    // Without near files: plain path order, the old behaviour.
+    let found = store.find_references_by_name("mid", 2).unwrap();
+    assert_eq!(found[0].file_path, "a0.rs");
+}

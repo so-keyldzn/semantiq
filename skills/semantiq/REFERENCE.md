@@ -140,7 +140,9 @@ those definitions, sorted.
 - `confidence`: `same_file` > `imports` > `unique_name` > `name_only`. Only
   sites above `name_only` propagate to the next depth; beyond depth 1, only
   `call` sites of functions/methods are followed.
-- `truncated`: the site limit (`--limit`, default 200, max 1000) was reached.
+- `truncated`: the site limit (`--limit`, default 200, max 1000) was reached,
+  or a name had more occurrences than the analysis examines (5 × the limit,
+  the ones in the defining files and in files importing them first).
 
 ## `semantiq map --json`
 
@@ -213,7 +215,9 @@ those definitions, sorted.
   above `name_only` are followed beyond depth 1.
 - `external_callees`: names the symbol calls that the index does not define
   (standard library, dependencies), sorted.
-- `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached.
+- `truncated`: the edge limit (`--limit`, default 100, max 1000) was reached,
+  or a name had more call edges than the walk examines (5 × the limit, the
+  ones from the defining files and from files importing them first).
 
 ## `semantiq hierarchy <type> --json`
 
@@ -241,7 +245,8 @@ those definitions, sorted.
   a library type (`Send`, `Exception`…), not walked further.
 - Rust: `impl Trait for Type` gives `implements`, supertraits give `extends`.
   C#: extends vs implements is a heuristic (first base, `I`-prefixed names).
-- `truncated`: the limit per direction (`--limit`, default 200) was reached.
+- `truncated`: the limit per direction (`--limit`, default 200) was reached:
+  some relations are not listed.
 
 ## `semantiq dead-code --json`
 

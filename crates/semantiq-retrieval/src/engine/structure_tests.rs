@@ -75,6 +75,86 @@ fn test_callees_and_external() {
     assert!(graph.callers.is_empty());
 }
 
+/// Six files sorting before `zz.rs`, each with a homonym `new` calling
+/// `shared`: more call edges than a `max_edges = 1` lookup examines (5).
+fn homonym_project() -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = (0..6)
+        .map(|i| {
+            (
+                format!("a{i}.rs"),
+                "fn new() {\n    shared();\n}\n".to_string(),
+            )
+        })
+        .collect();
+    files.push((
+        "zz.rs".to_string(),
+        "fn new() {\n    target();\n}\nfn target() {}\npub fn shared() {}\nfn local() {\n    shared();\n}\n"
+            .to_string(),
+    ));
+    files
+}
+
+#[test]
+fn test_callees_of_a_common_name_are_not_hidden_by_homonyms() {
+    // Regression for #42: the store capped the edges in path order before
+    // the location filter, so `callees` of `new` in zz.rs came back empty.
+    let files = homonym_project();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_project(&files);
+    let graph = engine
+        .call_graph("new", Some("zz.rs"), CallDirection::Callees, 1, 1)
+        .unwrap();
+    let callees: Vec<&str> = graph.callees.iter().map(|c| c.callee.as_str()).collect();
+    assert_eq!(callees, vec!["target"]);
+    assert!(graph.external_callees.is_empty());
+    assert!(!graph.truncated);
+}
+
+#[test]
+fn test_callers_of_a_common_name_list_trusted_ones_first_and_flag_the_cut() {
+    let files = homonym_project();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_project(&files);
+    let graph = engine
+        .call_graph("shared", None, CallDirection::Callers, 1, 1)
+        .unwrap();
+    assert_eq!(graph.callers.len(), 1);
+    assert_eq!(graph.callers[0].file_path, "zz.rs");
+    assert_eq!(graph.callers[0].caller.as_deref(), Some("local"));
+    assert_eq!(graph.callers[0].confidence, ImpactConfidence::SameFile);
+    assert!(graph.truncated);
+
+    // A budget above the number of edges: complete, not truncated.
+    let graph = engine
+        .call_graph("shared", None, CallDirection::Callers, 1, 100)
+        .unwrap();
+    assert_eq!(graph.callers.len(), 7);
+    assert!(!graph.truncated);
+}
+
+#[test]
+fn test_type_hierarchy_flags_a_cut_at_the_edge_cap() {
+    // Regression for #42: a lookup limited to `max_edges` could not tell
+    // that more relations existed, so the cut went unflagged.
+    let (engine, _root) = index_project(&[(
+        "model.py",
+        "class Base:\n    pass\n\nclass A(Base):\n    pass\n\nclass B(Base):\n    pass\n\nclass C(Base):\n    pass\n",
+    )]);
+    let h = engine.type_hierarchy("Base", 3, 2).unwrap();
+    assert_eq!(h.subtypes.len(), 2);
+    assert!(h.truncated);
+
+    let h = engine.type_hierarchy("Base", 3, 3).unwrap();
+    assert_eq!(h.subtypes.len(), 3);
+    assert!(!h.truncated);
+}
+
 #[test]
 fn test_callers_across_files_confidence() {
     let (engine, _root) = index_project(&[

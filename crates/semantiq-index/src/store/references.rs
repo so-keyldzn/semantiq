@@ -59,19 +59,34 @@ impl IndexStore {
         name: &str,
         limit: usize,
     ) -> Result<Vec<ReferenceRecord>> {
+        self.find_references_by_name_near(name, &[], limit)
+    }
+
+    /// Occurrences of an exact identifier name, the ones most likely to
+    /// target a definition in `near_files` first: occurrences in those files,
+    /// then in files importing one of them (or the name), then the rest; by
+    /// file path and line within each group. A capped lookup of a common
+    /// name thus never cuts the trusted occurrences.
+    pub fn find_references_by_name_near(
+        &self,
+        name: &str,
+        near_files: &[i64],
+        limit: usize,
+    ) -> Result<Vec<ReferenceRecord>> {
         let safe_limit = limit.min(Self::MAX_REFERENCE_LIMIT);
 
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            let (priority, params) = near_files_priority("r.file_id", name, safe_limit, near_files);
+            let mut stmt = conn.prepare(&format!(
                 "SELECT r.file_id, f.path, r.line, r.kind
                  FROM refs r
                  JOIN files f ON f.id = r.file_id
                  WHERE r.name = ?1
-                 ORDER BY f.path, r.line
-                 LIMIT ?2",
-            )?;
+                 ORDER BY {priority}, f.path, r.line
+                 LIMIT ?2"
+            ))?;
             let records = stmt
-                .query_map(params![name, safe_limit as i64], |row| {
+                .query_map(rusqlite::params_from_iter(params), |row| {
                     Ok(ReferenceRecord {
                         file_id: row.get(0)?,
                         file_path: row.get(1)?,
@@ -96,4 +111,53 @@ impl IndexStore {
             Ok(count as usize)
         })
     }
+}
+
+/// SQL expression ranking a row of `file_column` by how likely its use of
+/// `name` targets a definition in `near_files`: 0 in one of those files, 1
+/// in a file importing one of them (resolved import) or importing the name,
+/// 2 otherwise. Returns the expression and the positional parameters of the
+/// query: `?1` = `name`, `?2` = `limit`, then the file ids.
+pub(super) fn near_files_priority(
+    file_column: &str,
+    name: &str,
+    limit: usize,
+    near_files: &[i64],
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(name.to_string()), Box::new(limit as i64)];
+    if near_files.is_empty() {
+        // A bare integer in ORDER BY would be a column index.
+        return ("NULL".to_string(), params);
+    }
+    let placeholders: Vec<String> = near_files
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 3))
+        .collect();
+    params.extend(
+        near_files
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>),
+    );
+    let ids = placeholders.join(", ");
+    // `last_segment(target_path) == name`: the path ends with the name,
+    // preceded by a separator or nothing.
+    let priority = format!(
+        "CASE
+            WHEN {file_column} IN ({ids}) THEN 0
+            WHEN EXISTS (
+                SELECT 1 FROM dependencies d
+                LEFT JOIN files df ON df.path = d.resolved_path
+                WHERE d.source_file_id = {file_column}
+                  AND (df.id IN ({ids})
+                       OR d.import_name = ?1
+                       OR (substr(d.target_path, -length(?1)) = ?1
+                           AND (length(d.target_path) = length(?1)
+                                OR substr(d.target_path, -length(?1) - 1, 1)
+                                   IN (':', '.', '/', '\\'))))) THEN 1
+            ELSE 2
+         END"
+    );
+    (priority, params)
 }

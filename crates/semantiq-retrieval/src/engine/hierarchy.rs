@@ -121,15 +121,18 @@ impl RetrievalEngine {
         let mut queue = VecDeque::from([(type_name.to_string(), 1)]);
 
         while let Some((name, depth)) = queue.pop_front() {
-            let relations = match walk {
-                Walk::Up => self.store.find_supertypes(&name, max_edges)?,
-                Walk::Down => self.store.find_subtypes(&name, max_edges)?,
+            // One relation more than the remaining budget tells whether the
+            // cap cuts some: a query limited to the budget hid that.
+            let budget = max_edges - edges.len();
+            let mut relations = match walk {
+                Walk::Up => self.store.find_supertypes(&name, budget + 1)?,
+                Walk::Down => self.store.find_subtypes(&name, budget + 1)?,
             };
+            if relations.len() > budget {
+                relations.truncate(budget);
+                *truncated = true;
+            }
             for relation in relations {
-                if edges.len() >= max_edges {
-                    *truncated = true;
-                    return Ok(edges);
-                }
                 let next = match walk {
                     Walk::Up => relation.super_name.clone(),
                     Walk::Down => relation.type_name.clone(),
@@ -150,6 +153,9 @@ impl RetrievalEngine {
                 if depth < max_depth && visited.insert(next.clone()) {
                     queue.push_back((next, depth + 1));
                 }
+            }
+            if *truncated {
+                return Ok(edges);
             }
         }
         Ok(edges)

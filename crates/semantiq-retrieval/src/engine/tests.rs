@@ -597,6 +597,38 @@ fn test_find_references_tolerates_a_missing_definition_file() {
 }
 
 #[test]
+fn test_impact_depth_two_through_a_common_name_is_not_cut_by_homonyms() {
+    // Regression for #42: with `max_sites = 2` the lookup of `mid` examined
+    // 10 occurrences in path order, all homonyms in files sorting before
+    // zz.rs, and the trusted depth-2 site in zz.rs was never reached.
+    let mut files: Vec<(String, String)> = (0..12)
+        .map(|i| {
+            (
+                format!("b{i:02}.rs"),
+                "fn mid() {}\nfn x() {\n    mid();\n}\n".to_string(),
+            )
+        })
+        .collect();
+    files.push((
+        "zz.rs".to_string(),
+        "fn base() {}\nfn mid() {\n    base();\n}\nfn top() {\n    mid();\n}\n".to_string(),
+    ));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_rust_project(&files);
+
+    let analysis = engine.analyze_impact("base", None, 2, 2).unwrap();
+    assert_eq!(
+        impact_sites(&analysis),
+        vec![(1, "zz.rs", 3, "same_file"), (2, "zz.rs", 6, "same_file")]
+    );
+    // The occurrences of `mid` beyond the cap were not examined.
+    assert!(analysis.truncated);
+}
+
+#[test]
 fn test_impact_respects_depth_and_site_limits() {
     let (engine, _root) = index_rust_project(&[(
         "lib.rs",
