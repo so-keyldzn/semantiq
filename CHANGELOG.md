@@ -33,6 +33,12 @@ All notable changes to Semantiq will be documented in this file.
   embedding only covered its first 512 tokens: semantic search can now hit the
   whole body, and a hit returns a window rather than a 3000-line chunk. The
   embedding carry-over on edit is per window (#62).
+- A query command given `--database` without `--project` no longer walks the
+  database's directory and prunes every indexed file as vanished: `index` and
+  `serve` record the project root in the database, the query commands read it
+  back (the current directory for an index built by an older version), and a
+  refresh that finds no indexable file under its root while the index holds
+  files refuses to prune, with a "wrong project root?" hint (#32).
 - Stored paths (`files.path`, `resolved_path`, every `path` / `file_path` in
   the outputs) use `/` on every platform: a Windows index held backslashes,
   so `deps src/lib/foo.ts`, `--focus` and `path_prefix` did not match and the

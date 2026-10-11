@@ -40,7 +40,8 @@ pub(crate) struct IndexArgs {
     #[arg(short, long)]
     pub database: Option<PathBuf>,
 
-    /// Project root (default: the directory containing the database)
+    /// Project root (default: the root the index was built from, recorded in
+    /// the database; the current directory for an index that has none)
     #[arg(short, long)]
     pub project: Option<PathBuf>,
 
@@ -316,6 +317,10 @@ fn open_engine_with_store(
 ) -> Result<(RetrievalEngine, PathBuf, Arc<IndexStore>)> {
     let (db_path, root) = locate_index(index)?;
     let store = Arc::new(IndexStore::open(&db_path)?);
+    let root = match root {
+        Some(root) => root,
+        None => recorded_project_root(&store, &db_path)?,
+    };
 
     if store.get_stats()?.file_count == 0 {
         bail!(
@@ -344,26 +349,24 @@ fn open_engine_with_store(
 /// Resolve `(database, project root)` from the flags, or by looking for
 /// `.semantiq.db` in the current directory and its parents. Never creates a
 /// database: a missing index is an error pointing at `semantiq index`.
-fn locate_index(index: &IndexArgs) -> Result<(PathBuf, PathBuf)> {
+///
+/// With `--database` alone the root is `None`: it is read from the database
+/// once opened ([`recorded_project_root`]). Defaulting it to a directory
+/// (the database's parent, as before) made the refresh walk a directory
+/// holding none of the indexed files and prune them all (#32).
+fn locate_index(index: &IndexArgs) -> Result<(PathBuf, Option<PathBuf>)> {
     let cwd = std::env::current_dir()?;
     let (db_path, root) = match (&index.database, &index.project) {
-        (Some(db), project) => {
-            let db = cwd.join(db);
-            let root = match project {
-                Some(p) => cwd.join(p),
-                None => db.parent().map(Path::to_path_buf).unwrap_or(cwd.clone()),
-            };
-            (db, root)
-        }
+        (Some(db), project) => (cwd.join(db), project.as_ref().map(|p| cwd.join(p))),
         (None, Some(project)) => {
             let root = cwd.join(project);
-            (root.join(DEFAULT_DB_NAME), root)
+            (root.join(DEFAULT_DB_NAME), Some(root))
         }
         (None, None) => match cwd
             .ancestors()
             .find(|dir| dir.join(DEFAULT_DB_NAME).is_file())
         {
-            Some(dir) => (dir.join(DEFAULT_DB_NAME), dir.to_path_buf()),
+            Some(dir) => (dir.join(DEFAULT_DB_NAME), Some(dir.to_path_buf())),
             None => bail!(
                 "No Semantiq index found in {} or its parents. Run `semantiq index` \
                  (or `semantiq init`) at the project root first.",
@@ -376,13 +379,37 @@ fn locate_index(index: &IndexArgs) -> Result<(PathBuf, PathBuf)> {
         bail!(
             "Semantiq index not found at {}. Run `semantiq index {}` first.",
             db_path.display(),
-            root.display()
+            root.as_deref().unwrap_or(&cwd).display()
         );
     }
     let root = root
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve project root {}", root.display()))?;
+        .map(|root| {
+            root.canonicalize()
+                .with_context(|| format!("Failed to resolve project root {}", root.display()))
+        })
+        .transpose()?;
     Ok((db_path, root))
+}
+
+/// The project root an index was built from (`index` and `serve` record it),
+/// for a `--database` given without `--project`. An index built by an older
+/// version has none: the current directory is assumed, as `index` and `serve`
+/// do, and `AutoIndexer::initial_index` refuses to prune a populated index
+/// from a directory holding none of its files.
+fn recorded_project_root(store: &IndexStore, db_path: &Path) -> Result<PathBuf> {
+    match store.get_project_root()? {
+        Some(root) => root.canonicalize().with_context(|| {
+            format!(
+                "The index at {} was built from {}, which no longer exists: pass \
+                 `--project <root>`",
+                db_path.display(),
+                root.display()
+            )
+        }),
+        None => std::env::current_dir()?
+            .canonicalize()
+            .context("Failed to resolve the current directory"),
+    }
 }
 
 /// Bring the index up to date before answering: phase 1 (structure) only, no

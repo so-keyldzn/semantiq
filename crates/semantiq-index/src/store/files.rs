@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use semantiq_parser::PARSER_VERSION;
+use std::path::{Path, PathBuf};
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -154,6 +155,38 @@ impl IndexStore {
                 })
                 .optional()?;
             Ok(result)
+        })
+    }
+
+    // Project root
+
+    /// Record the project root this index is built from (`metadata` key
+    /// `project_root`, absolute and canonical when the directory exists).
+    /// The query commands derive the root from it when only `--database` is
+    /// given, so a refresh never walks the wrong directory.
+    pub fn set_project_root(&self, root: &Path) -> Result<()> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('project_root', ?1)",
+                [root.to_string_lossy().as_ref()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The project root recorded by [`Self::set_project_root`], if any (an
+    /// index built by an older version has none).
+    pub fn get_project_root(&self) -> Result<Option<PathBuf>> {
+        self.with_conn(|conn| {
+            let root: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'project_root'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(root.map(PathBuf::from))
         })
     }
 

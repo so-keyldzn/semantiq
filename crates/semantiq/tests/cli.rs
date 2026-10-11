@@ -446,3 +446,59 @@ fn init_global_installs_skill_in_home() {
     assert!(!home.path().join("CLAUDE.md").exists());
     assert!(!home.path().join(".semantiq.db").exists());
 }
+
+/// #32: with `--database` alone, the project root comes from the database
+/// (recorded by `index`), not from the directory the command runs in or the
+/// database's parent. A wrong `--project` is refused before anything is pruned.
+#[test]
+fn database_without_project_uses_the_recorded_root() {
+    let project = indexed_project();
+    let dir = project.path();
+    let store_dir = tempfile::Builder::new()
+        .prefix("semantiq-idx")
+        .tempdir()
+        .unwrap();
+    let db = store_dir.path().join("app.db");
+    let db = db.to_str().unwrap();
+    let output = semantiq(dir, &["index", ".", "--database", db, "--no-embeddings"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // From the database's own directory (the directory the old code walked):
+    // the recorded root is used and nothing is removed.
+    let output = semantiq(
+        store_dir.path(),
+        &["refs", "compute", "--database", db, "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("removed"),
+        "no refresh should prune anything: {}",
+        stderr(&output)
+    );
+    let refs: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+    assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
+
+    // An explicit root holding none of the indexed files is refused, and the
+    // index survives.
+    let empty = tempfile::tempdir().unwrap();
+    let output = semantiq(
+        dir,
+        &[
+            "refs",
+            "compute",
+            "--database",
+            db,
+            "--project",
+            empty.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("wrong project root"),
+        "{}",
+        stderr(&output)
+    );
+    let refs = query_json(dir, &["refs", "compute", "--database", db]);
+    assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
+}

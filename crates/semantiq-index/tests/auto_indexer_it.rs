@@ -247,3 +247,41 @@ fn oversized_data_files_are_skipped_and_stale_rows_removed() {
     assert!(store.get_file_by_path("src/lib.rs").unwrap().is_some());
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
+
+/// #32: the indexer records the project root, and a walk from a directory
+/// holding none of the indexed files refuses to prune the index (a database
+/// opened from the wrong directory) instead of removing every file.
+#[test]
+fn initial_index_records_root_and_refuses_to_prune_from_a_wrong_root() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("project");
+    build_toy_project(&root);
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    assert_eq!(
+        store.get_project_root().unwrap(),
+        Some(root.canonicalize().unwrap())
+    );
+
+    // An empty directory passed as the root: nothing indexable, index populated.
+    let wrong = tmp.path().join("elsewhere");
+    fs::create_dir_all(&wrong).unwrap();
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), wrong.clone()).unwrap();
+    let err = indexer.initial_index().unwrap_err().to_string();
+    assert!(err.contains("wrong project root"), "{err}");
+    assert_eq!(store.get_stats().unwrap().file_count, 2, "nothing pruned");
+
+    // Back on the real root the index is refreshed in place, and an index with
+    // files legitimately removed is still pruned (the walk sees the others).
+    fs::remove_file(root.join("src/util.rs")).unwrap();
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.removed, 1);
+    assert_eq!(store.get_stats().unwrap().file_count, 1);
+    assert_eq!(
+        store.get_project_root().unwrap(),
+        Some(root.canonicalize().unwrap())
+    );
+}

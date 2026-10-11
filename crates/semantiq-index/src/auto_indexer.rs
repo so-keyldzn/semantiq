@@ -1,7 +1,7 @@
 use crate::IndexStore;
 use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
 use crate::watcher::{FileEvent, FileWatcher};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ignore::WalkBuilder;
 use semantiq_parser::{
     ChunkExtractor, ImportExtractor, ImportKind, Language, LanguageSupport, ReferenceExtractor,
@@ -53,6 +53,31 @@ impl AutoIndexer {
             language_support: Mutex::new(LanguageSupport::new()?),
             chunk_extractor: ChunkExtractor::new(),
         })
+    }
+
+    /// Stamp `project_root` in the index metadata (read back by the query
+    /// commands when only `--database` is given). Called once a walk from
+    /// that root proved consistent with the index, never from the
+    /// constructor: a wrong root refused by `initial_index` must not be
+    /// recorded. Indexing a different directory into a populated index is
+    /// allowed (`semantiq index <other> --database <db>`) but worth a
+    /// warning: its files will be pruned.
+    fn record_project_root(&self) -> Result<()> {
+        let canonical = self
+            .project_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.project_root.clone());
+        if let Some(previous) = self.store.get_project_root()?
+            && previous != canonical
+            && self.store.get_stats()?.file_count > 0
+        {
+            warn!(
+                "Index built from {} now indexed from {}: files of the previous root will be removed",
+                previous.display(),
+                canonical.display()
+            );
+        }
+        self.store.set_project_root(&canonical)
     }
 
     /// Perform initial indexing of all files in the project
@@ -153,6 +178,24 @@ impl AutoIndexer {
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
+        //
+        // Safety net: a walk that found nothing indexable while the index holds
+        // files means the root is wrong (a database opened from another
+        // directory), not that every file vanished. Pruning would wipe the
+        // index; refuse instead.
+        if seen_paths.is_empty() {
+            let indexed = self.store.get_stats()?.file_count;
+            if indexed > 0 {
+                bail!(
+                    "no indexable file found under {} while the index holds {} files: wrong \
+                     project root? Pass `--project <root>`, or rebuild with \
+                     `semantiq index <root> --force`",
+                    self.project_root.display(),
+                    indexed
+                );
+            }
+        }
+        self.record_project_root()?;
         for stale in self.store.list_file_paths()? {
             if seen_paths.contains(&stale) {
                 continue;
