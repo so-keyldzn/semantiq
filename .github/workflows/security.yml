@@ -24,7 +24,8 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
-        # Unmaintained-only advisories with no fixed release (mirrored in deny.toml):
+        # Unmaintained-only advisories with no fixed release (mirrored in
+        # deny.toml, with their dependency chains). Reviewed: 2026-10-11.
         # RUSTSEC-2024-0384: instant unmaintained (transitive via notify -> notify-types)
         # RUSTSEC-2024-0436: paste unmaintained (transitive via tokenizers -> macro_rules_attribute)
         # RUSTSEC-2025-0119: number_prefix unmaintained (transitive via tokenizers -> indicatif)

@@ -10,18 +10,21 @@ ignore = [
     # Dep chain: notify -> notify-types -> instant
     # Tracking: https://github.com/notify-rs/notify/issues — awaiting removal of `instant`
     # Remove when: notify drops `instant` (replaced by `web-time` or std)
+    # Reviewed: 2026-10-11
     "RUSTSEC-2024-0384",
 
     # paste is unmaintained but used transitively by tokenizers
     # Dep chain: tokenizers -> macro_rules_attribute -> paste
-    # Tracking: https://github.com/Luthaf/macro_rules_attribute — awaiting migration to `pastey`
+    # Tracking: https://github.com/danielhenrymantilla/macro_rules_attribute-rs — awaiting migration to `pastey`
     # Remove when: macro_rules_attribute migrates from `paste` to `pastey`
+    # Reviewed: 2026-10-11
     "RUSTSEC-2024-0436",
 
     # number_prefix is unmaintained but used transitively by tokenizers via indicatif
     # Dep chain: tokenizers -> indicatif -> number_prefix
     # Tracking: https://github.com/huggingface/tokenizers/issues
     # Remove when: indicatif drops `number_prefix` or tokenizers updates indicatif
+    # Reviewed: 2026-10-11
     "RUSTSEC-2025-0119",
 ]
 
