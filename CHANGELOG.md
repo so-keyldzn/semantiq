@@ -43,7 +43,7 @@ All notable changes to Semantiq will be documented in this file.
   the outputs) use `/` on every platform: a Windows index held backslashes,
   so `deps src/lib/foo.ts`, `--focus` and `path_prefix` did not match and the
   output differed from the documented contract. Path arguments of the CLI, the
-  MCP tools and the HTTP API accept either separator. `PARSER_VERSION` 14:
+  MCP tools and the HTTP API accept either separator. `PARSER_VERSION` 15:
   existing indexes are rebuilt (#68).
 - An older Semantiq binary opening an index written by a newer one (after a
   `semantiq update` rollback, or a plugin binary next to a `cargo run` on a
@@ -60,7 +60,7 @@ All notable changes to Semantiq will be documented in this file.
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
   accident, and bundler query suffixes (`./registry.ts?raw`, `./styles.css?url`)
   are ignored. `PARSER_VERSION` 13: existing indexes are rebuilt.
-- `PARSER_VERSION` 14: existing indexes are rebuilt for the fixes above.
+- `PARSER_VERSION` 15: existing indexes are rebuilt for the fixes above.
 
 ## [0.11.0] - 2026-10-07
 
