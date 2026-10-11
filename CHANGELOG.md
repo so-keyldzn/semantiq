@@ -107,6 +107,10 @@ All notable changes to Semantiq will be documented in this file.
   read by the notice and `GET /stats` are stored as one atomic so `pending`
   can no longer underflow between two passes (#52). `ModelLoader` is now a
   `Fn`, called again on retry.
+- Calibrated semantic thresholds (`semantiq calibrate`, auto-calibration) no
+  longer drop ~90 % of the candidates: `min_similarity` is derived from the
+  same 90th-percentile distance as `max_distance` instead of the 10th
+  percentile, so the two gates cut at the same point (#33).
 - Local import resolution keeps dotted module names: `./user.service` resolves to
   `user.service.ts` instead of `user.ts` (#55, by @penielgold-hub). Explicit
   `.js` / `.jsx` / `.mjs` imports map to `.ts` / `.tsx` on purpose rather than by
