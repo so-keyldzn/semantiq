@@ -429,11 +429,10 @@ fn data_version_changes_only_when_another_connection_commits() {
     );
 }
 
-/// #52: a failed model load is reported through the progress and retried
-/// after a backoff; the first successful load clears the error and embeds the
-/// backlog.
+/// #52: a failed model load is reported through the progress, and a
+/// notification within the backoff does not call the loader again.
 #[test]
-fn background_embedder_retries_a_failed_model_load_with_backoff() {
+fn background_embedder_reports_a_failed_model_load_and_waits_for_the_backoff() {
     let tmp = TempDir::new().unwrap();
     build_project(tmp.path(), 1, 5);
     let store = phase1(tmp.path());
@@ -445,16 +444,14 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
     let embedder = BackgroundEmbedder::spawn_with(
         Arc::clone(&store),
         Box::new(move || {
-            // The first two loads fail (flaky download), the third succeeds.
-            if loader_attempts.fetch_add(1, Ordering::SeqCst) < 2 {
-                anyhow::bail!("download failed: connection reset")
-            }
-            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+            loader_attempts.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("download failed: connection reset")
         }),
+        // Neither the backoff nor a poll can elapse during the test.
         EmbedderConfig {
-            poll_interval: Duration::from_millis(50),
-            initial_retry_delay: Duration::from_millis(300),
-            max_retry_delay: Duration::from_secs(1),
+            poll_interval: Duration::from_secs(60),
+            initial_retry_delay: Duration::from_secs(60),
+            max_retry_delay: Duration::from_secs(60),
         },
     )
     .unwrap();
@@ -470,7 +467,6 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
     assert!(embedder.progress().in_progress().is_none());
     assert_eq!(store.embedding_counts().unwrap().pending(), total);
 
-    // Within the backoff, a notification does not hammer the loader.
     embedder.notify();
     assert!(embedder.wait_idle(Duration::from_secs(10)));
     assert_eq!(
@@ -478,9 +474,35 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
         1,
         "retry waits for the backoff"
     );
+    assert!(embedder.progress().model_error().is_some());
+}
 
-    // Once the backoff elapses the polls retry (second failure, then
-    // success) and the pending chunks are embedded.
+/// #52: once the backoff elapses the polls retry the load (second failure,
+/// then success), the error is cleared and the backlog is embedded, with no
+/// further notification.
+#[test]
+fn background_embedder_retries_a_failed_model_load_with_backoff() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 5);
+    let store = phase1(tmp.path());
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let loader_attempts = Arc::clone(&attempts);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            // The first two loads fail (flaky download), the third succeeds.
+            if loader_attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                anyhow::bail!("download failed: connection reset")
+            }
+            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+        }),
+        quick_config(),
+    )
+    .unwrap();
+
+    embedder.notify();
     assert!(wait_until(Duration::from_secs(15), || {
         store.embedding_counts().unwrap().pending() == 0
     }));
@@ -488,6 +510,7 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
     assert!(wait_until(Duration::from_secs(5), || {
         embedder.progress().model_error().is_none()
     }));
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
 }
 
 /// A load failure on an already complete index clears itself: the poll
