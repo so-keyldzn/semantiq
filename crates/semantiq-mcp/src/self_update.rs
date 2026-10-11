@@ -250,6 +250,11 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
         )
     })?;
 
+    // Before downloading tens of megabytes: can this binary be replaced at all?
+    let current = std::env::current_exe().context("cannot locate current executable")?;
+    let current = std::fs::canonicalize(&current).unwrap_or(current);
+    check_install_location(&current)?;
+
     let archive_name = format!("semantiq-v{latest}-{target}.tar.gz");
     let base = format!("https://github.com/{REPO}/releases/download/v{latest}/{archive_name}");
     let checksum_url = format!("{base}.sha256");
@@ -298,6 +303,50 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
     })
 }
 
+/// Refuse early when `current` cannot be replaced in place: a binary a
+/// package manager installed (Homebrew, npm) is updated through it so the
+/// package stays consistent, and a directory this user cannot write to fails
+/// now rather than after the download and the checksum.
+fn check_install_location(current: &Path) -> Result<()> {
+    if let Some(command) = package_manager_command(current) {
+        bail!(
+            "semantiq at {} was installed by a package manager: run `{command}` to update it",
+            current.display()
+        );
+    }
+    let dir = current
+        .parent()
+        .ok_or_else(|| anyhow!("executable has no parent directory"))?;
+    let probe = dir.join(unique_scratch_name(".semantiq-update-probe"));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => bail!(
+            "cannot write to {} ({e}): re-run `semantiq update` with enough permissions, or \
+             update semantiq with the tool that installed it",
+            dir.display()
+        ),
+    }
+}
+
+/// The command that updates a binary a package manager put at `exe`:
+/// Homebrew keeps its binaries under a `Cellar` directory, npm under
+/// `node_modules` (`semantiq-mcp/bin/semantiq`).
+fn package_manager_command(exe: &Path) -> Option<&'static str> {
+    let mut components = exe.components().filter_map(|c| c.as_os_str().to_str());
+    components.find_map(|component| match component {
+        "Cellar" => Some("brew upgrade semantiq"),
+        "node_modules" => Some("npm update -g semantiq-mcp"),
+        _ => None,
+    })
+}
+
 /// Find the extracted binary, allowing for archives that nest it in a folder.
 fn locate_binary(dir: &Path) -> Option<PathBuf> {
     let direct = dir.join(binary_name());
@@ -329,6 +378,64 @@ impl Drop for TmpDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_manager_installs_are_detected() {
+        assert_eq!(
+            package_manager_command(Path::new(
+                "/opt/homebrew/Cellar/semantiq/0.11.0/bin/semantiq"
+            )),
+            Some("brew upgrade semantiq")
+        );
+        assert_eq!(
+            package_manager_command(Path::new(
+                "/usr/local/lib/node_modules/semantiq-mcp/bin/semantiq"
+            )),
+            Some("npm update -g semantiq-mcp")
+        );
+        assert_eq!(
+            package_manager_command(Path::new("/home/me/.cargo/bin/semantiq")),
+            None
+        );
+        // A directory merely named like one is not a package manager install.
+        assert_eq!(
+            package_manager_command(Path::new("/srv/cellar-tools/semantiq")),
+            None
+        );
+    }
+
+    #[test]
+    fn install_location_must_be_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("semantiq");
+        std::fs::write(&exe, b"").unwrap();
+        check_install_location(&exe).unwrap();
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "the write probe is removed"
+        );
+
+        let err = check_install_location(Path::new(
+            "/usr/local/lib/node_modules/semantiq-mcp/bin/semantiq",
+        ))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("npm update -g semantiq-mcp"),
+            "{err}"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let locked = dir.path().join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let err = check_install_location(&locked.join("semantiq")).unwrap_err();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(err.to_string().contains("cannot write to"), "{err}");
+        }
+    }
 
     #[test]
     fn parse_bare_checksum() {

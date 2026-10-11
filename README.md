@@ -202,6 +202,10 @@ semantiq update          # Download and install the latest version
 semantiq update --check  # Check for a newer version without installing
 ```
 
+A binary installed by Homebrew or npm is updated by the package manager
+instead (`brew upgrade semantiq`, `npm update -g semantiq-mcp`): `semantiq
+update` says so and leaves it alone.
+
 ### `semantiq index [PATH] [OPTIONS]`
 
 Manually index a project, in two phases: the **structure** (symbols,
