@@ -4,7 +4,7 @@ use super::IndexStore;
 use crate::schema::{ChunkRecord, EMBEDDING_DIMENSION};
 use anyhow::{Result, anyhow, bail};
 use rusqlite::Connection;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use semantiq_parser::CodeChunk;
 use std::collections::HashMap;
 use std::sync::{MutexGuard, PoisonError};
@@ -380,7 +380,7 @@ impl IndexStore {
     }
 
     /// All chunks of a file. Test support only: production code reads chunks
-    /// by id (`get_chunks_by_ids`) or by pending state.
+    /// by id (`get_chunk_hits`) or by pending state.
     #[cfg(any(test, feature = "test-support"))]
     pub fn get_chunks_by_file(&self, file_id: i64) -> Result<Vec<ChunkRecord>> {
         self.with_conn(|conn| {
@@ -410,24 +410,61 @@ impl IndexStore {
         })
     }
 
-    /// Get the file path for a chunk's file.
-    pub fn get_chunk_file_path(&self, file_id: i64) -> Result<Option<String>> {
-        self.get_file_path_by_id(file_id)
+    /// Chunks by id with their file's path and language, in the order of
+    /// `chunk_ids` (missing ids are skipped): the candidates of a semantic
+    /// search, resolved in one query (per 900 ids) instead of one per chunk
+    /// and per file. The embedding is left out: the KNN already measured
+    /// the distance.
+    pub fn get_chunk_hits(&self, chunk_ids: &[i64]) -> Result<Vec<ChunkHit>> {
+        let mut by_id: HashMap<i64, ChunkHit> = HashMap::with_capacity(chunk_ids.len());
+        for batch in chunk_ids.chunks(SQL_IN_BATCH) {
+            let placeholders: Vec<&str> = batch.iter().map(|_| "?").collect();
+            let query = format!(
+                "SELECT c.id, c.file_id, f.path, f.language, c.content,
+                        c.start_line, c.end_line, c.symbols_json
+                 FROM chunks c
+                 JOIN files f ON f.id = c.file_id
+                 WHERE c.id IN ({})",
+                placeholders.join(",")
+            );
+            let hits = self.with_conn(|conn| {
+                let mut stmt = conn.prepare(&query)?;
+                let hits = stmt
+                    .query_map(rusqlite::params_from_iter(batch.iter()), |row| {
+                        let symbols_json: String = row.get(7)?;
+                        Ok(ChunkHit {
+                            id: row.get(0)?,
+                            file_id: row.get(1)?,
+                            file_path: row.get(2)?,
+                            language: row.get(3)?,
+                            content: row.get(4)?,
+                            start_line: row.get(5)?,
+                            end_line: row.get(6)?,
+                            symbols: parse_symbols_json(&symbols_json),
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(hits)
+            })?;
+            by_id.extend(hits.into_iter().map(|h| (h.id, h)));
+        }
+        Ok(chunk_ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
+}
 
-    /// Get the language for a chunk by looking up its file.
-    pub fn get_chunk_language(&self, chunk_id: i64) -> Result<Option<String>> {
-        self.with_conn(|conn| {
-            let result = conn
-                .query_row(
-                    "SELECT f.language FROM chunks c
-                     JOIN files f ON c.file_id = f.id
-                     WHERE c.id = ?1",
-                    [chunk_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            Ok(result)
-        })
-    }
+/// Ids per `IN (...)` list: SQLite's default `SQLITE_MAX_VARIABLE_NUMBER`
+/// is 999.
+pub(super) const SQL_IN_BATCH: usize = 900;
+
+/// A chunk candidate of semantic search, with its file resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChunkHit {
+    pub id: i64,
+    pub file_id: i64,
+    pub file_path: String,
+    pub language: Option<String>,
+    pub content: String,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub symbols: Vec<String>,
 }

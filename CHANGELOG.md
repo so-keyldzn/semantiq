@@ -34,6 +34,14 @@ All notable changes to Semantiq will be documented in this file.
   command, and an unwritable install directory fails right away. Without a
   platform data directory (sandboxed launch without HOME / XDG), the version
   check no longer writes its cache into the current project (#51).
+- `semantiq_search` resolves its semantic candidates in 3 queries instead
+  of ~500 for `limit 100`: the candidate chunks come back with their file's
+  path and language in one query and the symbol kinds of every file
+  touched in another, instead of one lookup per chunk, per file and per
+  file's symbols on the shared connection. The repo map leaves out names
+  defined in more than 100 files (`new` in a monorepo): their references
+  linked every referencing file to every defining file (tens of millions
+  of pairs) for a weight already damped to nothing (#45).
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead

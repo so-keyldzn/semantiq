@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow};
 use rusqlite::Connection;
 use rusqlite::params;
 use semantiq_parser::Symbol;
+use std::collections::HashMap;
 use std::sync::{MutexGuard, PoisonError};
 use tracing::debug;
 
@@ -156,5 +157,42 @@ impl IndexStore {
 
             Ok(results)
         })
+    }
+}
+
+impl IndexStore {
+    /// `name -> kind` of the symbols of each of `file_ids`, in one query
+    /// (per 900 ids). On duplicate names in a file the last one by line wins:
+    /// enough to label a chunk by its first symbol.
+    pub fn get_symbol_kinds_by_files(
+        &self,
+        file_ids: &[i64],
+    ) -> Result<HashMap<i64, HashMap<String, String>>> {
+        let mut kinds: HashMap<i64, HashMap<String, String>> = HashMap::new();
+        for batch in file_ids.chunks(super::chunks::SQL_IN_BATCH) {
+            let placeholders: Vec<&str> = batch.iter().map(|_| "?").collect();
+            let query = format!(
+                "SELECT file_id, name, kind FROM symbols
+                 WHERE file_id IN ({})
+                 ORDER BY file_id, start_line",
+                placeholders.join(",")
+            );
+            self.with_conn(|conn| {
+                let mut stmt = conn.prepare(&query)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (file_id, name, kind) = row?;
+                    kinds.entry(file_id).or_default().insert(name, kind);
+                }
+                Ok(())
+            })?;
+        }
+        Ok(kinds)
     }
 }

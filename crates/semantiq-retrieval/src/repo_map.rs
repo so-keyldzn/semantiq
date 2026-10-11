@@ -5,7 +5,9 @@
 //! - a reference (`refs`, non-definition) to a name defined in another file
 //!   links the referencing file to the defining file, weighted by
 //!   `sqrt(occurrences)`, damped for short/private/widely-defined names and
-//!   split between homonym definitions;
+//!   split between homonym definitions (names defined in more than
+//!   `MAX_NAME_DEFINERS` files are left out by the store: every referencing
+//!   file x every defining file is too many edges for a damped weight);
 //! - an import resolved to an indexed file (`dependencies.resolved_path`).
 //!
 //! PageRank over that graph ranks files. Each file then hands its rank to the

@@ -977,29 +977,92 @@ fn test_load_all_calibrations() {
 }
 
 #[test]
-fn test_get_chunk_language() {
+fn test_get_chunk_hits_resolves_files_in_one_query() {
     let store = IndexStore::open_in_memory().unwrap();
-
-    let file_id = store
+    let py = store
         .insert_file("test.py", Some("python"), "def main(): pass", 1000)
         .unwrap();
-
-    let chunks = vec![CodeChunk {
-        content: "def main(): pass".to_string(),
+    let rs = store
+        .insert_file("src/lib.rs", Some("rust"), "fn run() {}", 1000)
+        .unwrap();
+    let chunk = |content: &str, symbol: &str| CodeChunk {
+        content: content.to_string(),
         start_line: 1,
         end_line: 1,
         start_byte: 0,
-        end_byte: 16,
-        symbols: vec!["main".to_string()],
-    }];
+        end_byte: content.len(),
+        symbols: vec![symbol.to_string()],
+    };
+    store
+        .insert_chunks(py, &[chunk("def main(): pass", "main")])
+        .unwrap();
+    store
+        .insert_chunks(rs, &[chunk("fn run() {}", "run")])
+        .unwrap();
+    let py_id = store.get_chunks_by_file(py).unwrap()[0].id;
+    let rs_id = store.get_chunks_by_file(rs).unwrap()[0].id;
 
-    store.insert_chunks(file_id, &chunks).unwrap();
+    // Requested order, missing ids skipped.
+    let hits = store.get_chunk_hits(&[rs_id, 9999, py_id]).unwrap();
+    let got: Vec<_> = hits
+        .iter()
+        .map(|h| {
+            (
+                h.id,
+                h.file_path.as_str(),
+                h.language.as_deref(),
+                h.symbols[0].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (rs_id, "src/lib.rs", Some("rust"), "run"),
+            (py_id, "test.py", Some("python"), "main")
+        ]
+    );
+    assert_eq!(hits[0].content, "fn run() {}");
+    assert!(store.get_chunk_hits(&[]).unwrap().is_empty());
+}
 
-    let stored_chunks = store.get_chunks_by_file(file_id).unwrap();
-    let chunk_id = stored_chunks[0].id;
+#[test]
+fn test_get_symbol_kinds_by_files() {
+    use semantiq_parser::{Symbol, SymbolKind};
 
-    let language = store.get_chunk_language(chunk_id).unwrap();
-    assert_eq!(language, Some("python".to_string()));
+    let store = IndexStore::open_in_memory().unwrap();
+    let a = store.insert_file("a.rs", Some("rust"), "x", 0).unwrap();
+    let b = store.insert_file("b.rs", Some("rust"), "y", 0).unwrap();
+    let sym = |name: &str, kind: SymbolKind, line: usize| Symbol {
+        name: name.to_string(),
+        kind,
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 0,
+        signature: None,
+        doc_comment: None,
+        parent: None,
+    };
+    store
+        .insert_symbols(
+            a,
+            &[
+                sym("Config", SymbolKind::Struct, 1),
+                sym("load", SymbolKind::Function, 5),
+            ],
+        )
+        .unwrap();
+    store
+        .insert_symbols(b, &[sym("load", SymbolKind::Method, 2)])
+        .unwrap();
+
+    let kinds = store.get_symbol_kinds_by_files(&[a, b, 9999]).unwrap();
+    assert_eq!(kinds.len(), 2);
+    assert_eq!(kinds[&a]["Config"], "struct");
+    assert_eq!(kinds[&a]["load"], "function");
+    assert_eq!(kinds[&b]["load"], "method");
+    assert!(store.get_symbol_kinds_by_files(&[]).unwrap().is_empty());
 }
 
 #[test]
@@ -1336,4 +1399,58 @@ fn test_references_near_files_come_first() {
     // Without near files: plain path order, the old behaviour.
     let found = store.find_references_by_name("mid", 2).unwrap();
     assert_eq!(found[0].file_path, "a0.rs");
+}
+
+#[test]
+fn test_repo_graph_leaves_out_names_defined_almost_everywhere() {
+    // Regression for #45: the repo map materialized every referencing file x
+    // defining file pair of `new`-like names before damping them.
+    use semantiq_parser::{Reference, ReferenceKind, Symbol, SymbolKind};
+
+    let store = IndexStore::open_in_memory().unwrap();
+    let sym = |name: &str, line: usize| Symbol {
+        name: name.to_string(),
+        kind: SymbolKind::Function,
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 0,
+        signature: None,
+        doc_comment: None,
+        parent: None,
+    };
+    let r = |name: &str, line: usize| Reference {
+        name: name.to_string(),
+        line,
+        kind: ReferenceKind::Call,
+        count: 1,
+    };
+    // `everywhere` is defined in MAX_NAME_DEFINERS + 1 files, `twice` in 2.
+    for i in 0..=MAX_NAME_DEFINERS {
+        let id = store
+            .insert_file(&format!("f{i:03}.rs"), Some("rust"), "x", 0)
+            .unwrap();
+        let mut symbols = vec![sym("everywhere", 1)];
+        if i < 2 {
+            symbols.push(sym("twice", 2));
+        }
+        store.insert_symbols(id, &symbols).unwrap();
+    }
+    let user = store.insert_file("user.rs", Some("rust"), "x", 0).unwrap();
+    store
+        .insert_references(user, &[r("everywhere", 1), r("twice", 2)])
+        .unwrap();
+
+    let graph = store.load_repo_graph().unwrap();
+    let names: Vec<&str> = graph.ref_counts.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["twice"]);
+    // The symbols themselves stay in the graph (listed by file rank).
+    assert_eq!(
+        graph
+            .symbols
+            .iter()
+            .filter(|s| s.name == "everywhere")
+            .count(),
+        MAX_NAME_DEFINERS + 1
+    );
 }

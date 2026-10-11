@@ -19,7 +19,8 @@ pub use schema::{
     TypeRelationRecord, UnreferencedSymbol,
 };
 pub use store::{
-    CalibrationData, CalibrationRecord, EmbeddingCounts, IndexStats, IndexStore, PendingChunk,
+    CalibrationData, CalibrationRecord, ChunkHit, EmbeddingCounts, IndexStats, IndexStore,
+    PendingChunk,
 };
-pub use store::{GraphFile, GraphRefCount, RepoGraphData};
+pub use store::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
 pub use watcher::FileWatcher;

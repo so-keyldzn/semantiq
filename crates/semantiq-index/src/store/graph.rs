@@ -36,9 +36,17 @@ pub struct RepoGraphData {
     /// `(source_file_id, target_file_id)` for each import resolved to an
     /// indexed file, ordered.
     pub file_edges: Vec<(i64, i64)>,
-    /// Ordered by name, file id, then kind.
+    /// Ordered by name, file id, then kind. Names defined in more than
+    /// [`MAX_NAME_DEFINERS`] files are left out.
     pub ref_counts: Vec<GraphRefCount>,
 }
+
+/// A name defined in more files than this (`new` in a monorepo) is left out
+/// of the reference counts: matching is by name only, so its references
+/// would link every referencing file to every defining file (tens of
+/// millions of pairs in a 5k-file monorepo) for a weight already damped to
+/// nothing.
+pub const MAX_NAME_DEFINERS: usize = 100;
 
 impl IndexStore {
     /// Load files, symbols, resolved imports and reference counts in one go.
@@ -93,11 +101,14 @@ impl IndexStore {
                     "SELECT r.name, r.file_id, r.kind, SUM(r.count)
                      FROM refs r
                      WHERE r.kind != 'definition'
-                       AND r.name IN (SELECT name FROM symbols WHERE kind != 'import')
+                       AND r.name IN (SELECT name FROM symbols
+                                      WHERE kind != 'import'
+                                      GROUP BY name
+                                      HAVING COUNT(DISTINCT file_id) <= ?1)
                      GROUP BY r.name, r.file_id, r.kind
                      ORDER BY r.name, r.file_id, r.kind",
                 )?
-                .query_map([], |row| {
+                .query_map([MAX_NAME_DEFINERS as i64], |row| {
                     Ok(GraphRefCount {
                         name: row.get(0)?,
                         file_id: row.get(1)?,

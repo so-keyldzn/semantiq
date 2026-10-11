@@ -176,11 +176,17 @@ impl RetrievalEngine {
             similar_chunks.len()
         );
 
-        // Resolve the language for each candidate chunk *once* and reuse the
-        // result for both calibration recording and dominant-language
-        // detection. Previously each helper scanned the chunks independently,
-        // issuing a `get_chunk_language` query per chunk twice over.
-        let language_by_chunk = self.languages_for_chunks(&similar_chunks);
+        // Every candidate with its file's path and language, in one query:
+        // the language feeds calibration and the dominant-language
+        // thresholds, the path the results. One lookup per chunk here (then
+        // per file, then per file's symbols) made a `limit 100` search ~500
+        // round-trips on the shared connection.
+        let chunk_ids: Vec<i64> = similar_chunks.iter().map(|(id, _)| *id).collect();
+        let hits = self.store.get_chunk_hits(&chunk_ids)?;
+        let language_by_chunk: std::collections::HashMap<i64, Option<String>> = hits
+            .iter()
+            .map(|hit| (hit.id, hit.language.clone()))
+            .collect();
 
         // Collect distance observations for ML calibration
         self.collect_distance_observations(query_text, &similar_chunks, &language_by_chunk);
@@ -199,54 +205,38 @@ impl RetrievalEngine {
         );
 
         // Filter by distance threshold
-        let filtered_results: Vec<(i64, f32)> = similar_chunks
+        let distance_map: std::collections::HashMap<i64, f32> = similar_chunks
             .into_iter()
             .filter(|(_, distance)| *distance < max_distance)
             .collect();
+        let hits: Vec<_> = hits
+            .into_iter()
+            .filter(|hit| distance_map.contains_key(&hit.id))
+            .collect();
 
-        if filtered_results.is_empty() {
+        if hits.is_empty() {
             debug!("No chunks passed distance threshold");
             return Ok(Vec::new());
         }
 
-        // Fetch the actual chunk records
-        let chunk_ids: Vec<i64> = filtered_results.iter().map(|(id, _)| *id).collect();
-        let chunks = self.store.get_chunks_by_ids(&chunk_ids)?;
-
-        // Create a map from chunk_id to distance for scoring
-        let distance_map: std::collections::HashMap<i64, f32> =
-            filtered_results.into_iter().collect();
-
-        // Pre-fetch symbols for all the unique files we touch so we can attach
-        // a `kind` to each result without a per-chunk query.
-        let unique_file_ids: std::collections::HashSet<i64> =
-            chunks.iter().map(|c| c.file_id).collect();
-        let mut kinds_by_file: std::collections::HashMap<
-            i64,
-            std::collections::HashMap<String, String>,
-        > = std::collections::HashMap::new();
-        for fid in unique_file_ids {
-            match self.store.get_symbols_by_file(fid) {
-                Ok(syms) => {
-                    let mut map = std::collections::HashMap::new();
-                    for s in syms {
-                        // Last write wins on duplicate names; good enough for
-                        // labelling and avoids holding a Vec of kinds per name.
-                        map.insert(s.name, s.kind);
-                    }
-                    kinds_by_file.insert(fid, map);
-                }
-                Err(e) => {
-                    // Non-fatal: results just lose their `symbol_kind` label
-                    // (the old behavior). But surface it — a recurring DB
-                    // error here usually means the connection is wedged.
-                    warn!(file_id = fid, error = %e, "failed to fetch symbols for kind lookup");
-                }
+        // Symbol kinds of every file touched, in one query, to label each
+        // result with the kind of its first symbol.
+        let mut file_ids: Vec<i64> = hits.iter().map(|hit| hit.file_id).collect();
+        file_ids.sort_unstable();
+        file_ids.dedup();
+        let kinds_by_file = match self.store.get_symbol_kinds_by_files(&file_ids) {
+            Ok(kinds) => kinds,
+            Err(e) => {
+                // Non-fatal: results just lose their `symbol_kind` label. But
+                // surface it: a recurring DB error here usually means the
+                // connection is wedged.
+                warn!(error = %e, "failed to fetch symbols for kind lookup");
+                Default::default()
             }
-        }
+        };
 
         // Convert to SearchResults
-        let results: Vec<SearchResult> = chunks
+        let results: Vec<SearchResult> = hits
             .into_iter()
             .filter_map(|chunk| {
                 let distance = *distance_map.get(&chunk.id)?;
@@ -256,9 +246,9 @@ impl RetrievalEngine {
                     return None;
                 }
 
-                let file_path = self.store.get_chunk_file_path(chunk.file_id).ok()??;
-
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
+                if let Some(ext) = Path::new(&chunk.file_path)
+                    .extension()
+                    .and_then(|e| e.to_str())
                     && !options.accepts_extension(ext)
                 {
                     return None;
@@ -273,10 +263,10 @@ impl RetrievalEngine {
                 Some(
                     SearchResult::new(
                         SearchResultKind::SemanticMatch,
-                        file_path,
+                        chunk.file_path,
                         chunk.start_line as usize,
                         chunk.end_line as usize,
-                        chunk.content.clone(),
+                        chunk.content,
                         score,
                     )
                     .with_metadata(SearchResultMetadata {
@@ -297,29 +287,10 @@ impl RetrievalEngine {
         Ok(results)
     }
 
-    /// Resolve the language of each unique chunk in `results` with a single
-    /// lookup per chunk.
-    ///
-    /// Both `collect_distance_observations` and `detect_dominant_language`
-    /// need the per-chunk language; building this map once and sharing it
-    /// avoids querying every chunk twice (once per helper) per search.
-    pub(crate) fn languages_for_chunks(
-        &self,
-        results: &[(i64, f32)],
-    ) -> std::collections::HashMap<i64, Option<String>> {
-        let mut map: std::collections::HashMap<i64, Option<String>> =
-            std::collections::HashMap::with_capacity(results.len());
-        for (chunk_id, _) in results {
-            map.entry(*chunk_id)
-                .or_insert_with(|| self.store.get_chunk_language(*chunk_id).ok().flatten());
-        }
-        map
-    }
-
     /// Collect distance observations for ML calibration.
     ///
-    /// `language_by_chunk` is the shared, pre-resolved language map (see
-    /// [`languages_for_chunks`]) so no DB lookups happen here.
+    /// `language_by_chunk` is the language of each candidate chunk, resolved
+    /// with the chunks themselves, so no DB lookups happen here.
     pub(crate) fn collect_distance_observations(
         &self,
         query: &str,
@@ -349,7 +320,7 @@ impl RetrievalEngine {
     }
 
     /// Detect the dominant programming language from search results using the
-    /// shared, pre-resolved language map (see [`languages_for_chunks`]).
+    /// pre-resolved language map of the candidate chunks.
     pub(crate) fn detect_dominant_language(
         &self,
         results: &[(i64, f32)],
