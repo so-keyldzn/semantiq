@@ -8,13 +8,11 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
-use ignore::WalkBuilder;
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
 use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
 use semantiq_index::{
-    AutoIndexer, EmbeddingProgress, IndexStore, embed_pending, should_exclude_entry,
-    should_exclude_path,
+    AutoIndexer, EmbeddingProgress, IndexStore, embed_pending, project_walker, should_exclude_path,
 };
 use semantiq_mcp::server::{
     CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
@@ -460,20 +458,7 @@ fn refresh(store: &Arc<IndexStore>, db_path: &Path, root: &Path) -> Result<()> {
 fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
     let mut vanished: HashSet<String> = store.list_file_paths()?.into_iter().collect();
 
-    let walker = WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .filter_entry(|entry| {
-            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                return !should_exclude_entry(&entry.file_name().to_string_lossy());
-            }
-            true
-        })
-        .build();
-
-    for entry in walker.flatten() {
+    for entry in project_walker(root).build().flatten() {
         if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
             continue;
         }

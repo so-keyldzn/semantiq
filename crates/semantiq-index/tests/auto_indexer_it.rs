@@ -285,3 +285,84 @@ fn initial_index_records_root_and_refuses_to_prune_from_a_wrong_root() {
         Some(root.canonicalize().unwrap())
     );
 }
+
+// ---------------------------------------------------------------------------
+// Walk rules: hidden directories, `.gitignore`, walk errors (#65, #36, #53).
+// ---------------------------------------------------------------------------
+
+/// A project with hidden tooling directories, excluded directories and a
+/// `.gitignore`. `.gitignore` is only honoured inside a git repository, so
+/// `.git` exists (an empty directory is enough for the `ignore` crate).
+fn build_hidden_dirs_project(root: &Path) {
+    build_toy_project(root);
+    fs::create_dir_all(root.join(".git")).unwrap();
+    write_file(root, ".gitignore", "generated/\n*.min.js\n");
+    write_file(
+        root,
+        ".storybook/main.ts",
+        "export function storybookMain(): number { return 1; }\n",
+    );
+    write_file(
+        root,
+        ".github/workflows/ci.yml",
+        "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+    );
+    write_file(root, ".vscode/tasks.json", "{\"version\": \"2.0.0\"}\n");
+    write_file(root, ".eslintrc.json", "{\"root\": true}\n");
+    write_file(
+        root,
+        "generated/schema.ts",
+        "export function generatedSchema(): number { return 2; }\n",
+    );
+    write_file(root, "app.min.js", "function minified(){return 3}\n");
+    write_file(root, ".idea/workspace.xml", "<project/>\n");
+    write_file(
+        root,
+        ".cache/stale.ts",
+        "export function cachedThing(): number { return 4; }\n",
+    );
+    write_file(root, "node_modules/dep/index.js", "module.exports = 1;\n");
+}
+
+#[test]
+fn hidden_tooling_dirs_are_indexed_and_excluded_dirs_are_not() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_hidden_dirs_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+
+    let mut indexed = store.list_file_paths().unwrap();
+    indexed.sort();
+    assert_eq!(
+        indexed,
+        [
+            ".eslintrc.json",
+            ".github/workflows/ci.yml",
+            ".storybook/main.ts",
+            ".vscode/tasks.json",
+            "src/lib.rs",
+            "src/util.rs",
+        ],
+        "hidden tooling directories are indexed; .gitignore, VCS, cache, IDE \
+         and dependency directories are not"
+    );
+    assert!(
+        !store
+            .find_symbol_by_name("storybookMain")
+            .unwrap()
+            .is_empty(),
+        "a function in .storybook must be a symbol"
+    );
+    assert!(
+        store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.find_symbol_by_name("cachedThing").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}

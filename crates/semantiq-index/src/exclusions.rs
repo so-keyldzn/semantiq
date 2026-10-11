@@ -1,8 +1,13 @@
 //! File exclusion logic for indexing
 //!
 //! This module provides common exclusion patterns for files and directories
-//! that should not be indexed (hidden dirs, dependencies, large files, etc.)
+//! that should not be indexed (VCS state, dependencies, caches, build output,
+//! Semantiq's own files, large files) and the one [`WalkBuilder`]
+//! configuration every walk of a project uses, so that the initial index, the
+//! query-side staleness check, the text search and the watcher agree on what
+//! belongs to the project.
 
+use ignore::{DirEntry, WalkBuilder};
 use semantiq_parser::Language;
 use std::path::Path;
 
@@ -31,50 +36,102 @@ pub fn exceeds_indexed_size(path: &Path, size: u64) -> bool {
     size > max_indexed_size(path)
 }
 
-/// Directories to exclude from indexing
+/// Directory (and file) names excluded from indexing wherever they appear.
+///
+/// Hidden directories are NOT excluded as such: `.github`, `.storybook`,
+/// `.vscode`, `.config`, `.husky`, `.changeset`, `.devcontainer`, `.claude`...
+/// hold real source and configuration and follow the project's `.gitignore`
+/// like any other directory. What is excluded by name is what never holds
+/// project source: VCS state, dependency trees, build output, tool caches and
+/// IDE state. Semantiq's own files (`.semantiq.db*`) are excluded by prefix,
+/// see [`should_exclude_entry`].
 pub const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    "vendor",
-    ".next",
-    "__pycache__",
-    "venv",
-    ".venv",
-    "coverage",
-    ".nyc_output",
+    // Version control
     ".git",
     ".hg",
     ".svn",
+    ".jj",
+    // Dependencies
+    "node_modules",
+    "bower_components",
+    "jspm_packages",
+    "vendor",
+    "venv",
+    ".venv",
+    ".yarn",
+    ".pnp.cjs",
+    ".pnpm-store",
+    ".bundle",
+    ".npm",
+    ".m2",
+    ".gem",
+    ".gradle",
+    ".stack-work",
+    ".dart_tool",
+    ".terraform",
+    // Build output
+    "target",
+    "dist",
+    "build",
     "out",
-    ".output",
+    "coverage",
+    ".next",
     ".nuxt",
+    ".output",
+    ".svelte-kit",
+    ".angular",
+    ".astro",
+    ".docusaurus",
+    ".expo",
+    ".open-next",
+    ".serverless",
+    ".vercel",
+    ".netlify",
+    ".firebase",
+    ".wrangler",
+    ".eggs",
+    // Caches
+    "__pycache__",
     ".cache",
     ".parcel-cache",
     ".turbo",
+    ".nx",
+    ".nyc_output",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".sass-cache",
+    ".ccls-cache",
+    ".clangd",
+    ".metals",
+    ".bloop",
+    ".bsp",
+    ".direnv",
+    ".devenv",
+    ".ipynb_checkpoints",
+    // IDE state
+    ".idea",
+    ".vs",
+    ".vscode-test",
+    ".history",
 ];
+
+/// Prefix of Semantiq's own files next to the project (`.semantiq.db`,
+/// `.semantiq.db-wal`, `.semantiq.db-shm`), never indexed and never watched.
+const SEMANTIQ_PREFIX: &str = ".semantiq";
 
 /// Check if a path should be excluded from indexing
 ///
-/// Returns true if:
-/// - Any component of the path starts with '.' (hidden directory)
-/// - Any component matches an excluded directory name
+/// Returns true if any component of the path is an excluded name (see
+/// [`should_exclude_entry`]). Evaluated on paths relative to the project
+/// root: a project living under `~/.cache/x` is not excluded as a whole.
 pub fn should_exclude_path(path: &Path) -> bool {
-    for component in path.components() {
-        if let std::path::Component::Normal(name) = component {
-            let name_str = name.to_string_lossy();
-            // Hidden directory (starts with .)
-            if name_str.starts_with('.') {
-                return true;
-            }
-            // Excluded directory
-            if EXCLUDED_DIRS.contains(&name_str.as_ref()) {
-                return true;
-            }
-        }
-    }
-    false
+    path.components().any(|component| match component {
+        std::path::Component::Normal(name) => should_exclude_entry(&name.to_string_lossy()),
+        _ => false,
+    })
 }
 
 /// Check if a file should be excluded based on its size (see [`max_indexed_size`])
@@ -92,10 +149,44 @@ pub fn should_exclude(path: &Path) -> bool {
 
 /// Check if a directory entry name should be excluded (for WalkBuilder filter).
 ///
-/// Returns true if the name matches an excluded directory or starts with '.'
-/// (hidden directory). This is consistent with `should_exclude_path` behavior.
+/// Returns true for the names in [`EXCLUDED_DIRS`] and for Semantiq's own
+/// files (`.semantiq*`). Other hidden names are kept: `.github/workflows`,
+/// `.storybook/main.ts` or `.eslintrc.json` are project source and follow
+/// `.gitignore` like everything else.
 pub fn should_exclude_entry(name: &str) -> bool {
-    name.starts_with('.') || EXCLUDED_DIRS.contains(&name)
+    name.starts_with(SEMANTIQ_PREFIX) || EXCLUDED_DIRS.contains(&name)
+}
+
+/// Whether a walked entry is excluded by name ([`should_exclude_entry`]).
+/// The root of the walk (depth 0) is never excluded: the project itself may
+/// be named `build` or live under `.cache`.
+pub fn should_exclude_dir_entry(entry: &DirEntry) -> bool {
+    entry.depth() > 0 && should_exclude_entry(&entry.file_name().to_string_lossy())
+}
+
+/// The walk every indexing path uses for `root`: hidden entries included,
+/// `.gitignore`, the global git excludes and `.git/info/exclude` honoured,
+/// excluded names ([`should_exclude_dir_entry`]) pruned. Symlinks are not
+/// followed. Build with `.build()`, or chain further settings first.
+pub fn project_walker(root: &Path) -> WalkBuilder {
+    project_walker_with(root, |_| true)
+}
+
+/// [`project_walker`] with an additional predicate: an entry is walked only
+/// when it is not excluded and `keep` accepts it (a directory `keep` rejects
+/// is not descended into).
+pub fn project_walker_with<F>(root: &Path, keep: F) -> WalkBuilder
+where
+    F: Fn(&DirEntry) -> bool + Send + Sync + 'static,
+{
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .filter_entry(move |entry| !should_exclude_dir_entry(entry) && keep(entry));
+    builder
 }
 
 #[cfg(test)]
@@ -116,10 +207,33 @@ mod tests {
     }
 
     #[test]
-    fn test_should_exclude_hidden_dirs() {
+    fn test_should_exclude_vcs_cache_and_semantiq_dirs() {
         assert!(should_exclude_path(Path::new(".git/config")));
-        assert!(should_exclude_path(Path::new(".claude/settings.json")));
-        assert!(should_exclude_path(Path::new("src/.hidden/file.rs")));
+        assert!(should_exclude_path(Path::new(".jj/repo/store")));
+        assert!(should_exclude_path(Path::new("src/.cache/file.rs")));
+        assert!(should_exclude_path(Path::new(".idea/workspace.xml")));
+        assert!(should_exclude_path(Path::new(".venv/lib/python3/site.py")));
+        assert!(should_exclude_path(Path::new(".semantiq.db")));
+        assert!(should_exclude_path(Path::new(".semantiq.db-wal")));
+        assert!(should_exclude_path(Path::new(".semantiq/cache.json")));
+    }
+
+    #[test]
+    fn test_hidden_tooling_dirs_are_indexed() {
+        for path in [
+            ".storybook/main.ts",
+            ".github/workflows/ci.yml",
+            ".github/scripts/release.sh",
+            ".vscode/tasks.json",
+            ".config/vite.config.ts",
+            ".husky/pre-commit.sh",
+            ".changeset/config.json",
+            ".devcontainer/devcontainer.json",
+            ".claude/settings.json",
+            ".eslintrc.json",
+        ] {
+            assert!(!should_exclude_path(Path::new(path)), "{path}");
+        }
     }
 
     #[test]
@@ -145,9 +259,65 @@ mod tests {
         assert!(should_exclude_entry("node_modules"));
         assert!(should_exclude_entry("target"));
         assert!(should_exclude_entry(".git"));
-        assert!(should_exclude_entry(".env"));
-        assert!(should_exclude_entry(".secrets"));
+        assert!(should_exclude_entry(".semantiq.db"));
+        assert!(should_exclude_entry(".semantiq.db-shm"));
+        assert!(should_exclude_entry(".mypy_cache"));
         assert!(!should_exclude_entry("src"));
         assert!(!should_exclude_entry("lib"));
+        assert!(!should_exclude_entry(".github"));
+        assert!(!should_exclude_entry(".storybook"));
+        assert!(!should_exclude_entry(".env"));
+    }
+
+    /// The shared walk: hidden tooling directories are walked, excluded names
+    /// and `.gitignore`d paths are not, and the root is never excluded by its
+    /// own name.
+    #[test]
+    fn test_project_walker_rules() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // The project itself is named like an excluded directory.
+        let root = tmp.path().join("build");
+        for (rel, content) in [
+            ("src/main.rs", "fn main() {}"),
+            (".github/workflows/ci.yml", "on: push"),
+            (".storybook/main.ts", "export const framework = 'x';"),
+            (".vscode/settings.json", "{}"),
+            ("node_modules/x/index.js", "x"),
+            (".idea/workspace.xml", "<x/>"),
+            (".semantiq.db", "sqlite"),
+            ("generated/schema.ts", "export type S = 1;"),
+            (".gitignore", "generated/\n"),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        // `.gitignore` is only honoured inside a git repository.
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+
+        let mut walked: Vec<String> = project_walker(&root)
+            .build()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        walked.sort();
+        assert_eq!(
+            walked,
+            [
+                ".github/workflows/ci.yml",
+                ".gitignore",
+                ".storybook/main.ts",
+                ".vscode/settings.json",
+                "src/main.rs",
+            ]
+        );
     }
 }

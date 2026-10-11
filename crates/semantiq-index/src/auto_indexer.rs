@@ -1,9 +1,9 @@
 use crate::IndexStore;
-use crate::exclusions::{is_file_too_large, should_exclude_entry, should_exclude_path};
+use crate::exclusions::{is_file_too_large, project_walker, should_exclude_path};
+use crate::paths::to_relative_string;
 use crate::store::DependencyInsert;
 use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::{Result, bail};
-use ignore::WalkBuilder;
 use semantiq_parser::{
     ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
     ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_local_import,
@@ -103,23 +103,8 @@ impl AutoIndexer {
         let mut result = InitialIndexResult::default();
         let mut seen_paths = std::collections::HashSet::new();
 
-        // Use ignore crate to walk directory respecting .gitignore
-        let walker = WalkBuilder::new(&self.project_root)
-            .hidden(true) // Skip hidden files by default
-            .git_ignore(true) // Respect .gitignore
-            .git_global(true) // Respect global gitignore
-            .git_exclude(true) // Respect .git/info/exclude
-            .filter_entry(|entry| {
-                // Skip excluded directories
-                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                    let name = entry.file_name().to_string_lossy();
-                    return !should_exclude_entry(&name);
-                }
-                true
-            })
-            .build();
-
-        for entry in walker.flatten() {
+        // The project walk: `.gitignore` and excluded names (`exclusions.rs`).
+        for entry in project_walker(&self.project_root).build().flatten() {
             // Skip directories
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
                 continue;
@@ -134,7 +119,7 @@ impl AutoIndexer {
             }
 
             // Get relative path (warns if `path` falls outside project_root).
-            let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+            let rel_path = to_relative_string(path, &self.project_root);
             seen_paths.insert(rel_path.clone());
 
             // Files above their size limit are never indexed. Drop a row left
@@ -295,17 +280,17 @@ impl AutoIndexer {
     /// unchanged since last index).
     fn index_file(&self, path: &Path, force: bool) -> Result<bool> {
         // Get relative path (warns if `path` falls outside the project root).
-        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+        let rel_path = to_relative_string(path, &self.project_root);
 
-        // Skip excluded paths (hidden dirs, node_modules, large files, etc.).
+        // Skip excluded paths (.git, node_modules, large files, etc.).
         //
-        // The directory-name exclusion (hidden dirs, node_modules, ...) is
+        // The name exclusion (`.git`, `node_modules`, `.semantiq*`, ...) is
         // evaluated against the path RELATIVE to the project root, not the
-        // absolute path. Otherwise a project that simply lives under a hidden or
-        // excluded ancestor (e.g. `~/.config/app`, a CI checkout under `.cache`,
-        // or a `tempfile`-created `.tmpXXXX` dir in tests) would have every one
-        // of its files silently skipped. The file-size check still uses the real
-        // absolute `path` since it needs the on-disk metadata.
+        // absolute path. Otherwise a project that simply lives under an
+        // excluded ancestor (e.g. a CI checkout under `.cache`, a `target`
+        // directory) would have every one of its files silently skipped. The
+        // file-size check still uses the real absolute `path` since it needs
+        // the on-disk metadata.
         if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
             debug!("Skipping excluded path: {}", rel_path);
             // A file that grew past its size limit must not keep its old rows.
@@ -480,7 +465,7 @@ impl AutoIndexer {
 
     /// Remove a file from the index
     fn remove_file(&self, path: &Path) -> Result<()> {
-        let rel_path = crate::paths::to_relative_string(path, &self.project_root);
+        let rel_path = to_relative_string(path, &self.project_root);
 
         self.store.delete_file(&rel_path)?;
         debug!("Removed from index: {}", rel_path);

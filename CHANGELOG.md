@@ -42,6 +42,18 @@ All notable changes to Semantiq will be documented in this file.
   defined in more than 100 files (`new` in a monorepo): their references
   linked every referencing file to every defining file (tens of millions
   of pairs) for a weight already damped to nothing (#45).
+- **Hidden directories are indexed** (#65): `.github/workflows`, `.storybook`,
+  `.vscode`, `.config`, `.husky`, `.changeset`, `.devcontainer`, `.claude`...
+  follow `.gitignore` like any other directory instead of being skipped for
+  their leading dot. What stays excluded by name is what never holds project
+  source: VCS state (`.git`, `.hg`, `.svn`, `.jj`), dependencies
+  (`node_modules`, `vendor`, `.venv`, `.yarn`...), build output (`target`,
+  `dist`, `.next`, `.nuxt`...), caches (`.cache`, `.turbo`, `.mypy_cache`...),
+  IDE state (`.idea`, `.vs`) and Semantiq's own files (`.semantiq*`); the full
+  list is `EXCLUDED_DIRS`. The initial walk, the query refresh check, the text
+  search and the watcher share one walk configuration (`project_walker`).
+  Text search still leaves dot-files out, since it reads files of any
+  extension. `PARSER_VERSION` 17: existing indexes are rebuilt.
 
 ### Fixed
 - Elixir `def` / `defp` / `defmodule` heads are `definition` references instead

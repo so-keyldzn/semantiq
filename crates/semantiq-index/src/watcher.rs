@@ -72,10 +72,11 @@ impl FileWatcher {
                 continue;
             }
 
-            // Skip excluded paths (hidden dirs, node_modules, etc.). Evaluated on
-            // the path relative to the watched root, like `AutoIndexer::index_file`:
-            // a project living under e.g. `~/.config/app` or a `.tmpXXXX` dir
-            // would otherwise have every event dropped.
+            // Skip excluded names (.git, node_modules, .semantiq*, etc.) early,
+            // before the event reaches the indexer, which then also applies the
+            // project's ignore rules. Evaluated on the path relative to the
+            // watched root, like `AutoIndexer::index_file`: a project living
+            // under e.g. `~/.cache/app` would otherwise have every event dropped.
             let rel = watched_roots
                 .iter()
                 .find_map(|root| path.strip_prefix(root).ok())

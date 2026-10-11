@@ -12,7 +12,8 @@ pub use embedder::{
 };
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_DATA_FILE_SIZE, MAX_FILE_SIZE, exceeds_indexed_size, max_indexed_size,
-    should_exclude, should_exclude_entry, should_exclude_path,
+    project_walker, project_walker_with, should_exclude, should_exclude_dir_entry,
+    should_exclude_entry, should_exclude_path,
 };
 pub use schema::{
     CallEdgeRecord, ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord,
