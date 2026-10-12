@@ -8,6 +8,9 @@ The text index (`chunks_fts`, below) is built from the existing chunks the
 first time this version opens an index (a few seconds per 100 MB of source);
 it grows the database by about 2.5× the size of the indexed source text.
 
+Existing indexes are rebuilt on the first run of this version
+(`PARSER_VERSION` 18): the parser fixes below change what is extracted.
+
 ### Changed
 - The text strategy of `search` (and the `refs` fallback for names unknown
   to the syntax index) answers from the index: a trigram FTS5 table over the
@@ -24,6 +27,13 @@ it grows the database by about 2.5× the size of the indexed source text.
   semantic hits whose chunk defines no symbol of the wanted kinds and text
   hits (a line has no kind) are left out, where it used to filter the
   symbol strategy only and let the other hits through (#93).
+- Reference extraction is about 14x faster (808 ms -> 57 ms on this
+  repository's sources, release build) with byte-for-byte identical output:
+  `ReferenceExtractor` reads the context of each identifier from the ancestor
+  stack of its own walk instead of `Node::parent()` (which tree-sitter
+  resolves by descending from the root), and matches node kinds and fields
+  against per-grammar tables of precomputed ids instead of ~32 string
+  comparisons per identifier. Part of #158.
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -120,6 +130,27 @@ it grows the database by about 2.5× the size of the indexed source text.
 - `semantiq calibrate` locates the index like the other commands (`.semantiq.db`
   in the current directory or a parent, or `--database`) instead of asking for
   a second, nested index from a subdirectory (#105).
+- PHP variables (`$helper`, `$this`) are no longer references to the bare
+  name: `refs`, `explain`, `impact`, `dead-code` and the repo map no longer
+  confuse `$helper` with `helper()`; `$this->helper` still counts (#141).
+- Declaration-site names are `definition` references, not usages: Rust enum
+  variants, Java enum constants, Kotlin `enum_entry`, PHP `enum_case`,
+  TypeScript enum members and interface / abstract method signatures.
+  `find_refs` no longer counts them as usages and `dead-code` no longer keeps
+  a homonym alive (#82, #149).
+- PHP `implements` names, including qualified ones (`\JsonSerializable`),
+  are `type` references like `extends` (#149).
+- Calls with type arguments (`f::<T>()`, `s.parse::<u32>()`,
+  `.collect::<Vec<_>>()`, `std::make_unique<T>()`, `obj.get<T>()`) are `call`
+  references with a call edge: `calls`, `impact` (beyond depth 1) and the repo
+  map see them (#80).
+- Ruby `include` / `extend` / `prepend` in a class or module body are
+  `implements` type relations, so `hierarchy` shows the mixins (#152).
+- A Kotlin `interface` preceded by modifiers (`public`, `sealed`, an
+  annotation) extends its supertypes instead of implementing them (#153).
+- The Kotlin parser probes `b5_kotlin_kinds` and `b7_kotlin_parent` assert
+  the extracted kinds and parents instead of printing them (#123).
+
 
 ## [0.12.0] - 2026-10-11
 
