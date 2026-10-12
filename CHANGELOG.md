@@ -36,6 +36,18 @@ confidence of `impact` / `calls` see.
   resolves by descending from the root), and matches node kinds and fields
   against per-grammar tables of precomputed ids instead of ~32 string
   comparisons per identifier. Part of #158.
+- Phase 1 indexing (`semantiq index`, `serve` startup, the query refresh)
+  parses files on `SEMANTIQ_INDEX_THREADS` threads (default: the CPU count,
+  at most 8) and writes each file's row and tables in one transaction with
+  cached statements, one commit per file instead of six; `semantiq index`
+  logs the files/s rate and the thread count (#158).
+- The indexer's walk no longer reads and hashes every file: an indexed file
+  whose mtime did not move since its content was hashed is trusted unchanged
+  (a file modified in the same second as the hash is hashed again, like
+  git's racy index entries), the `files` table is loaded once instead of one
+  query per file, and the query commands run that single walk instead of a
+  hash walk followed by a second one; an up-to-date index is neither written
+  to nor reported on (#157).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -192,6 +204,13 @@ confidence of `impact` / `calls` see.
   (`requirements.push("json")`) or has a receiver is no import. Elixir:
   `alias A.{B, C}` gives one import per leaf instead of the fragment `A.{B`,
   and `alias A.B, as: C` is named `C` (#84).
+
+- `insert_file` upserts the row and returns its id in one statement
+  (`RETURNING`), and a file's symbols, references, call edges, chunks and
+  dependencies are written in the same transaction as its hash: a concurrent
+  prune (`--force`, a newer binary's rebuild) can no longer make `index_file`
+  fail with "Query returned no rows" or leave new rows under the old hash
+  (#89).
 
 ## [0.12.0] - 2026-10-11
 
