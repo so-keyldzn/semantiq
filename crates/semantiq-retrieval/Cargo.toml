@@ -30,4 +30,6 @@ onnx = ["semantiq-embeddings/onnx"]
 # Tests never download the embedding model (see the `test-stub` feature).
 semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"] }
 semantiq-index = { path = "../semantiq-index", features = ["test-support"] }
+# `tests/engine_startup.rs` corrupts chunks_vec from outside the store.
+rusqlite.workspace = true
 tempfile.workspace = true
