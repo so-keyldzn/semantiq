@@ -160,7 +160,7 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 | `SEMANTIQ_MODELS_DIR` | `dirs::data_dir()/semantiq/models` | Directory of the model files; without it and without a data directory (`HOME` / `XDG_DATA_HOME` unset) the load fails with a hint, never falling back to the current directory |
 | `SEMANTIQ_UPDATE_CHECK` | `true` | `"0"` or `"false"` to disable version check |
 | `SEMANTIQ_UPDATE_CACHE_HOURS` | `24` | Hours to cache GitHub version check |
-| `RUST_LOG` | `info,ort=warn` | Tracing filter (`--verbose` sets `debug`) |
+| `RUST_LOG` | `info,ort=warn` (`warn,ort=error` for query commands) | Tracing filter, standard `EnvFilter` syntax; `--verbose` overrides it with `debug` |
 
 ### Testing Patterns
 
