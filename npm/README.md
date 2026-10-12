@@ -10,6 +10,28 @@ Semantiq gives every AI coding assistant semantic understanding of your codebase
 npm install -g semantiq-mcp
 ```
 
+`postinstall` downloads the release binary for this platform from GitHub
+Releases and verifies its SHA-256 checksum. It goes through the proxy npm is
+configured with (`npm config set https-proxy …` / `proxy`, or `HTTPS_PROXY`,
+`https_proxy`, `ALL_PROXY`; `NO_PROXY` / `npm config set noproxy` exempt
+hosts).
+
+### Supported platforms
+
+| `process.platform`-`process.arch` | Binary |
+|---|---|
+| `darwin-arm64` | aarch64-apple-darwin |
+| `darwin-x64` | x86_64-apple-darwin (built without the embedding model, see below) |
+| `linux-arm64` | aarch64-unknown-linux-gnu |
+| `linux-x64` | x86_64-unknown-linux-gnu |
+| `win32-x64` | x86_64-pc-windows-msvc |
+
+The Linux binaries link glibc: on musl (Alpine) the install stops with a clear
+error. Windows on ARM and 32-bit systems are not served either. On those,
+build from source (`cargo install --git https://github.com/so-keyldzn/semantiq.git`)
+or download an archive from the
+[releases page](https://github.com/so-keyldzn/semantiq/releases).
+
 ## Quick Start (10 seconds)
 
 ```bash
@@ -103,7 +125,9 @@ semantiq update                   # self-update to the latest release
 
 The first run downloads the code embedding model (~139 MB, CodeRankEmbed,
 SHA-256 verified). Set `SEMANTIQ_EMBEDDINGS=stub` to skip it (semantic search
-disabled).
+disabled). The macOS Intel binary has no embedding model (ONNX Runtime ships
+no prebuilt library for it): semantic search is disabled there, symbol and
+text search work.
 
 ## Supported Languages
 

@@ -3,16 +3,19 @@
 // Downloads the semantiq release binary for this platform at `npm install`.
 // Keep this file compatible with the Node version `engines` declares in
 // package.json (no fetch, no AbortSignal.timeout). `node --test` covers the
-// download helpers against a local HTTP server: `npm test` in npm/.
+// helpers and the installer against a local HTTP server: `npm test` in npm/.
 
+const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const VERSION = require('../package.json').version;
 const REPO = 'so-keyldzn/semantiq';
+const RELEASE_BASE_URL = `https://github.com/${REPO}/releases/download/v${VERSION}`;
 
 // GitHub answers release-asset downloads with a chain of redirects (302 to
 // objects.githubusercontent.com, 307/308 on some CDN paths).
@@ -26,27 +29,45 @@ const REQUEST_TIMEOUT_MS = 30000;
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 
-function getPlatform() {
-  const platform = process.platform;
-  const arch = process.arch;
+// Release targets by `${process.platform}-${process.arch}`. package.json
+// declares `os` and `cpu` separately, so npm lets win32-arm64 through: the
+// error below is the only check. Linux binaries link glibc: musl (Alpine) is
+// refused here instead of failing at launch.
+const PLATFORMS = {
+  'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
+  'linux-x64': 'x86_64-unknown-linux-gnu',
+  'linux-arm64': 'aarch64-unknown-linux-gnu',
+  'win32-x64': 'x86_64-pc-windows-msvc',
+};
 
-  const platforms = {
-    'darwin-x64': 'x86_64-apple-darwin',
-    'darwin-arm64': 'aarch64-apple-darwin',
-    'linux-x64': 'x86_64-unknown-linux-gnu',
-    'linux-arm64': 'aarch64-unknown-linux-gnu',
-    'win32-x64': 'x86_64-pc-windows-msvc',
-  };
-
-  const key = `${platform}-${arch}`;
-  const target = platforms[key];
-
-  if (!target) {
-    console.error(`Unsupported platform: ${key}`);
-    console.error('Supported platforms:', Object.keys(platforms).join(', '));
-    process.exit(1);
+// The C library of this Node binary on Linux: `glibc`, `musl` or `null` when
+// unknown (`process.report` missing or disabled).
+function detectLibc() {
+  if (process.platform !== 'linux') return null;
+  try {
+    const header = process.report.getReport().header;
+    return header.glibcVersionRuntime ? 'glibc' : 'musl';
+  } catch (_) {
+    return null;
   }
+}
 
+// The release target for a platform, or an Error listing the served ones.
+function getPlatform(platform, arch, libc) {
+  const key = `${platform}-${arch}`;
+  const target = PLATFORMS[key];
+  if (!target) {
+    throw permanent(
+      `Unsupported platform: ${key}\nSupported platforms: ${Object.keys(PLATFORMS).join(', ')}`
+    );
+  }
+  if (platform === 'linux' && libc === 'musl') {
+    throw permanent(
+      `Unsupported platform: ${key} with musl (Alpine): the Linux binaries link glibc.\n` +
+        'Build from source instead: cargo install --git https://github.com/so-keyldzn/semantiq.git'
+    );
+  }
   return { target, isWindows: platform === 'win32' };
 }
 
@@ -67,19 +88,90 @@ class HttpStatusError extends Error {
   }
 }
 
+// The proxy to reach `url` through, read like npm does: npm's own config
+// (`https-proxy`, then `proxy`, exposed to lifecycle scripts as
+// `npm_config_*`), then the usual environment variables. `null` without a
+// proxy or when `no_proxy` / `npm_config_noproxy` lists the host.
+function proxyFor(url, env) {
+  const vars = env || process.env;
+  const host = new URL(url).hostname.toLowerCase();
+  const noProxy = vars.npm_config_noproxy || vars.NO_PROXY || vars.no_proxy || '';
+  for (const raw of noProxy.split(',')) {
+    const entry = raw.trim().toLowerCase().replace(/^\./, '');
+    if (!entry) continue;
+    if (entry === '*' || host === entry || host.endsWith(`.${entry}`)) return null;
+  }
+  const names = [
+    'npm_config_https_proxy',
+    'npm_config_proxy',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'ALL_PROXY',
+    'all_proxy',
+  ];
+  for (const name of names) {
+    if (vars[name]) return vars[name];
+  }
+  return null;
+}
+
+// A `createConnection` for an http(s) request to `url` that tunnels through
+// `proxyUrl` (HTTP CONNECT, Basic proxy credentials from the URL), wrapping
+// the tunnel in TLS for an https target. The request's own idle timeout only
+// starts once it has a socket, so the CONNECT has its own.
+function tunnelThrough(proxyUrl, url, timeoutMs) {
+  const proxy = new URL(proxyUrl);
+  const target = new URL(url);
+  const secure = target.protocol === 'https:';
+  const targetPort = target.port || (secure ? 443 : 80);
+  const headers = { Host: `${target.hostname}:${targetPort}` };
+  if (proxy.username || proxy.password) {
+    const user = decodeURIComponent(proxy.username);
+    const pass = decodeURIComponent(proxy.password);
+    headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+  }
+  const transport = proxy.protocol === 'https:' ? https : http;
+
+  return (_options, callback) => {
+    const connect = transport.request({
+      host: proxy.hostname,
+      port: proxy.port || (proxy.protocol === 'https:' ? 443 : 80),
+      method: 'CONNECT',
+      path: `${target.hostname}:${targetPort}`,
+      headers,
+    });
+    connect.setTimeout(timeoutMs, () => {
+      connect.destroy(new Error(`Timed out after ${timeoutMs / 1000}s connecting to proxy ${proxy.host}`));
+    });
+    connect.on('error', (err) => callback(new Error(`Proxy ${proxy.host}: ${err.message}`)));
+    connect.on('connect', (response, socket) => {
+      if (response.statusCode !== 200) {
+        socket.destroy();
+        callback(permanent(`Proxy ${proxy.host} refused CONNECT to ${target.host}: HTTP ${response.statusCode}`));
+        return;
+      }
+      callback(null, secure ? tls.connect({ socket, servername: target.hostname }) : socket);
+    });
+    connect.end();
+  };
+}
+
 // GET `url` and resolve with the 200 response (a readable stream), following
 // up to MAX_REDIRECTS redirects. Every redirect response is drained so its
-// socket is released. `options.get` replaces `https.get` (tests use `http`)
-// and `options.timeoutMs` the idle timeout.
+// socket is released. `options.get` replaces `https.get` (tests use `http`),
+// `options.timeoutMs` the idle timeout and `options.proxy` the proxy URL
+// (default: `proxyFor(url)`; `false` disables it).
 function getFollowingRedirects(url, options) {
   const opts = options || {};
   const get = opts.get || https.get;
   const timeoutMs = opts.timeoutMs || REQUEST_TIMEOUT_MS;
   const hops = opts.hops || 0;
+  const proxy = opts.proxy === undefined ? proxyFor(url) : opts.proxy;
+  const requestOptions = proxy ? { createConnection: tunnelThrough(proxy, url, timeoutMs) } : {};
 
   return new Promise((resolve, reject) => {
     let finalResponse = null;
-    const request = get(url, (response) => {
+    const request = get(url, requestOptions, (response) => {
       const status = response.statusCode;
 
       if (REDIRECT_STATUSES.includes(status)) {
@@ -94,7 +186,7 @@ function getFollowingRedirects(url, options) {
           return;
         }
         const next = new URL(location, url).toString();
-        resolve(getFollowingRedirects(next, { get, timeoutMs, hops: hops + 1 }));
+        resolve(getFollowingRedirects(next, { get, timeoutMs, proxy, hops: hops + 1 }));
         return;
       }
 
@@ -210,14 +302,31 @@ function parseExpectedSha256(raw, archiveName) {
   return hex;
 }
 
-async function install() {
-  const { target, isWindows } = getPlatform();
+// Extract a verified archive into `dir`. `tar` gets an argv, never a command
+// line: a quote or `$(...)` in the install path is not interpreted by a shell.
+function extractArchive(archivePath, dir) {
+  execFileSync('tar', ['-xzf', archivePath, '-C', dir], { stdio: 'inherit' });
+}
+
+// Download, verify and extract the binary. `options` (tests) override the
+// release URL (`baseUrl`), the install directory (`binDir`), the platform
+// (`platform`, `arch`, `libc`), the transport (`get`, `proxy`) and the log.
+async function install(options) {
+  const opts = options || {};
+  const log = opts.log || ((message) => console.log(message));
+  const { target, isWindows } = getPlatform(
+    opts.platform || process.platform,
+    opts.arch || process.arch,
+    opts.libc === undefined ? detectLibc() : opts.libc
+  );
   const binName = isWindows ? 'semantiq.exe' : 'semantiq';
   const archiveName = `semantiq-v${VERSION}-${target}.tar.gz`;
-  const url = `https://github.com/${REPO}/releases/download/v${VERSION}/${archiveName}`;
+  const url = `${opts.baseUrl || RELEASE_BASE_URL}/${archiveName}`;
   const checksumUrl = `${url}.sha256`;
+  const transport = { get: opts.get, proxy: opts.proxy, timeoutMs: opts.timeoutMs };
+  const retry = { baseDelayMs: opts.retryDelayMs, log: opts.retryLog };
 
-  const binDir = path.join(__dirname, '..', 'bin');
+  const binDir = opts.binDir || path.join(__dirname, '..', 'bin');
   const binPath = path.join(binDir, binName);
   const archivePath = path.join(binDir, archiveName);
 
@@ -232,19 +341,26 @@ async function install() {
     }
   };
 
-  console.log(`Downloading Semantiq v${VERSION} for ${target}...`);
+  log(`Downloading Semantiq v${VERSION} for ${target}...`);
+  if (transport.proxy === undefined) {
+    const proxy = proxyFor(url);
+    if (proxy) log(`Using proxy ${new URL(proxy).host}`);
+  }
 
   try {
-    await withRetry('Download', () => downloadFile(url, archivePath));
+    await withRetry('Download', () => downloadFile(url, archivePath, transport), retry);
 
     // Integrity verification: never extract/execute an unverified binary.
     // The release CI publishes "<archive>.sha256" next to each artifact.
     let expectedSha;
     try {
-      const checksumRaw = await withRetry('Checksum download', () => downloadText(checksumUrl));
+      const checksumRaw = await withRetry(
+        'Checksum download',
+        () => downloadText(checksumUrl, transport),
+        retry
+      );
       expectedSha = parseExpectedSha256(checksumRaw, archiveName);
     } catch (err) {
-      removeArtifacts();
       throw new Error(
         `Could not verify integrity (missing or unreadable ${archiveName}.sha256): ${err.message}`
       );
@@ -252,49 +368,54 @@ async function install() {
 
     const actualSha = sha256File(archivePath);
     if (actualSha !== expectedSha) {
-      removeArtifacts();
       throw new Error(
         `Checksum mismatch for ${archiveName}\n  expected: ${expectedSha}\n  actual:   ${actualSha}`
       );
     }
 
-    console.log('Checksum verified.');
+    log('Checksum verified.');
 
     // Extract (verified archive only)
-    if (isWindows) {
-      execSync(`tar -xzf "${archivePath}" -C "${binDir}"`, { stdio: 'inherit' });
-    } else {
-      execSync(`tar -xzf "${archivePath}" -C "${binDir}"`, { stdio: 'inherit' });
-      fs.chmodSync(binPath, 0o755);
-    }
+    extractArchive(archivePath, binDir);
+    if (!isWindows) fs.chmodSync(binPath, 0o755);
 
     // Cleanup
     fs.unlinkSync(archivePath);
-
-    console.log('Semantiq installed successfully!');
-    console.log('Next: run `semantiq init` in your project (installs the Claude Code skill + MCP server and indexes it),');
-    console.log('or `semantiq init --global` to install the skill for all your projects.');
   } catch (error) {
     removeArtifacts();
-    console.error('Failed to install Semantiq:', error.message);
-    console.error('');
-    console.error('Alternative installation methods:');
-    console.error('  brew install so-keyldzn/tap/semantiq');
-    console.error('  cargo install semantiq');
-    process.exit(1);
+    throw error;
   }
+
+  log('Semantiq installed successfully!');
+  log('Next: run `semantiq init` in your project (installs the Claude Code skill + MCP server and indexes it),');
+  log('or `semantiq init --global` to install the skill for all your projects.');
+  return binPath;
 }
 
 if (require.main === module) {
-  install();
+  install().catch((error) => {
+    console.error('Failed to install Semantiq:', error.message);
+    console.error('');
+    console.error('Alternative installation methods:');
+    console.error(`  download a release archive: https://github.com/${REPO}/releases/tag/v${VERSION}`);
+    console.error(`  build from source: cargo install --git https://github.com/${REPO}.git`);
+    process.exit(1);
+  });
 } else {
   module.exports = {
     MAX_REDIRECTS,
+    PLATFORMS,
     HttpStatusError,
+    detectLibc,
+    getPlatform,
+    proxyFor,
+    tunnelThrough,
     getFollowingRedirects,
     downloadFile,
     downloadText,
     withRetry,
     parseExpectedSha256,
+    extractArchive,
+    install,
   };
 }
