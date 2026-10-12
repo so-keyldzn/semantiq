@@ -57,6 +57,8 @@ impl SemantiqServer {
 
         // Check if parser version changed and prepare for full reindex if needed
         let _ = store.check_and_prepare_for_reindex()?;
+        // Once per server, not per CLI command (#164).
+        store.warn_on_vector_integrity_loss();
 
         let engine = Arc::new(RetrievalEngine::new(Arc::clone(&store), project_root));
 

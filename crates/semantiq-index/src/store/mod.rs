@@ -14,7 +14,7 @@ mod structure;
 mod symbols;
 mod text;
 
-use crate::schema::{init_schema, migrate_schema};
+use crate::schema::{EmbeddingSpace, init_schema, migrate_schema, reconcile_embedding_space};
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, ffi::sqlite3_auto_extension};
 use sqlite_vec::sqlite3_vec_init;
@@ -111,8 +111,15 @@ impl IndexStore {
              PRAGMA foreign_keys=ON;
              PRAGMA busy_timeout=5000;",
         )?;
+        // The read queries go through `prepare_cached` (one SQL compile per
+        // statement text instead of one per call, #165); rusqlite's default
+        // of 16 slots is below the number of distinct statements.
+        conn.set_prepared_statement_cache_capacity(Self::STATEMENT_CACHE_CAPACITY);
         Ok(())
     }
+
+    /// Prepared statements kept per connection (see `apply_pragmas`).
+    const STATEMENT_CACHE_CAPACITY: usize = 64;
 
     /// Open or create an index database at the given path.
     pub fn open(path: &Path) -> Result<Self> {
@@ -204,6 +211,65 @@ impl IndexStore {
             )
             .map_err(Into::into)
         })
+    }
+
+    /// Make sure the stored vectors come from the model this process embeds
+    /// with, before phase 2 writes any (see [`EmbeddingSpace`]).
+    ///
+    /// On a mismatch a real model drops the other model's vectors and marks
+    /// every chunk pending; the stub leaves a real model's vectors alone and
+    /// gets [`EmbeddingSpace::Foreign`], which tells phase 2 to write nothing.
+    /// The structural index is never touched (#86). Called by the phase 2
+    /// writers (`embed_pending`), not at open: a command that does not embed
+    /// (`stats`, `refs`, a stub `search`) has no business rewriting vectors.
+    pub fn prepare_embedding_space(&self) -> Result<EmbeddingSpace> {
+        let is_stub = matches!(
+            semantiq_embeddings::selected_backend(),
+            semantiq_embeddings::EmbeddingBackend::Stub(_)
+        );
+        self.prepare_embedding_space_for(semantiq_embeddings::embedding_model_id(), is_stub)
+    }
+
+    /// [`Self::prepare_embedding_space`] for an explicit model: lets tests
+    /// play both the real-model and the stub side under the stub build.
+    #[doc(hidden)]
+    pub fn prepare_embedding_space_for(
+        &self,
+        model_id: &str,
+        is_stub: bool,
+    ) -> Result<EmbeddingSpace> {
+        self.with_conn(|conn| reconcile_embedding_space(conn, model_id, is_stub))
+    }
+
+    /// Log a warning when `chunks` and `chunks_vec` have lost their
+    /// referential integrity, in either direction.
+    ///
+    /// Two full joins between `chunks` and the vec0 shadow tables: run once
+    /// per long-lived process (`serve` startup), not per CLI command (#164);
+    /// `semantiq stats` is the on-demand diagnostic.
+    pub fn warn_on_vector_integrity_loss(&self) {
+        // Orphan vectors silently dominate the KNN top-k for distant
+        // queries; this log is the canary.
+        match self.count_orphan_chunk_vectors() {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(
+                orphan_chunk_vectors = n,
+                "chunks_vec contains orphan rows (chunk_id not in chunks); \
+                 semantic search may return stale results. Run `semantiq index --force` to repair."
+            ),
+            Err(e) => tracing::warn!("could not count orphan chunk vectors: {e}"),
+        }
+        // The opposite direction: chunks marked embedded without a vector are
+        // skipped by phase 2 and absent from semantic search.
+        match self.count_chunks_missing_vectors() {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(
+                chunks_missing_vectors = n,
+                "chunks have an embedding but no chunks_vec row; they are missing from \
+                 semantic search. Run `semantiq index --force` to repair."
+            ),
+            Err(e) => tracing::warn!("could not count chunks missing vectors: {e}"),
+        }
     }
 
     /// Count rows in `chunks_vec` whose `chunk_id` no longer exists in `chunks`.

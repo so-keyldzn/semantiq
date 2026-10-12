@@ -102,15 +102,29 @@ impl IndexStore {
         limit: usize,
     ) -> Result<Vec<CallEdgeRecord>> {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
-        let (priority, params) =
+        let priority =
             super::references::near_files_priority("e.file_id", callee, safe_limit, near_files);
-        self.query_call_edges("e.callee = ?1", &priority, params)
+        self.query_call_edges(
+            &priority.with_clause,
+            "e.callee = ?1",
+            &priority.order_expr,
+            priority.params,
+        )
     }
 
     /// Calls made from inside any function/method named `caller`.
     pub fn find_callees(&self, caller: &str, limit: usize) -> Result<Vec<CallEdgeRecord>> {
         self.find_callees_from(caller, &[], limit)
     }
+
+    /// Definition sites per `find_callees_from` query. The sites go into a
+    /// row-value `IN (VALUES …)` list, flat however long (an `OR` chain of
+    /// `(file_id = ? AND caller_line = ?)` terms nests one level per site and
+    /// hits `SQLITE_MAX_EXPR_DEPTH` at 1000: `calls new` failed on any repo
+    /// with ≳1000 definitions of a name, #155), so only the parameter limit
+    /// (32766, two per site) bounds it; 4000 keeps each statement small and
+    /// the batches are merged in Rust.
+    pub(super) const CALLEE_SITES_PER_QUERY: usize = 4000;
 
     /// Calls made from inside the functions/methods named `caller` declared
     /// at the given `(file_id, line)` sites; from any of them when `sites`
@@ -123,46 +137,76 @@ impl IndexStore {
         limit: usize,
     ) -> Result<Vec<CallEdgeRecord>> {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
-            vec![Box::new(caller.to_string()), Box::new(safe_limit as i64)];
-        let mut filter = "e.caller = ?1".to_string();
-        if !sites.is_empty() {
-            let pairs: Vec<String> = sites
+        if sites.is_empty() {
+            let params: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(caller.to_string()), Box::new(safe_limit as i64)];
+            return self.query_call_edges("", "e.caller = ?1", "NULL", params);
+        }
+
+        let mut records = Vec::new();
+        for batch in sites.chunks(Self::CALLEE_SITES_PER_QUERY) {
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(caller.to_string()), Box::new(safe_limit as i64)];
+            let rows: Vec<String> = batch
                 .iter()
                 .enumerate()
-                .map(|(i, _)| {
-                    format!(
-                        "(e.file_id = ?{} AND e.caller_line = ?{})",
-                        2 * i + 3,
-                        2 * i + 4
-                    )
-                })
+                .map(|(i, _)| format!("(?{}, ?{})", 2 * i + 3, 2 * i + 4))
                 .collect();
-            filter.push_str(&format!(" AND ({})", pairs.join(" OR ")));
-            for (file_id, line) in sites {
+            for (file_id, line) in batch {
                 params.push(Box::new(*file_id));
                 params.push(Box::new(*line));
             }
+            let filter = format!(
+                "e.caller = ?1 AND (e.file_id, e.caller_line) IN (VALUES {})",
+                rows.join(", ")
+            );
+            records.extend(self.query_call_edges("", &filter, "NULL", params)?);
         }
-        self.query_call_edges(&filter, "NULL", params)
+        if sites.len() > Self::CALLEE_SITES_PER_QUERY {
+            // Several batches, each capped on its own: restore the global
+            // order and cap.
+            records.sort_by(|a, b| {
+                (a.file_path.as_str(), a.line, a.callee.as_str()).cmp(&(
+                    b.file_path.as_str(),
+                    b.line,
+                    b.callee.as_str(),
+                ))
+            });
+            records.truncate(safe_limit);
+        }
+        Ok(records)
     }
 
-    /// `?1` = name, `?2` = limit in both `filter` and `priority`.
+    /// `?1` = name, `?2` = limit in `with_clause`, `filter` and `priority`.
     fn query_call_edges(
         &self,
+        with_clause: &str,
         filter: &str,
         priority: &str,
         params: Vec<Box<dyn rusqlite::ToSql>>,
     ) -> Result<Vec<CallEdgeRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT e.file_id, f.path, e.line, e.callee, e.caller, e.caller_line, e.count
+            let sql = format!(
+                "{with_clause}
+                 SELECT e.file_id, f.path, e.line, e.callee, e.caller, e.caller_line, e.count
                  FROM call_edges e
                  JOIN files f ON f.id = e.file_id
                  WHERE {filter}
                  ORDER BY {priority}, f.path, e.line
                  LIMIT ?2"
-            ))?;
+            );
+            // The SQL text varies with the hint and site lists (extra
+            // parameters); only the plain `find_callers` / `find_callees`
+            // forms are worth a slot in the statement cache.
+            let mut cached;
+            let mut plain;
+            let stmt: &mut rusqlite::Statement<'_> = if params.len() == 2 {
+                cached = conn.prepare_cached(&sql)?;
+                &mut cached
+            } else {
+                plain = conn.prepare(&sql)?;
+                &mut plain
+            };
             let records = stmt
                 .query_map(rusqlite::params_from_iter(params), |row| {
                     Ok(CallEdgeRecord {
@@ -197,7 +241,7 @@ impl IndexStore {
     /// Every type relation declared in a file, ordered by line.
     pub fn get_type_relations_by_file(&self, file_id: i64) -> Result<Vec<TypeRelationRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT t.file_id, f.path, t.line, t.end_line, t.type_name, t.super_name, t.kind
                  FROM type_relations t
                  JOIN files f ON f.id = t.file_id
@@ -219,7 +263,7 @@ impl IndexStore {
     ) -> Result<Vec<TypeRelationRecord>> {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(&format!(
+            let mut stmt = conn.prepare_cached(&format!(
                 "SELECT t.file_id, f.path, t.line, t.end_line, t.type_name, t.super_name, t.kind
                  FROM type_relations t
                  JOIN files f ON f.id = t.file_id
@@ -248,7 +292,7 @@ impl IndexStore {
     ) -> Result<Vec<UnreferencedSymbol>> {
         let safe_limit = limit.min(Self::MAX_STRUCTURE_LIMIT);
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(&format!(
+            let mut stmt = conn.prepare_cached(&format!(
                 "SELECT s.id, s.file_id, s.name, s.kind, s.start_line, s.end_line,
                         s.signature, s.doc_comment, s.parent,
                         f.path, f.language
@@ -261,21 +305,29 @@ impl IndexStore {
                    AND (?2 IS NULL OR f.language = ?2)
                    AND NOT EXISTS (
                        SELECT 1 FROM refs r
-                        WHERE r.name = s.name
-                          AND r.kind != 'definition'
+                        WHERE r.name_id = (SELECT n.id FROM names n WHERE n.name = s.name)
+                          AND r.kind != ?4
                           AND NOT (r.file_id = s.file_id
                                    AND r.line BETWEEN s.start_line AND s.end_line))
                  ORDER BY f.path, s.start_line
                  LIMIT ?3"
             ))?;
             let records = stmt
-                .query_map(params![path_prefix, language, safe_limit as i64], |row| {
-                    Ok(UnreferencedSymbol {
-                        symbol: symbol_from_row(row)?,
-                        file_path: row.get(9)?,
-                        language: row.get(10)?,
-                    })
-                })?
+                .query_map(
+                    params![
+                        path_prefix,
+                        language,
+                        safe_limit as i64,
+                        super::references::REF_KIND_DEFINITION
+                    ],
+                    |row| {
+                        Ok(UnreferencedSymbol {
+                            symbol: symbol_from_row(row)?,
+                            file_path: row.get(9)?,
+                            language: row.get(10)?,
+                        })
+                    },
+                )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(records)
         })
@@ -418,6 +470,90 @@ mod tests {
         assert_eq!(callees, vec!["target"]);
         // No sites: any function named `new`, capped.
         assert_eq!(store.find_callees_from("new", &[], 5).unwrap().len(), 5);
+    }
+
+    /// Regression for #155: `calls new` on a repository with ≳1000
+    /// definitions of `new` failed with `Expression tree is too large
+    /// (maximum depth 1000)`: the sites were an `OR` chain.
+    #[test]
+    fn test_find_callees_from_accepts_1500_definition_sites() {
+        let store = IndexStore::open_in_memory().unwrap();
+        let file = store.insert_file("big.rs", Some("rust"), "x", 0).unwrap();
+        // One `new` per 10 lines, each calling `helper` on the next line.
+        let calls: Vec<CallEdge> = (0..1500)
+            .map(|i| call("new", 10 * i + 1, "helper", 10 * i + 2))
+            .collect();
+        store
+            .insert_structure(
+                file,
+                &FileStructure {
+                    calls,
+                    relations: vec![],
+                },
+            )
+            .unwrap();
+        let other = store.insert_file("other.rs", Some("rust"), "x", 0).unwrap();
+        store
+            .insert_structure(
+                other,
+                &FileStructure {
+                    calls: vec![call("new", 1, "unrelated", 2)],
+                    relations: vec![],
+                },
+            )
+            .unwrap();
+
+        let sites: Vec<(i64, i64)> = (0..1500).map(|i| (file, 10 * i + 1)).collect();
+        let edges = store.find_callees_from("new", &sites, 10_000).unwrap();
+        assert_eq!(edges.len(), 1500);
+        assert!(edges.iter().all(|e| e.callee == "helper"));
+        // A site that is not in the list is not matched.
+        assert_eq!(
+            store
+                .find_callees_from("new", &sites[..3], 10)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    /// More sites than one statement takes: the batches are merged in path
+    /// and line order and capped once.
+    #[test]
+    fn test_find_callees_from_merges_batches_in_order() {
+        let store = IndexStore::open_in_memory().unwrap();
+        let per_query = IndexStore::CALLEE_SITES_PER_QUERY;
+        let total = per_query * 2 + 10;
+        // Two files so that path order and batch order disagree: the first
+        // batch holds the sites of `b.rs`, the second those of `a.rs`.
+        let b = store.insert_file("b.rs", Some("rust"), "x", 0).unwrap();
+        let a = store.insert_file("a.rs", Some("rust"), "x", 0).unwrap();
+        let mut sites = Vec::with_capacity(total);
+        for (file, name) in [(b, "from_b"), (a, "from_a")] {
+            let calls: Vec<CallEdge> = (0..total / 2)
+                .map(|i| call("new", 2 * i + 1, name, 2 * i + 2))
+                .collect();
+            sites.extend((0..total / 2).map(|i| (file, 2 * i as i64 + 1)));
+            store
+                .insert_structure(
+                    file,
+                    &FileStructure {
+                        calls,
+                        relations: vec![],
+                    },
+                )
+                .unwrap();
+        }
+        assert!(sites.len() > per_query);
+
+        let edges = store.find_callees_from("new", &sites, 7).unwrap();
+        assert_eq!(edges.len(), 7);
+        assert!(edges.iter().all(|e| e.file_path == "a.rs"), "{edges:?}");
+        let lines: Vec<i64> = edges.iter().map(|e| e.line).collect();
+        assert_eq!(lines, vec![2, 4, 6, 8, 10, 12, 14]);
+        // Uncapped, every site is matched exactly once.
+        let all = store.find_callees_from("new", &sites, 10_000).unwrap();
+        assert_eq!(all.len(), total);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 use super::IndexStore;
 use crate::schema::SymbolRecord;
 use anyhow::Result;
+use rusqlite::params;
 
 /// An indexed file, as a node of the code graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +54,7 @@ impl IndexStore {
     pub fn load_repo_graph(&self) -> Result<RepoGraphData> {
         self.with_conn(|conn| {
             let files = conn
-                .prepare("SELECT id, path, language FROM files ORDER BY path")?
+                .prepare_cached("SELECT id, path, language FROM files ORDER BY path")?
                 .query_map([], |row| {
                     Ok(GraphFile {
                         id: row.get(0)?,
@@ -64,7 +65,7 @@ impl IndexStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let symbols = conn
-                .prepare(
+                .prepare_cached(
                     "SELECT id, file_id, name, kind, start_line, end_line,
                             signature, doc_comment, parent
                      FROM symbols
@@ -87,7 +88,7 @@ impl IndexStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let file_edges = conn
-                .prepare(
+                .prepare_cached(
                     "SELECT DISTINCT d.source_file_id, f.id
                      FROM dependencies d
                      JOIN files f ON f.path = d.resolved_path
@@ -96,26 +97,35 @@ impl IndexStore {
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
+            // Kinds come back as their storage code and are ordered by it
+            // (definition, import, call, type, reference), not alphabetically.
             let ref_counts = conn
-                .prepare(
-                    "SELECT r.name, r.file_id, r.kind, SUM(r.count)
+                .prepare_cached(
+                    "SELECT n.name, r.file_id, r.kind, SUM(r.count)
                      FROM refs r
-                     WHERE r.kind != 'definition'
-                       AND r.name IN (SELECT name FROM symbols
+                     JOIN names n ON n.id = r.name_id
+                     WHERE r.kind != ?2
+                       AND n.name IN (SELECT name FROM symbols
                                       WHERE kind != 'import'
                                       GROUP BY name
                                       HAVING COUNT(DISTINCT file_id) <= ?1)
-                     GROUP BY r.name, r.file_id, r.kind
-                     ORDER BY r.name, r.file_id, r.kind",
+                     GROUP BY r.name_id, r.file_id, r.kind
+                     ORDER BY n.name, r.file_id, r.kind",
                 )?
-                .query_map([MAX_NAME_DEFINERS as i64], |row| {
-                    Ok(GraphRefCount {
-                        name: row.get(0)?,
-                        file_id: row.get(1)?,
-                        kind: row.get(2)?,
-                        count: row.get::<_, i64>(3)? as usize,
-                    })
-                })?
+                .query_map(
+                    params![
+                        MAX_NAME_DEFINERS as i64,
+                        super::references::REF_KIND_DEFINITION
+                    ],
+                    |row| {
+                        Ok(GraphRefCount {
+                            name: row.get(0)?,
+                            file_id: row.get(1)?,
+                            kind: super::references::ref_kind_name(row.get(2)?).to_string(),
+                            count: row.get::<_, i64>(3)? as usize,
+                        })
+                    },
+                )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(RepoGraphData {
@@ -128,29 +138,36 @@ impl IndexStore {
     }
 
     /// Cheap fingerprint of the indexed content: changes whenever a file is
-    /// added, removed or reindexed. Symbol and dependency ids come from
-    /// AUTOINCREMENT, so re-extracting a file always moves their maximum.
+    /// added, removed or reindexed. O(1): the `graph_generation` counter is
+    /// bumped by triggers on every `files` write (a file is upserted before
+    /// its symbols, references and imports are written and deleted with
+    /// them), and the symbol / dependency ids come from AUTOINCREMENT, so
+    /// re-extracting a file moves their maximum (a `MAX` on a rowid is one
+    /// B-tree descent). The previous form summed two `files` columns and
+    /// counted `refs` on every unfocused repo map call: 84 ms on a 24k-file
+    /// index, cache hit or not (#165).
+    ///
+    /// A repo map request landing between a file's upsert and its last
+    /// structural write may cache that file's partly written graph; the
+    /// next write to any file refreshes it.
     pub fn graph_fingerprint(&self) -> Result<String> {
         self.with_conn(|conn| {
-            let fingerprint = conn.query_row(
+            let mut stmt = conn.prepare_cached(
                 "SELECT
-                    (SELECT COUNT(*) FROM files),
-                    (SELECT COALESCE(SUM(indexed_at), 0) FROM files),
-                    (SELECT COALESCE(SUM(last_modified), 0) FROM files),
-                    (SELECT COUNT(*) FROM symbols),
+                    COALESCE((SELECT value FROM metadata WHERE key = 'graph_generation'), '0'),
+                    (SELECT COALESCE(MAX(id), 0) FROM files),
                     (SELECT COALESCE(MAX(id), 0) FROM symbols),
-                    (SELECT COUNT(*) FROM dependencies),
-                    (SELECT COALESCE(MAX(id), 0) FROM dependencies),
-                    (SELECT COUNT(*) FROM refs)",
-                [],
-                |row| {
-                    let mut parts = Vec::with_capacity(8);
-                    for i in 0..8 {
-                        parts.push(row.get::<_, i64>(i)?.to_string());
-                    }
-                    Ok(parts.join(":"))
-                },
+                    (SELECT COALESCE(MAX(id), 0) FROM dependencies)",
             )?;
+            let fingerprint = stmt.query_row([], |row| {
+                Ok(format!(
+                    "{}:{}:{}:{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?
+                ))
+            })?;
             Ok(fingerprint)
         })
     }

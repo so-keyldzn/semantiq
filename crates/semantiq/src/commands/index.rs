@@ -9,7 +9,9 @@
 use anyhow::{Context, Result, bail};
 use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
-use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
+use semantiq_index::{
+    AutoIndexer, EmbeddingProgress, EmbeddingSpace, IndexStore, embed_pending, prepare_phase2,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,7 +26,8 @@ pub(crate) enum Phases {
     All,
     /// Structure only (`--no-embeddings`): chunks stay pending for phase 2.
     StructureOnly,
-    /// Embed the pending chunks only (`--embeddings-only`).
+    /// Embed the pending chunks only (`--embeddings-only`); after a format
+    /// change the structure is rebuilt first, since the old one is gone.
     EmbeddingsOnly,
 }
 
@@ -71,10 +74,15 @@ async fn index_with_loader(
     if phases == Phases::EmbeddingsOnly {
         if store.get_stats()?.file_count == 0 {
             bail!(
-                "The index at {} is empty{}: run `semantiq index` first.",
-                db_path.display(),
-                if rebuilt { " (its format changed)" } else { "" }
+                "The index at {} is empty: run `semantiq index` first.",
+                db_path.display()
             );
+        }
+        // The parser bump cleared the structural tables and kept the files:
+        // a run that embeds and leaves says nothing about refs or calls.
+        if rebuilt {
+            info!("Index format changed: rebuilding the structure before the embeddings");
+            index_structure(&store, &project_root)?;
         }
     } else {
         // `--force` rebuilds from scratch, embeddings included.
@@ -149,7 +157,12 @@ fn index_embeddings(
     phases: Phases,
     load_model: impl FnOnce() -> Result<Box<dyn EmbeddingModel>>,
 ) -> Result<()> {
-    let counts = store.embedding_counts()?;
+    // Reconciled before the count: a complete index of another model's
+    // vectors is pending from the first chunk, not "already embedded".
+    let (space, counts) = prepare_phase2(store)?;
+    if matches!(space, EmbeddingSpace::Foreign { .. }) {
+        return Ok(());
+    }
     if counts.pending() == 0 {
         info!("Embeddings: all {} chunks already embedded", counts.total);
         return Ok(());
@@ -427,6 +440,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+    }
+
+    /// `--embeddings-only` after a parser bump: the structure was cleared
+    /// and the files kept, so it is rebuilt before phase 2 instead of being
+    /// left empty with a success exit code; the embeddings are carried over.
+    #[tokio::test]
+    async fn test_embeddings_only_rebuilds_structure_after_parser_bump() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_project(root);
+        let db = root.join("index.db");
+        index(root, Some(db.clone()), false).await.unwrap();
+
+        let store = IndexStore::open(&db).unwrap();
+        let before = store.embedding_counts().unwrap();
+        assert!(before.total > 0 && before.pending() == 0);
+        store.set_metadata("parser_version", "0").unwrap();
+
+        index_with(root, Some(db.clone()), false, Phases::EmbeddingsOnly)
+            .await
+            .unwrap();
+
+        let stats = store.get_stats().unwrap();
+        assert_eq!(stats.file_count, 2);
+        assert!(stats.symbol_count > 0, "structure rebuilt");
+        assert!(!store.find_references_by_name("add", 10).unwrap().is_empty());
+        assert!(!store.needs_full_reindex().unwrap());
+        let after = store.embedding_counts().unwrap();
+        assert_eq!(after.total, before.total);
+        assert_eq!(after.pending(), 0, "embeddings carried over");
+        assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+    }
+
+    /// `--embeddings-only` on a complete index whose vectors do not match the
+    /// running model (here: another dimension) reconciles the vector space
+    /// before trusting "nothing pending", and re-embeds everything.
+    #[tokio::test]
+    async fn test_embeddings_only_reconciles_a_complete_foreign_index() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_project(root);
+        let db = root.join("index.db");
+        index(root, Some(db.clone()), false).await.unwrap();
+
+        let store = IndexStore::open(&db).unwrap();
+        assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+        store.set_metadata("embedding_dim", "1").unwrap();
+
+        index_with(root, Some(db.clone()), false, Phases::EmbeddingsOnly)
+            .await
+            .unwrap();
+
+        // Already reconciled by the run: nothing left to reset.
+        assert!(matches!(
+            store.prepare_embedding_space().unwrap(),
+            EmbeddingSpace::Current
+        ));
+        let counts = store.embedding_counts().unwrap();
+        assert!(counts.total > 0);
+        assert_eq!(counts.pending(), 0);
+        assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
     }
 
     /// `--embeddings-only` on an empty index points at a full index run.

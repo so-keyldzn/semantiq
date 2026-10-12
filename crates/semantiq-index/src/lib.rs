@@ -9,6 +9,7 @@ pub mod watcher;
 pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult, read_error_is_final};
 pub use embedder::{
     BackgroundEmbedder, EmbedResult, EmbedderConfig, EmbeddingProgress, ModelLoader, embed_pending,
+    prepare_phase2,
 };
 pub use exclusions::{
     EXCLUDED_DIRS, MAX_DATA_FILE_SIZE, MAX_FILE_SIZE, WalkFailures, exceeds_indexed_size,
@@ -16,8 +17,8 @@ pub use exclusions::{
     should_exclude_dir_entry, should_exclude_entry, should_exclude_path, walk_error_path,
 };
 pub use schema::{
-    CallEdgeRecord, ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord,
-    TypeRelationRecord, UnreferencedSymbol,
+    CallEdgeRecord, ChunkRecord, DependencyRecord, EmbeddingSpace, FileRecord, ReferenceRecord,
+    SymbolRecord, TypeRelationRecord, UnreferencedSymbol,
 };
 pub use store::{
     CalibrationData, CalibrationRecord, ChunkHit, ChunkTextHit, DependencyInsert, EmbeddingCounts,

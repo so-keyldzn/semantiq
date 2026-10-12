@@ -2209,6 +2209,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "regex",
+ "rusqlite",
  "semantiq-embeddings",
  "semantiq-index",
  "semantiq-parser",

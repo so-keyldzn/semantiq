@@ -23,8 +23,8 @@ ignore.workspace = true
 [features]
 default = []
 # Store accessors that only tests need (`get_chunks_by_file`, `needs_full_reindex`,
-# `set_parser_version`). Enabled by the dev-dependencies of this crate and of
-# semantiq-retrieval, never by a binary.
+# `set_parser_version`, `set_metadata`). Enabled by the dev-dependencies of this
+# crate, of semantiq-retrieval and of semantiq, never by a binary.
 test-support = []
 
 [dev-dependencies]

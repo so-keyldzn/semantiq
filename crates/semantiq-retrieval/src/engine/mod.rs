@@ -17,7 +17,6 @@ use crate::threshold::{CollectorConfig, DistanceCollector, ThresholdConfig};
 use semantiq_embeddings::{EmbeddingModel, ModelSlot, RetryPolicy, create_embedding_model};
 use semantiq_index::IndexStore;
 use std::sync::{Arc, Mutex, RwLock};
-use tracing::warn;
 
 /// Accept a project-relative path argument written with either separator
 /// (`src/a.rs`, `src\\a.rs`, `./src/a.rs`) and return the form the index
@@ -116,37 +115,11 @@ impl RetrievalEngine {
         model_slot: Arc<ModelSlot>,
         enable_collection: bool,
     ) -> Self {
-        // Load calibrated thresholds from database
+        // Load calibrated thresholds from database. The chunks / chunks_vec
+        // integrity canary is not run here: every CLI command builds an
+        // engine and it joined both tables in full each time (#164); `serve`
+        // runs it once at startup (`IndexStore::warn_on_vector_integrity_loss`).
         let threshold_config = Self::load_thresholds_from_store(&store);
-
-        // Surface a warning if the vector index has lost its referential
-        // integrity with the chunks table. Orphan vectors silently dominate
-        // the KNN top-k for distant queries; this log is the canary.
-        //
-        // Note: this acquires the same connection mutex as the AutoIndexer.
-        // The engine is constructed before any background indexing task is
-        // spawned, so contention here is not expected. If that invariant is
-        // ever broken, this call would block on the indexer transaction.
-        match store.count_orphan_chunk_vectors() {
-            Ok(0) => {}
-            Ok(n) => warn!(
-                orphan_chunk_vectors = n,
-                "chunks_vec contains orphan rows (chunk_id not in chunks); \
-                 semantic search may return stale results. Run `semantiq index --force` to repair."
-            ),
-            Err(e) => warn!("could not count orphan chunk vectors: {e}"),
-        }
-        // The opposite direction: chunks marked embedded without a vector are
-        // skipped by phase 2 and absent from semantic search.
-        match store.count_chunks_missing_vectors() {
-            Ok(0) => {}
-            Ok(n) => warn!(
-                chunks_missing_vectors = n,
-                "chunks have an embedding but no chunks_vec row; they are missing from \
-                 semantic search. Run `semantiq index --force` to repair."
-            ),
-            Err(e) => warn!("could not count chunks missing vectors: {e}"),
-        }
 
         // Create distance collector if enabled, initialized with existing count
         let distance_collector = if enable_collection {

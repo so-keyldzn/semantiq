@@ -2,7 +2,12 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 10;
+/// Schema version history (see `migrate_schema_inner` for the steps):
+/// - v11: `names` table and `refs(name_id, kind INTEGER)` (the name text and
+///   the kind text were repeated on every row and in `idx_refs_file_id`),
+///   `idx_files_path` dropped (duplicate of the `UNIQUE` index),
+///   `graph_generation` counter maintained by triggers on `files`.
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Embedding dimension, owned by `semantiq-embeddings` so the vec0 table and
 /// the model can never disagree.
@@ -82,6 +87,28 @@ pub fn migrate_schema_to(conn: &Connection, target: i32) -> Result<()> {
     // next start re-run cleanly (the DELETEs are idempotent) — which works
     // but mixes a half-applied state with the engine's startup canary.
     conn.execute("BEGIN IMMEDIATE", [])?;
+
+    // The version read above was taken without the lock: another process
+    // (`serve` and a CLI command opening the same old index together) may
+    // have migrated and committed while we waited for `BEGIN IMMEDIATE`.
+    // Replaying its `ALTER TABLE … ADD COLUMN` would fail with `duplicate
+    // column name` (#88), so the version is read again under the lock.
+    let stored = match get_stored_schema_version(conn) {
+        Ok(stored) => stored,
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            return Err(e).context("schema migration failed: cannot re-read the schema version");
+        }
+    };
+    if let Err(e) = ensure_schema_not_newer(stored) {
+        let _ = conn.execute("ROLLBACK", []);
+        return Err(e);
+    }
+    if stored == 0 || stored >= target {
+        conn.execute("COMMIT", [])?;
+        return Ok(());
+    }
+
     let result = migrate_schema_inner(conn, stored, target);
     match &result {
         Ok(()) => {
@@ -242,8 +269,31 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
         )?;
     }
 
+    // v10 -> v11: smaller `refs` (#162). The name text was repeated on every
+    // row and again in `idx_refs_file_id` (a secondary index of a WITHOUT
+    // ROWID table carries the whole primary key), and `kind` was a word:
+    // from v11 on, names are interned in `names` and `kind` is a 1-byte
+    // code (`refs(name_id, file_id, line, kind, count)`). The table is
+    // recreated by `init_schema()` in its new shape and refilled by the full
+    // phase 1 that removing `parser_version` triggers (embeddings are kept:
+    // `check_and_prepare_for_reindex` only resets the file hashes). Also
+    // drops `idx_files_path`, a duplicate of the implicit UNIQUE index on
+    // `files.path`: every `files` write maintained two identical B-trees.
+    if stored < 11 && target >= 11 {
+        tracing::info!(
+            "Migrating schema v{} -> v11: compacting refs, dropping idx_files_path",
+            stored
+        );
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_files_path;
+             DROP INDEX IF EXISTS idx_refs_file_id;
+             DROP TABLE IF EXISTS refs;
+             DELETE FROM metadata WHERE key = 'parser_version';",
+        )?;
+    }
+
     // Future migrations go here:
-    // if stored < 11 && target >= 11 { ... }
+    // if stored < 12 && target >= 12 { ... }
 
     // Persist the new schema version so subsequent migrations know which steps
     // have already been applied. Without this, a future v4->v5 migration on a
@@ -256,13 +306,17 @@ fn migrate_schema_inner(conn: &Connection, stored: i32, target: i32) -> SqliteRe
     Ok(())
 }
 
-/// Drop every artifact tied to the current embedding space and force a full
-/// re-index:
+/// The v5 -> v6 step: drop every artifact tied to the MiniLM embedding space
+/// and force a full re-index:
 /// - `chunks_vec` is dropped (recreated by `init_schema` at the current dimension);
 /// - distance observations and calibrated thresholds are cleared, since
 ///   distances from different models are not comparable;
 /// - indexed data is cleared and `parser_version` removed so the next
 ///   `check_and_prepare_for_reindex()` reports a full re-index.
+///
+/// Only the migration wipes the structural tables: a database that old
+/// predates `refs` and the call graph anyway. A model change on a current
+/// database goes through [`reconcile_embedding_space`], which keeps them.
 ///
 /// Not transactional on its own: callers wrap it.
 fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
@@ -357,6 +411,130 @@ fn create_chunks_fts(conn: &Connection) -> SqliteResult<()> {
     )
 }
 
+/// Drop the vectors of another embedding model and make every chunk pending
+/// again, without touching the structural index (#86):
+/// - `chunks_vec` is dropped and recreated at [`EMBEDDING_DIMENSION`];
+/// - `chunks.embedding` is cleared, so phase 2 re-embeds every chunk;
+/// - distance observations and calibrated thresholds are cleared, since
+///   distances from different models are not comparable;
+/// - the new model and dimension are stamped.
+///
+/// Not transactional on its own: callers wrap it.
+fn reset_vector_space(conn: &Connection, model_id: &str) -> SqliteResult<()> {
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS chunks_vec;
+         CREATE VIRTUAL TABLE chunks_vec USING vec0(
+             chunk_id INTEGER PRIMARY KEY,
+             embedding float[{EMBEDDING_DIMENSION}]
+         );
+         UPDATE chunks SET embedding = NULL WHERE embedding IS NOT NULL;
+         DELETE FROM distance_observations;
+         DELETE FROM threshold_calibration;"
+    ))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES
+            ('embedding_model', ?1), ('embedding_dim', ?2)",
+        params![model_id, EMBEDDING_DIMENSION.to_string()],
+    )?;
+    Ok(())
+}
+
+/// What [`reconcile_embedding_space`] found about the stored vectors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingSpace {
+    /// The stored vectors come from this process's model: phase 2 may go on.
+    Current,
+    /// They came from another model (or dimension): dropped, every chunk is
+    /// pending again, the structural index is untouched.
+    Reset { previous: String },
+    /// They come from a real model while this process embeds with the stub
+    /// (`SEMANTIQ_EMBEDDINGS=stub`, a build without `onnx`): left untouched,
+    /// and the stub must not write its zero vectors among them.
+    Foreign { model: String },
+}
+
+/// Make sure the stored vectors were produced by `model_id`, the model this
+/// process embeds with.
+///
+/// Compares the `embedding_model` / `embedding_dim` metadata (and the declared
+/// `chunks_vec` dimension) with the given values. On a mismatch the vector
+/// space is reset ([`reset_vector_space`]) when the model is real, and left
+/// alone when it is the stub (`is_stub`): a stub process (`semantiq stats`
+/// under `SEMANTIQ_EMBEDDINGS=stub`, a test build) never destroys 20 minutes
+/// of phase 2. Run by the phase 2 writers, not by `IndexStore::open`: a
+/// command that does not embed has no business rewriting the vector space.
+///
+/// Runs in its own `BEGIN IMMEDIATE` transaction and reads the stamp under
+/// the lock, so two processes starting phase 2 together reset at most once.
+pub(crate) fn reconcile_embedding_space(
+    conn: &Connection,
+    model_id: &str,
+    is_stub: bool,
+) -> Result<EmbeddingSpace> {
+    conn.execute("BEGIN IMMEDIATE", [])?;
+    let result = reconcile_embedding_space_inner(conn, model_id, is_stub);
+    match &result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+        }
+        Err(_) => {
+            let _ = conn.execute("ROLLBACK", []);
+        }
+    }
+    result.map_err(Into::into)
+}
+
+fn reconcile_embedding_space_inner(
+    conn: &Connection,
+    model_id: &str,
+    is_stub: bool,
+) -> SqliteResult<EmbeddingSpace> {
+    let vec_sql: Option<String> = match conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e),
+    };
+    let stored_model = get_metadata(conn, "embedding_model")?;
+    let stored_dim = get_metadata(conn, "embedding_dim")?;
+
+    let expected_dim = EMBEDDING_DIMENSION.to_string();
+    let dimension_ok = vec_sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains(&format!("float[{EMBEDDING_DIMENSION}]")))
+        && stored_dim.as_deref() == Some(expected_dim.as_str());
+
+    match stored_model.as_deref() {
+        // Fresh database (or stamp removed by a migration): claim it.
+        None if dimension_ok => {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_model', ?1)",
+                params![model_id],
+            )?;
+            Ok(EmbeddingSpace::Current)
+        }
+        Some(stored) if stored == model_id && dimension_ok => Ok(EmbeddingSpace::Current),
+        // Another real model's vectors; the stub has nothing better to offer.
+        Some(stored) if is_stub && dimension_ok => Ok(EmbeddingSpace::Foreign {
+            model: stored.to_string(),
+        }),
+        stored => {
+            let previous = stored.unwrap_or("none").to_string();
+            tracing::info!(
+                "Embedding model changed ({} -> {}, {}-dim): dropping the vectors, every chunk is pending again",
+                previous,
+                model_id,
+                EMBEDDING_DIMENSION
+            );
+            reset_vector_space(conn, model_id)?;
+            Ok(EmbeddingSpace::Reset { previous })
+        }
+    }
+}
+
 fn table_exists(conn: &Connection, table: &str) -> SqliteResult<bool> {
     conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -378,56 +556,15 @@ fn get_metadata(conn: &Connection, key: &str) -> SqliteResult<Option<String>> {
     }
 }
 
-/// Make sure the stored vectors were produced by the current embedding model.
-///
-/// Compares the `embedding_model` / `embedding_dim` metadata (and the declared
-/// `chunks_vec` dimension) with the compiled-in values; on any mismatch the
-/// embedding space is reset. This catches model changes that don't come with
-/// a schema bump.
-fn reconcile_embedding_space(conn: &Connection) -> SqliteResult<()> {
-    let vec_sql: Option<String> = match conn.query_row(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
-        [],
-        |row| row.get(0),
-    ) {
-        Ok(v) => Some(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-        Err(e) => return Err(e),
-    };
-    // No vector table yet: fresh database, or already reset by a migration.
-    let Some(vec_sql) = vec_sql else {
-        return Ok(());
-    };
-
-    let expected_dim = EMBEDDING_DIMENSION.to_string();
-    let up_to_date = vec_sql.contains(&format!("float[{EMBEDDING_DIMENSION}]"))
-        && get_metadata(conn, "embedding_model")?.as_deref() == Some(embedding_model_id())
-        && get_metadata(conn, "embedding_dim")?.as_deref() == Some(expected_dim.as_str());
-    if up_to_date {
-        return Ok(());
-    }
-
-    tracing::info!(
-        "Embedding model changed (now {}, {}-dim): rebuilding vector index",
-        embedding_model_id(),
-        EMBEDDING_DIMENSION
-    );
-    conn.execute_batch("SAVEPOINT reset_embedding_space")?;
-    match reset_embedding_space(conn) {
-        Ok(()) => conn.execute_batch("RELEASE reset_embedding_space"),
-        Err(e) => {
-            let _ = conn
-                .execute_batch("ROLLBACK TO reset_embedding_space; RELEASE reset_embedding_space");
-            Err(e)
-        }
-    }
-}
-
 /// Create the tables in their final shape (`CREATE TABLE IF NOT EXISTS`) and
-/// stamp `schema_version` / the embedding model. Run after [`migrate_schema`].
+/// stamp `schema_version`; a fresh database is also stamped with this
+/// process's embedding model. Run after [`migrate_schema`].
 ///
 /// A database stamped with a newer schema version is refused before anything
-/// is created or written, so the stamp is never lowered.
+/// is created or written, so the stamp is never lowered. An existing
+/// `embedding_model` stamp is never rewritten here: the vectors belong to
+/// the model that wrote them until a phase 2 writer reconciles them
+/// ([`reconcile_embedding_space`]).
 pub fn init_schema(conn: &Connection) -> Result<()> {
     ensure_schema_not_newer(get_stored_schema_version(conn)?)?;
 
@@ -488,16 +625,24 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (source_file_id) REFERENCES files(id) ON DELETE CASCADE
         );
 
+        -- Interned identifier names of `refs`: a name is stored once here and
+        -- as a small integer on every occurrence (and in idx_refs_file_id).
+        CREATE TABLE IF NOT EXISTS names (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
+
         -- Identifier occurrences extracted from the AST (find_refs).
-        -- One row per (name, file, line); kind = definition|import|call|type|reference;
+        -- One row per (name, file, line); kind = a 1-byte code of
+        -- definition|import|call|type|reference (see store/references.rs);
         -- count = occurrences of the name on that line.
         CREATE TABLE IF NOT EXISTS refs (
-            name TEXT NOT NULL,
+            name_id INTEGER NOT NULL,
             file_id INTEGER NOT NULL,
             line INTEGER NOT NULL,
-            kind TEXT NOT NULL,
+            kind INTEGER NOT NULL,
             count INTEGER NOT NULL DEFAULT 1,
-            PRIMARY KEY (name, file_id, line),
+            PRIMARY KEY (name_id, file_id, line),
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         ) WITHOUT ROWID;
 
@@ -528,8 +673,9 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
         ) WITHOUT ROWID;
 
-        -- Indexes for performance
-        CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+        -- Indexes for performance. `files.path` is served by the implicit
+        -- index of its UNIQUE constraint (idx_files_path, a duplicate of it,
+        -- was dropped in v11).
         CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
         CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
@@ -572,6 +718,29 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.name, new.signature, new.doc_comment);
         END;
 
+        -- `graph_generation`: bumped by every insert into and delete from
+        -- `files` and by every change of a row's `hash` (a file's row is
+        -- upserted in the transaction that writes its symbols, references
+        -- and imports), so `graph_fingerprint` is O(1) instead of aggregating
+        -- `files` and `refs` on every repo map call (#165). A stamp refresh
+        -- (`last_modified` / `indexed_at` of an unchanged file) bumps nothing.
+        INSERT OR IGNORE INTO metadata (key, value) VALUES ('graph_generation', '0');
+
+        CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+            UPDATE metadata SET value = CAST(value AS INTEGER) + 1
+             WHERE key = 'graph_generation';
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF hash ON files BEGIN
+            UPDATE metadata SET value = CAST(value AS INTEGER) + 1
+             WHERE key = 'graph_generation';
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+            UPDATE metadata SET value = CAST(value AS INTEGER) + 1
+             WHERE key = 'graph_generation';
+        END;
+
         -- Distance observations for threshold calibration
         -- Records distances observed during semantic search for ML-based calibration
         CREATE TABLE IF NOT EXISTS distance_observations (
@@ -604,8 +773,6 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         "#,
     )?;
 
-    reconcile_embedding_space(conn)?;
-
     // Create sqlite-vec virtual table for vector similarity search
     // This table stores chunk embeddings for semantic search
     conn.execute_batch(&format!(
@@ -619,15 +786,18 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
     ensure_chunks_fts(conn)?;
 
-    // Set schema version and record which embedding model fills chunks_vec
+    // Set the schema version. The embedding model is only stamped on a
+    // database that has none (fresh, or reset by the v6 migration): on an
+    // existing one the stamp says whose vectors `chunks_vec` holds, and a
+    // process embedding with another model reconciles it before writing.
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES
-            ('schema_version', ?1), ('embedding_model', ?2), ('embedding_dim', ?3)",
-        params![
-            SCHEMA_VERSION.to_string(),
-            embedding_model_id(),
-            EMBEDDING_DIMENSION.to_string()
-        ],
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
+        params![SCHEMA_VERSION.to_string()],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO metadata (key, value) VALUES
+            ('embedding_model', ?1), ('embedding_dim', ?2)",
+        params![embedding_model_id(), EMBEDDING_DIMENSION.to_string()],
     )?;
 
     Ok(())
