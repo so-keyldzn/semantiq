@@ -44,7 +44,8 @@ enum Commands {
         #[arg(long)]
         no_skill: bool,
 
-        /// Overwrite skill files that differ from the bundled version
+        /// Overwrite skill files and the `semantiq` entry of .mcp.json that
+        /// differ from the bundled version
         #[arg(short, long)]
         force: bool,
 

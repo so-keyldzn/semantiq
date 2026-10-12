@@ -555,6 +555,44 @@ fn init_installs_skill_and_is_idempotent() {
 }
 
 #[test]
+fn init_keeps_a_customised_mcp_entry_unless_force() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let mcp_json = root.join(".mcp.json");
+    let customised = r#"{
+  "mcpServers": {
+    "semantiq": {
+      "command": "/opt/semantiq/bin/semantiq",
+      "args": ["serve", "--no-update-check"],
+      "env": {"SEMANTIQ_ONNX_THREADS": "2"}
+    }
+  }
+}
+"#;
+    fs::write(&mcp_json, customised).unwrap();
+
+    let output = semantiq(root, &["init", ".", "--no-index"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("Kept the existing `semantiq` entry in .mcp.json"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(fs::read_to_string(&mcp_json).unwrap(), customised);
+
+    let output = semantiq(root, &["init", ".", "--no-index", "--force"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("replaced existing `semantiq` entry"),
+        "{}",
+        stdout(&output)
+    );
+    let mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_json).unwrap()).unwrap();
+    assert_eq!(mcp["mcpServers"]["semantiq"]["command"], "semantiq");
+    assert_eq!(mcp["mcpServers"]["semantiq"].get("env"), None);
+}
+
+#[test]
 fn init_no_mcp_and_no_skill() {
     let skill_only = TempDir::new().unwrap();
     let output = semantiq(skill_only.path(), &["init", ".", "--no-index", "--no-mcp"]);
