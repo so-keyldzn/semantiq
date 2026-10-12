@@ -16,7 +16,10 @@ it grows the database by about 2.5× the size of the indexed source text.
   that did not fill `limit` (3.6-4.4 s for a query without a hit on a
   24k-file corpus, now a few milliseconds). Only indexed files are searched,
   as they were last indexed; files of other extensions (`.sql`, `.css`...)
-  are no longer text-searched (#160).
+  are no longer text-searched. Two processes opening an older index at the
+  same time (`serve` and a CLI command) build the text index once: the
+  second waits for the first instead of failing on the existing table
+  (#160).
 - `search --symbol-kind` applies to every strategy before its limit:
   semantic hits whose chunk defines no symbol of the wanted kinds and text
   hits (a line has no kind) are left out, where it used to filter the
@@ -66,9 +69,9 @@ it grows the database by about 2.5× the size of the indexed source text.
   score 0.525 (#92).
 - Text search keeps the lines starting with `#` in the languages where `#`
   is not a comment: `#[derive(...)]`, `#[tool]`, `#define`, `#include`,
-  `#pragma`, `#region` and shebangs are found; `#` lines are still skipped
-  in Python, Ruby, Bash, Elixir, YAML, TOML and PHP (except `#[`
-  attributes) (#94).
+  `#pragma` and `#region` are found; `#` lines are still skipped in
+  Python, Ruby, Bash, Elixir, YAML, TOML and PHP (except `#[` attributes),
+  where a `#!` shebang is kept as code (#94).
 - `refs` no longer lists import statements as definitions and `search` no
   longer returns them as symbol hits (they scored like definitions and ate
   `--limit`): an import is a usage, listed once under `usages` with `kind:

@@ -34,7 +34,8 @@ pub fn looks_generated(content: &str) -> bool {
 /// are code, and the text strategy is the only way to find them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashLine {
-    /// `#` starts a comment (Python, Ruby, Bash, Elixir, YAML, TOML).
+    /// `#` starts a comment (Python, Ruby, Bash, Elixir, YAML, TOML); a
+    /// shebang (`#!`) is still code.
     Comment,
     /// `#` starts a comment, except `#[`: a PHP 8 attribute.
     CommentUnlessAttribute,
@@ -56,12 +57,14 @@ impl HashLine {
         }
     }
 
-    /// Whether a trimmed line is a comment under this rule.
+    /// Whether a trimmed line is a comment under this rule. A shebang
+    /// (`#!/usr/bin/env python`) is code under every rule: the languages
+    /// where `#` is a comment are the ones with shebangs.
     fn is_comment(self, line: &str) -> bool {
         if line.starts_with("//") {
             return true;
         }
-        if !line.starts_with('#') {
+        if !line.starts_with('#') || line.starts_with("#!") {
             return false;
         }
         match self {
@@ -575,8 +578,9 @@ mod tests {
                 .collect()
         };
         assert_eq!(lines(HashLine::Code), vec![1, 2, 3, 4, 5, 7]);
-        assert_eq!(lines(HashLine::Comment), vec![7]);
-        assert_eq!(lines(HashLine::CommentUnlessAttribute), vec![1, 7]);
+        // The shebang is code in every language, comment languages included.
+        assert_eq!(lines(HashLine::Comment), vec![4, 7]);
+        assert_eq!(lines(HashLine::CommentUnlessAttribute), vec![1, 4, 7]);
 
         assert_eq!(HashLine::for_language(Some("rust")), HashLine::Code);
         assert_eq!(HashLine::for_language(Some("c")), HashLine::Code);

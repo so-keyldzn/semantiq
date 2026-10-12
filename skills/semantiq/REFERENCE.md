@@ -55,8 +55,8 @@ project root and use `/` on every platform (Windows included); a path argument
   only indexed files (the 19 languages) are searched, as they were last
   indexed. A line starting with `#` is skipped as a comment only in the
   languages where `#` starts one (Python, Ruby, Bash, Elixir, YAML, TOML;
-  PHP except `#[` attributes): `#[derive]`, `#include` and `#region` lines
-  are found.
+  PHP except `#[` attributes): `#[derive]`, `#include`, `#region` and
+  shebang lines are found.
 
 ## `semantiq refs <symbol> --json`
 
