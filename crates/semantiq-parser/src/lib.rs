@@ -17,6 +17,6 @@ pub use imports::{Import, ImportContext, ImportExtractor, ImportKind, go_module_
 pub use language::{Grammar, Language, LanguageSupport};
 pub use query_extractor::QuerySymbolExtractor;
 pub use references::{Reference, ReferenceExtractor, ReferenceKind};
-pub use resolve::{resolve_local_import, slash_path};
+pub use resolve::{resolve_import, resolve_local_import, slash_path};
 pub use structure::{CallEdge, FileStructure, RelationKind, StructureExtractor, TypeRelation};
 pub use symbols::{Symbol, SymbolExtractor, SymbolKind};
