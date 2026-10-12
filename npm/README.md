@@ -107,13 +107,9 @@ disabled).
 
 ## Supported Languages
 
-- Rust
-- TypeScript / JavaScript
-- Python
-- Go
-- Java
-- C / C++
-- PHP
+19 via tree-sitter: Rust, TypeScript, JavaScript, Python, Go, Java, C, C++,
+PHP, Ruby, C#, Kotlin, Scala, Bash and Elixir (symbols, references, imports,
+chunks), plus HTML, JSON, YAML and TOML (keys and sections as symbols, chunks).
 
 ## Compatibility
 

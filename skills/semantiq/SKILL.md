@@ -57,8 +57,9 @@ takes `--max-depth` (2, max 4), `--file`, `-l/--limit` (200); `calls` takes
 `--direction` (both), `--max-depth` (1, max 3), `--file`, `-l/--limit` (100);
 `hierarchy` takes `--max-depth` (3, max 5), `-l/--limit` (200 per direction);
 `dead-code` takes `--path-prefix`, `--language`, `--include-public`,
-`-l/--limit` (100); `map` takes `--max-tokens` (1500), `--focus`,
-`--path-prefix`.
+`-l/--limit` (100); `map` takes `--max-tokens` (1500, clamped to 256-8000),
+`--focus`, `--path-prefix`. Every `--limit` is clamped to 1-1000 (and
+`--max-depth` to its max) silently; the output shows the value used.
 
 ## Reading the results
 

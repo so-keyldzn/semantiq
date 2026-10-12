@@ -137,7 +137,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Maximum results
+        /// Maximum results (max 1000)
         #[arg(short, long, default_value = "10")]
         limit: usize,
 
@@ -166,7 +166,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Maximum references
+        /// Maximum references (max 1000)
         #[arg(short, long, default_value = "30")]
         limit: usize,
     },
@@ -215,7 +215,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Token budget for the map (256-8000, estimated as chars/4)
+        /// Token budget for the map (clamped to 256-8000, estimated as chars/4)
         #[arg(long, default_value_t = semantiq_retrieval::DEFAULT_REPO_MAP_TOKENS)]
         max_tokens: usize,
 
