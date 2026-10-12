@@ -300,8 +300,8 @@ mod tests {
         let slot = ModelSlot::new(loader, quick());
         assert_eq!(slot.status(), ModelStatus::NotLoaded);
         assert!(slot.model().is_none(), "model() never loads");
-        let a = slot.get_or_load().ok().expect("loaded");
-        let b = slot.get_or_load().ok().expect("loaded");
+        let a = slot.get_or_load().expect("loaded");
+        let b = slot.get_or_load().expect("loaded");
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(slot.status(), ModelStatus::Loaded);
@@ -412,6 +412,6 @@ mod tests {
 
         let preloaded = ModelSlot::preloaded(Box::new(StubEmbeddingModel::new()));
         assert_eq!(preloaded.status(), ModelStatus::Loaded);
-        assert!(preloaded.get_or_load().ok().expect("loaded").is_stub());
+        assert!(preloaded.get_or_load().expect("loaded").is_stub());
     }
 }
