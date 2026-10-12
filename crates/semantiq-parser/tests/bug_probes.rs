@@ -27,6 +27,16 @@ mod bug_probes {
             .collect()
     }
 
+    /// `(type_name, super_name, kind)` type relations of `source`.
+    fn relations(lang: Language, source: &str) -> Vec<(String, String, &'static str)> {
+        let mut support = LanguageSupport::new().unwrap();
+        let tree = support.parse(lang, source).unwrap();
+        StructureExtractor::type_relations(&tree, source, lang)
+            .into_iter()
+            .map(|r| (r.type_name, r.super_name, r.kind.as_str()))
+            .collect()
+    }
+
     /// `(caller, callee, line)` call edges of `source`.
     fn call_edges(lang: Language, source: &str) -> Vec<(String, String, usize)> {
         let mut support = LanguageSupport::new().unwrap();
@@ -176,10 +186,17 @@ interface Greeter { fun greet(): String }
 enum class Status { ACTIVE, INACTIVE }
 "#;
         let symbols = extract(Language::Kotlin, source);
-        println!("B5 - Kotlin kinds:");
-        for sym in &symbols {
-            println!("  name={}, kind={:?}", sym.name, sym.kind);
-        }
+        let kind = |name: &str| {
+            symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .kind
+        };
+        assert_eq!(kind("Greeter"), SymbolKind::Interface);
+        assert_eq!(kind("greet"), SymbolKind::Method);
+        assert_eq!(kind("Status"), SymbolKind::Enum);
+        assert_eq!(kind("ACTIVE"), SymbolKind::Constant);
     }
 
     // B7: Kotlin parent resolution
@@ -192,12 +209,12 @@ class Foo {
 }
 "#;
         let symbols = extract(Language::Kotlin, source);
-        println!("B7 - Kotlin parent resolution:");
-        for sym in symbols
-            .iter()
-            .filter(|s| matches!(s.name.as_str(), "bar" | "nested"))
-        {
-            println!("  name={}, parent={:?}", sym.name, sym.parent);
+        for name in ["bar", "nested"] {
+            let sym = symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"));
+            assert_eq!(sym.parent.as_deref(), Some("Foo"), "{name}");
         }
     }
 
@@ -817,5 +834,185 @@ public:
                 .all(|(i, (caller, _, _))| *caller == format!("f{}", i / 3)),
             "each call attached to its own function"
         );
+    }
+
+    // B30 (#141): a PHP variable `$helper` is not a reference to `helper`;
+    // `$this` produces nothing; `$this->helper` and `helper()` still count.
+    #[test]
+    fn b30_php_variables_are_not_references() {
+        let r = references(
+            Language::Php,
+            "<?php\nfunction helper(float $x): float {\n    $helper = 5;\n    return $this->helper + helper();\n}\n",
+        );
+        assert_eq!(
+            kinds_of(&r, "helper"),
+            vec![(2, ReferenceKind::Definition), (4, ReferenceKind::Call)]
+        );
+        assert!(kinds_of(&r, "this").is_empty());
+        assert!(r.iter().all(|x| x.line != 3), "{r:?}");
+    }
+
+    // B31 (#82, #149): enum members, TS interface signatures and TS enum
+    // members are declared names, not usages.
+    #[test]
+    fn b31_declaration_site_names_are_definitions() {
+        let rust = references(
+            Language::Rust,
+            "enum Kind { Alpha, Beta(u8) }\nstruct Alpha;\n",
+        );
+        assert_eq!(
+            kinds_of(&rust, "Alpha"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (2, ReferenceKind::Definition)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&rust, "Beta"),
+            vec![(1, ReferenceKind::Definition)]
+        );
+
+        let java = references(Language::Java, "enum E { ALPHA, BETA(1) }\n");
+        assert_eq!(
+            kinds_of(&java, "ALPHA"),
+            vec![(1, ReferenceKind::Definition)]
+        );
+        assert_eq!(
+            kinds_of(&java, "BETA"),
+            vec![(1, ReferenceKind::Definition)]
+        );
+
+        let kotlin = references(Language::Kotlin, "enum class Color { RED, GREEN }\n");
+        assert_eq!(
+            kinds_of(&kotlin, "RED"),
+            vec![(1, ReferenceKind::Definition)]
+        );
+        assert_eq!(
+            kinds_of(&kotlin, "GREEN"),
+            vec![(1, ReferenceKind::Definition)]
+        );
+
+        let php = references(
+            Language::Php,
+            "<?php\nenum Color: string { case Red = 'r'; case Green = 'g'; }\n",
+        );
+        assert_eq!(kinds_of(&php, "Red"), vec![(2, ReferenceKind::Definition)]);
+        assert_eq!(
+            kinds_of(&php, "Green"),
+            vec![(2, ReferenceKind::Definition)]
+        );
+
+        let ts = references(
+            Language::TypeScript,
+            "interface Runner {\n  run(): void;\n  name: string;\n}\nabstract class C { abstract go(): void }\nenum E { Alpha, Beta = 2, Gamma, Delta }\n",
+        );
+        assert_eq!(kinds_of(&ts, "run"), vec![(2, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "name"), vec![(3, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "go"), vec![(5, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "Alpha"), vec![(6, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "Beta"), vec![(6, ReferenceKind::Definition)]);
+        // Every unassigned member, not only the first: `enum_body` repeats
+        // its `name` field and `child_by_field_id` sees only the first one.
+        assert_eq!(kinds_of(&ts, "Gamma"), vec![(6, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "Delta"), vec![(6, ReferenceKind::Definition)]);
+    }
+
+    // B32 (#149): PHP `implements` names are type references, like
+    // `extends`.
+    #[test]
+    fn b32_php_implements_are_type_references() {
+        let r = references(
+            Language::Php,
+            "<?php\nfinal class Circle extends Base implements Shape, \\JsonSerializable {}\n",
+        );
+        assert_eq!(kinds_of(&r, "Base"), vec![(2, ReferenceKind::Type)]);
+        assert_eq!(kinds_of(&r, "Shape"), vec![(2, ReferenceKind::Type)]);
+        assert_eq!(
+            kinds_of(&r, "JsonSerializable"),
+            vec![(2, ReferenceKind::Type)]
+        );
+    }
+
+    // B33 (#80): calls with type arguments are calls, with a call edge.
+    #[test]
+    fn b33_generic_calls_are_calls() {
+        let rust = references(
+            Language::Rust,
+            "fn make_it(x: u32) -> u32 { x }\nfn t() {\n    let w = make_it::<u32>(1);\n    let n = s.parse::<u32>();\n    let z = std::mem::size_of::<u64>();\n    let f = make_it::<u32>;\n}\n",
+        );
+        assert_eq!(
+            kinds_of(&rust, "make_it"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (3, ReferenceKind::Call),
+                (6, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(kinds_of(&rust, "parse"), vec![(4, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&rust, "size_of"), vec![(5, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&rust, "mem"), vec![(5, ReferenceKind::Reference)]);
+        assert_eq!(
+            call_edges(
+                Language::Rust,
+                "fn make_it(x: u32) -> u32 { x }\nfn t() {\n    make_it::<u32>(1);\n}\n"
+            ),
+            vec![("t".to_string(), "make_it".to_string(), 3)]
+        );
+
+        let cpp = references(
+            Language::Cpp,
+            "void t() {\n    auto p = std::make_unique<int>(1);\n    auto q = make_unique<int>(1);\n    obj.get<int>(2);\n}\n",
+        );
+        assert_eq!(
+            kinds_of(&cpp, "make_unique"),
+            vec![(2, ReferenceKind::Call), (3, ReferenceKind::Call)]
+        );
+        assert_eq!(kinds_of(&cpp, "get"), vec![(4, ReferenceKind::Call)]);
+        assert_eq!(kinds_of(&cpp, "obj"), vec![(4, ReferenceKind::Reference)]);
+    }
+
+    // B34 (#152): Ruby `include` / `extend` / `prepend` in a class or module
+    // body are `implements` relations; inside a method they are not.
+    #[test]
+    fn b34_ruby_mixins_are_relations() {
+        let r = relations(
+            Language::Ruby,
+            "class Dog < Animal\n  include Walkable, M::Other\n  extend Enumerable\n  prepend Loud\n  extend self\n  def x\n    include Nope\n  end\nend\nmodule Helpers\n  include Foo\nend\n",
+        );
+        assert_eq!(
+            r,
+            vec![
+                ("Dog", "Animal", "extends"),
+                ("Dog", "Enumerable", "implements"),
+                ("Dog", "Loud", "implements"),
+                ("Dog", "Other", "implements"),
+                ("Dog", "Walkable", "implements"),
+                ("Helpers", "Foo", "implements"),
+            ]
+            .into_iter()
+            .map(|(t, s, k)| (t.to_string(), s.to_string(), k))
+            .collect::<Vec<_>>()
+        );
+    }
+
+    // B35 (#153): a Kotlin interface with modifiers extends its supertypes
+    // (it does not implement them).
+    #[test]
+    fn b35_kotlin_interface_with_modifiers_extends() {
+        let r = relations(
+            Language::Kotlin,
+            "interface Shape : Base\npublic interface A : B\nsealed interface S : B\n@Ann interface C : B\nclass K : B\n",
+        );
+        let kind = |t: &str| {
+            r.iter()
+                .find(|(type_name, _, _)| type_name == t)
+                .map(|(_, _, k)| *k)
+                .unwrap_or_else(|| panic!("{t} missing"))
+        };
+        assert_eq!(kind("Shape"), "extends");
+        assert_eq!(kind("A"), "extends");
+        assert_eq!(kind("S"), "extends");
+        assert_eq!(kind("C"), "extends");
+        assert_eq!(kind("K"), "implements");
     }
 }

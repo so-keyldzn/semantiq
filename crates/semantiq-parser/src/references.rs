@@ -8,10 +8,19 @@
 //!
 //! La résolution est purement nominale : deux symboles homonymes dans des
 //! fichiers différents partagent leurs références.
+//!
+//! Chemin chaud (un tiers du temps d'indexation, #158) : les prédicats sur
+//! les types de nœuds (`kind.contains("definition")`, `kind ==
+//! "call_expression"`…) sont évalués une fois par grammaire sur chaque nom de
+//! kind et rangés dans une [`KindTable`] (un mot de drapeaux par id de kind,
+//! plus les ids des champs consultés), et le contexte d'une feuille est lu
+//! dans la pile d'ancêtres du parcours plutôt que par `Node::parent()`, que
+//! tree-sitter résout en redescendant depuis la racine à chaque appel.
 
-use crate::language::Language;
+use crate::language::{Grammar, Language};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use tree_sitter::{Node, Tree};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -77,19 +86,26 @@ const MAX_IMPORT_DEPTH: usize = 8;
 pub struct ReferenceExtractor;
 
 impl ReferenceExtractor {
-    pub fn extract(tree: &Tree, source: &str, language: Language) -> Vec<Reference> {
+    pub fn extract<'s>(tree: &Tree, source: &'s str, language: Language) -> Vec<Reference> {
         if is_data_language(language) {
             return Vec::new();
         }
+        let table = kind_table(tree, language);
+        let k = &*table;
 
-        let mut by_line: HashMap<(String, usize), (ReferenceKind, usize)> = HashMap::new();
+        // Clés empruntées à `source` : une seule allocation par référence
+        // produite, à la fin, et non par occurrence rencontrée.
+        let mut by_line: HashMap<(&str, usize), (ReferenceKind, usize)> = HashMap::new();
         let mut cursor = tree.walk();
-        let mut stack = vec![tree.root_node()];
+        // Parcours en profondeur ; `ancestors` est le chemin de la racine au
+        // parent du nœud visité (profondeur = nombre d'ancêtres).
+        let mut stack: Vec<(Node, usize)> = vec![(tree.root_node(), 0)];
+        let mut ancestors: Vec<Node> = Vec::new();
 
-        let mut record = |name: &str, line: usize, kind: ReferenceKind| {
+        let mut record = |name: &'s str, line: usize, kind: ReferenceKind| {
             if name.chars().count() >= MIN_NAME_LEN {
                 by_line
-                    .entry((name.to_string(), line))
+                    .entry((name, line))
                     .and_modify(|(k, n)| match kind.cmp(k) {
                         std::cmp::Ordering::Greater => (*k, *n) = (kind, 1),
                         std::cmp::Ordering::Equal => *n += 1,
@@ -99,28 +115,35 @@ impl ReferenceExtractor {
             }
         };
 
-        while let Some(node) = stack.pop() {
+        while let Some((node, depth)) = stack.pop() {
+            ancestors.truncate(depth);
             if node.named_child_count() == 0 {
                 let line = node.start_position().row + 1;
-                if is_identifier(node)
+                let leaf = Leaf {
+                    node,
+                    ancestors: &ancestors,
+                    k,
+                };
+                if leaf.is_identifier()
                     && let Ok(text) = node.utf8_text(source.as_bytes())
-                    && let Some(kind) = classify(node, text, source.as_bytes(), language)
+                    && let Some(kind) = leaf.classify(text, source.as_bytes(), language)
                 {
                     for name in names_of(text) {
                         record(name, line, kind);
                     }
-                } else if let Some(name) = attribute_string_name(node, source, language) {
+                } else if let Some(name) = leaf.attribute_string_name(source, language) {
                     record(name, line, ReferenceKind::Reference);
                 }
                 continue;
             }
-            stack.extend(node.named_children(&mut cursor));
+            ancestors.push(node);
+            stack.extend(node.named_children(&mut cursor).map(|c| (c, depth + 1)));
         }
 
         let mut refs: Vec<Reference> = by_line
             .into_iter()
             .map(|((name, line), (kind, count))| Reference {
-                name,
+                name: name.to_string(),
                 line,
                 kind,
                 count,
@@ -129,6 +152,280 @@ impl ReferenceExtractor {
         refs.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.name.cmp(&b.name)));
         refs
     }
+}
+
+/// Drapeaux de [`KindTable::flags`] : un bit par prédicat sur le nom d'un
+/// kind, calculé par [`kind_flags`].
+mod flag {
+    /// `is_identifier` : suffixe `identifier`, `constant` / `name` / `alias`
+    /// (Ruby, PHP, Elixir), `variable_name` (Bash).
+    pub const IDENTIFIER_LIKE: u64 = 1 << 0;
+    /// Bash `word`.
+    pub const WORD: u64 = 1 << 1;
+    /// Parents qui font d'un `word` un identifiant.
+    pub const WORD_CONTEXT: u64 = 1 << 2;
+    /// Contenu d'une chaîne littérale.
+    pub const STRING_CONTENT: u64 = 1 << 3;
+    /// Attribut / décorateur / annotation du langage ([`super::attribute_kind`]).
+    pub const ATTRIBUTE: u64 = 1 << 4;
+    pub const EQ: u64 = 1 << 5;
+    pub const TOKEN_TREE: u64 = 1 << 6;
+    pub const IDENTIFIER: u64 = 1 << 7;
+    /// Le kind `call` (Elixir, Ruby).
+    pub const CALL_NODE: u64 = 1 << 8;
+    pub const ARGUMENTS: u64 = 1 << 9;
+    pub const BINARY_OPERATOR: u64 = 1 << 10;
+    pub const MEMBER_EXPRESSION: u64 = 1 << 11;
+    /// Élément JSX ouvrant, fermant ou auto-fermant.
+    pub const JSX_ELEMENT: u64 = 1 << 12;
+    pub const JSX_CLOSING_ELEMENT: u64 = 1 << 13;
+    pub const JSX_NAMESPACE_NAME: u64 = 1 << 14;
+    pub const JSX_ATTRIBUTE: u64 = 1 << 15;
+    pub const EXPORT_SPECIFIER: u64 = 1 << 16;
+    pub const FUNCTION_DECLARATOR: u64 = 1 << 17;
+    pub const FUNCTION_DEFINITION: u64 = 1 << 18;
+    /// Nœud dont le champ `name` est un nom déclaré.
+    pub const DECLARES: u64 = 1 << 19;
+    /// Nœud d'import (`import_*`, `use_declaration`…).
+    pub const IMPORT_CONTEXT: u64 = 1 << 20;
+    pub const EXPORT_STATEMENT: u64 = 1 << 21;
+    /// Accès membre / chemin qualifié ([`super::is_member_access`]).
+    pub const MEMBER_ACCESS: u64 = 1 << 22;
+    /// Nœud d'appel ([`super::is_call`]).
+    pub const CALL: u64 = 1 << 23;
+    pub const MACRO_INVOCATION: u64 = 1 << 24;
+    pub const BANG: u64 = 1 << 25;
+    pub const LPAREN: u64 = 1 << 26;
+    pub const TYPE_IDENTIFIER: u64 = 1 << 27;
+    /// Parent qui fait d'un identifiant un type ([`super::is_type`]).
+    pub const TYPE_CONTEXT: u64 = 1 << 28;
+    /// PHP `variable_name` (`$x`) : son enfant `name` est une variable, pas
+    /// un symbole (#141).
+    pub const VARIABLE_NAME: u64 = 1 << 29;
+    /// Le kind `name` (PHP).
+    pub const NAME: u64 = 1 << 30;
+    /// Kotlin `enum_entry` : déclare son premier enfant nommé, sans champ
+    /// `name` (#149).
+    pub const ENUM_ENTRY: u64 = 1 << 31;
+    /// Enveloppe générique d'un appelé, transparente pour `is_callee` : Rust
+    /// `generic_function` (`f::<T>()`), C++ `template_function` /
+    /// `template_method` (`make_unique<T>()`, `obj.get<T>()`) (#80).
+    pub const GENERIC_CALLEE: u64 = 1 << 32;
+    /// PHP `qualified_name` (`\Foo\Bar`) : transparent pour `is_type`.
+    pub const QUALIFIED_NAME: u64 = 1 << 33;
+    /// TypeScript `enum_body` : chaque membre non assigné est un champ `name`
+    /// répété, que `child_by_field_id` ne voit qu'une fois (#149).
+    pub const ENUM_BODY: u64 = 1 << 34;
+}
+
+/// Drapeaux d'un nom de kind ; `attribute` est le kind d'attribut du langage.
+fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
+    let mut f = 0;
+    let mut set = |on: bool, bit: u64| {
+        if on {
+            f |= bit;
+        }
+    };
+    set(
+        kind.ends_with("identifier")
+            || matches!(kind, "constant" | "name" | "alias" | "variable_name"),
+        flag::IDENTIFIER_LIKE,
+    );
+    set(kind == "word", flag::WORD);
+    set(
+        matches!(kind, "command_name" | "function_definition"),
+        flag::WORD_CONTEXT,
+    );
+    // Rust / Python / Kotlin `string_content`, Java `string_fragment`,
+    // C# (tree-sitter-c-sharp 0.23) `string_literal_content`.
+    set(
+        matches!(
+            kind,
+            "string_content" | "string_fragment" | "string_literal_content"
+        ),
+        flag::STRING_CONTENT,
+    );
+    set(Some(kind) == attribute, flag::ATTRIBUTE);
+    set(kind == "=", flag::EQ);
+    set(kind == "token_tree", flag::TOKEN_TREE);
+    set(kind == "identifier", flag::IDENTIFIER);
+    set(kind == "call", flag::CALL_NODE);
+    set(kind == "arguments", flag::ARGUMENTS);
+    set(kind == "binary_operator", flag::BINARY_OPERATOR);
+    set(kind == "member_expression", flag::MEMBER_EXPRESSION);
+    set(
+        matches!(
+            kind,
+            "jsx_opening_element" | "jsx_closing_element" | "jsx_self_closing_element"
+        ),
+        flag::JSX_ELEMENT,
+    );
+    set(kind == "jsx_closing_element", flag::JSX_CLOSING_ELEMENT);
+    set(kind == "jsx_namespace_name", flag::JSX_NAMESPACE_NAME);
+    set(kind == "jsx_attribute", flag::JSX_ATTRIBUTE);
+    set(kind == "export_specifier", flag::EXPORT_SPECIFIER);
+    set(kind == "function_declarator", flag::FUNCTION_DECLARATOR);
+    set(kind == "function_definition", flag::FUNCTION_DEFINITION);
+    set(
+        kind.contains("definition")
+            || kind.contains("declaration")
+            || kind.contains("declarator")
+            || kind.ends_with("_item")
+            || kind.ends_with("_spec")
+            || kind.ends_with("_specifier")
+            || matches!(kind, "class" | "module" | "method" | "singleton_method")
+            // Rust `enum_variant`, Java `enum_constant`, PHP `enum_case`, TS
+            // `enum_assignment` members and interface signatures: declared
+            // names, not usages (#82, #149). Unassigned TS members are under
+            // `enum_body` directly (ENUM_BODY).
+            || matches!(
+                kind,
+                "enum_variant"
+                    | "enum_constant"
+                    | "enum_case"
+                    | "enum_assignment"
+                    | "method_signature"
+                    | "property_signature"
+                    | "abstract_method_signature"
+            ),
+        flag::DECLARES,
+    );
+    set(
+        kind.contains("import")
+            || matches!(
+                kind,
+                "use_declaration"
+                    | "using_directive"
+                    | "namespace_use_declaration"
+                    | "preproc_include"
+            ),
+        flag::IMPORT_CONTEXT,
+    );
+    set(kind == "export_statement", flag::EXPORT_STATEMENT);
+    set(is_member_access(kind), flag::MEMBER_ACCESS);
+    set(is_call(kind), flag::CALL);
+    set(kind == "macro_invocation", flag::MACRO_INVOCATION);
+    set(kind == "!", flag::BANG);
+    set(kind == "(", flag::LPAREN);
+    set(kind == "type_identifier", flag::TYPE_IDENTIFIER);
+    set(
+        kind.contains("type")
+            || matches!(
+                kind,
+                "superclass"
+                    | "base_class_clause"
+                    | "extends_clause"
+                    | "base_list"
+                    | "base_clause"
+                    | "class_interface_clause"
+            ),
+        flag::TYPE_CONTEXT,
+    );
+    set(kind == "variable_name", flag::VARIABLE_NAME);
+    set(kind == "name", flag::NAME);
+    set(kind == "enum_entry", flag::ENUM_ENTRY);
+    set(kind == "enum_body", flag::ENUM_BODY);
+    set(kind == "qualified_name", flag::QUALIFIED_NAME);
+    set(
+        matches!(
+            kind,
+            "generic_function" | "template_function" | "template_method"
+        ),
+        flag::GENERIC_CALLEE,
+    );
+    f
+}
+
+/// Prédicats du classement précalculés pour une grammaire : un mot de
+/// drapeaux par id de kind et les ids des champs consultés (0 = la grammaire
+/// n'a pas ce champ, `child_by_field_id(0)` ne trouve rien).
+struct KindTable {
+    flags: Vec<u64>,
+    /// Le langage a un kind d'attribut ([`attribute_kind`]).
+    has_attribute: bool,
+    name: u16,
+    declarator: u16,
+    source: u16,
+    target: u16,
+    left: u16,
+    property: u16,
+    /// Champs de l'appelé d'un nœud d'appel.
+    callee: [u16; 7],
+    /// Champs du receveur d'un appel (jamais l'appelé).
+    receiver: [u16; 3],
+}
+
+impl KindTable {
+    fn build(grammar: &tree_sitter::Language, language: Language) -> Self {
+        let attribute = attribute_kind(language);
+        let flags = (0..grammar.node_kind_count())
+            .map(|id| {
+                grammar
+                    .node_kind_for_id(id as u16)
+                    .map_or(0, |kind| kind_flags(kind, attribute))
+            })
+            .collect();
+        let field = |name: &str| grammar.field_id_for_name(name).map_or(0, |id| id.get());
+        KindTable {
+            flags,
+            has_attribute: attribute.is_some(),
+            name: field("name"),
+            declarator: field("declarator"),
+            source: field("source"),
+            target: field("target"),
+            left: field("left"),
+            property: field("property"),
+            callee: [
+                field("function"),
+                field("name"),
+                field("method"),
+                field("constructor"),
+                field("macro"),
+                field("type"),
+                field("target"),
+            ],
+            receiver: [field("receiver"), field("object"), field("expression")],
+        }
+    }
+
+    /// Le kind de `node` a-t-il le drapeau ? (`ERROR` et les ids hors table
+    /// n'en ont aucun.)
+    #[inline]
+    fn has(&self, node: Node, flag: u64) -> bool {
+        self.flags
+            .get(node.kind_id() as usize)
+            .is_some_and(|f| f & flag != 0)
+    }
+
+    /// `child` est-il le champ `field` de `parent` ?
+    #[inline]
+    fn is_field(&self, parent: Node, child: Node, field: u16) -> bool {
+        parent.child_by_field_id(field) == Some(child)
+    }
+}
+
+static KIND_TABLES: OnceLock<Mutex<HashMap<Grammar, Arc<KindTable>>>> = OnceLock::new();
+
+/// La table de la grammaire qui a produit `tree`, construite au premier
+/// fichier de chaque grammaire puis partagée. Un arbre produit par une autre
+/// grammaire que celles de `language` (appel direct hors indexeur) reçoit une
+/// table construite sur place, sans cache.
+fn kind_table(tree: &Tree, language: Language) -> Arc<KindTable> {
+    let grammar = [Grammar::Language(language), Grammar::Tsx]
+        .into_iter()
+        .find(|g| g.parsed(tree));
+    let Some(grammar) = grammar else {
+        return Arc::new(KindTable::build(&tree.language(), language));
+    };
+    let mut tables = KIND_TABLES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    Arc::clone(
+        tables.entry(grammar).or_insert_with(|| {
+            Arc::new(KindTable::build(&grammar.tree_sitter_language(), language))
+        }),
+    )
 }
 
 /// Profondeur maximale entre une chaîne et l'attribut qui la contient.
@@ -203,87 +500,20 @@ fn attribute_name<'a>(attribute: Node, source: &'a str) -> Option<&'a str> {
     head.rsplit(['.', '@', '[', ' ']).next().map(str::trim)
 }
 
-/// Rust : la chaîne est-elle la valeur d'une clé `key = "..."` de
-/// [`RUST_FUNCTION_PATH_KEYS`] ? Dans le `token_tree`, les frères précédents
-/// du `string_literal` sont `=` puis le jeton de la clé (un `identifier`, ou
-/// un mot-clé comme `default` dont le kind est le texte lui-même).
-fn is_rust_function_path_value(string_literal: Node, source: &str) -> bool {
-    let Some(eq) = string_literal.prev_sibling() else {
-        return false;
-    };
-    if eq.kind() != "=" {
-        return false;
-    }
-    eq.prev_sibling().is_some_and(|key| {
-        key.kind() != "token_tree"
-            && key
-                .utf8_text(source.as_bytes())
-                .is_ok_and(|k| RUST_FUNCTION_PATH_KEYS.contains(&k))
-    })
-}
-
-/// Le contenu d'une chaîne littérale située dans les arguments d'un attribut,
-/// s'il a la forme d'un identifiant ou d'un chemin (`default_true`,
-/// `Default::default`, `my_mod::serialize`) : la fonction qu'il nomme est
-/// utilisée par la macro ou le framework, donc référencée. Retourne le dernier
-/// segment du chemin.
-///
-/// Périmètre volontairement étroit, pour ne pas inventer d'usages dans
-/// `find_refs` / `impact` / repo map : en Rust seules les valeurs des clés de
-/// [`RUST_FUNCTION_PATH_KEYS`] comptent (`#[cfg(feature = "x")]` et
-/// `#[serde(rename = "x")]` ne référencent rien) ; pour les décorateurs et
-/// annotations, les attributs de [`NON_SYMBOL_ATTRIBUTES`] sont ignorés.
-fn attribute_string_name<'a>(node: Node, source: &'a str, language: Language) -> Option<&'a str> {
-    // Rust / Python / Kotlin `string_content`, Java `string_fragment`,
-    // C# (tree-sitter-c-sharp 0.23) `string_literal_content`.
-    if !matches!(
-        node.kind(),
-        "string_content" | "string_fragment" | "string_literal_content"
-    ) {
-        return None;
-    }
-    let wanted = attribute_kind(language)?;
-    let mut current = node.parent();
-    let mut found = false;
-    for _ in 0..MAX_ATTRIBUTE_DEPTH {
-        let Some(n) = current else {
-            break;
-        };
-        if n.kind() == wanted {
-            if language == Language::Rust {
-                if !is_rust_function_path_value(node.parent()?, source) {
-                    return None;
-                }
-            } else if attribute_name(n, source).is_some_and(|a| NON_SYMBOL_ATTRIBUTES.contains(&a))
-            {
-                return None;
-            }
-            found = true;
-            break;
+/// Les frères de `child` parmi les enfants (anonymes compris) de `parent` :
+/// `(précédent, suivant)`. Lit la liste des enfants une fois au lieu de
+/// `prev_sibling()` / `next_sibling()`, qui repartent de la racine.
+fn siblings<'t>(parent: Node<'t>, child: Node<'t>) -> (Option<Node<'t>>, Option<Node<'t>>) {
+    let mut cursor = parent.walk();
+    let mut previous = None;
+    let mut children = parent.children(&mut cursor);
+    for c in children.by_ref() {
+        if c == child {
+            return (previous, children.next());
         }
-        current = n.parent();
+        previous = Some(c);
     }
-    if !found {
-        return None;
-    }
-    let text = node.utf8_text(source.as_bytes()).ok()?;
-    let is_ident = |s: &str| {
-        let mut chars = s.chars();
-        chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
-            && chars.all(|c| c.is_alphanumeric() || c == '_')
-    };
-    let mut segments = text.split("::");
-    let mut last = segments.next()?;
-    if !is_ident(last) {
-        return None;
-    }
-    for segment in segments {
-        if !is_ident(segment) {
-            return None;
-        }
-        last = segment;
-    }
-    Some(last)
+    (None, None)
 }
 
 fn is_data_language(language: Language) -> bool {
@@ -291,23 +521,6 @@ fn is_data_language(language: Language) -> bool {
         language,
         Language::Html | Language::Json | Language::Yaml | Language::Toml
     )
-}
-
-fn is_identifier(node: Node) -> bool {
-    let kind = node.kind();
-    if kind.ends_with("identifier") {
-        return true;
-    }
-    let parent = node.parent().map(|p| p.kind()).unwrap_or("");
-    match kind {
-        // Ruby (constantes / classes), PHP, Elixir (modules)
-        "constant" | "name" | "alias" => true,
-        // Bash : un `word` n'est un identifiant que comme nom de commande ou de fonction
-        "word" => matches!(parent, "command_name" | "function_definition"),
-        // Bash : variables (`$x`, `x=`)
-        "variable_name" => true,
-        _ => false,
-    }
 }
 
 /// Un alias Elixir `A.Foo` est un seul nœud : on indexe aussi `Foo`.
@@ -319,32 +532,430 @@ fn names_of(text: &str) -> impl Iterator<Item = &str> {
     std::iter::once(text).chain(last)
 }
 
-/// Classe une occurrence ; `None` = mot-clé à ne pas indexer (Elixir `def`).
-fn classify(node: Node, text: &str, source: &[u8], language: Language) -> Option<ReferenceKind> {
-    if language == Language::Elixir
-        && let Some(kind) = classify_elixir(node, text, source)
-    {
-        return kind;
+/// Une feuille de l'arbre avec son chemin : `ancestors[0]` est la racine, le
+/// dernier élément le parent. Toute la classification remonte par `up(n)`.
+#[derive(Clone, Copy)]
+struct Leaf<'a, 't> {
+    node: Node<'t>,
+    ancestors: &'a [Node<'t>],
+    k: &'a KindTable,
+}
+
+impl<'t> Leaf<'_, 't> {
+    /// Le `n`-ième ancêtre : `up(0)` est le parent.
+    #[inline]
+    fn up(&self, n: usize) -> Option<Node<'t>> {
+        self.ancestors
+            .len()
+            .checked_sub(n + 1)
+            .map(|i| self.ancestors[i])
     }
-    // JSX : noms d'attributs, balises intrinsèques et fermantes ne sont pas
-    // des symboles.
-    if is_jsx_noise(node, text) {
-        return None;
+
+    /// Le nœud de profondeur `n` au-dessus de la feuille (`node_at(0)` est
+    /// la feuille elle-même, `node_at(1)` son parent).
+    #[inline]
+    fn node_at(&self, n: usize) -> Option<Node<'t>> {
+        if n == 0 {
+            Some(self.node)
+        } else {
+            self.up(n - 1)
+        }
     }
-    // Import d'abord : `import { Foo }` a un champ `name` dans un `*_specifier`.
-    Some(if in_import(node) {
-        ReferenceKind::Import
-    } else if is_jsx_tag_name(node) {
-        ReferenceKind::Call
-    } else if is_definition_name(node) {
-        ReferenceKind::Definition
-    } else if is_callee(node) {
-        ReferenceKind::Call
-    } else if is_type(node) {
-        ReferenceKind::Type
-    } else {
-        ReferenceKind::Reference
-    })
+
+    /// Feuille identifiant : suffixe `identifier`, `constant` / `name` /
+    /// `alias` (Ruby, PHP, Elixir), `variable_name` (Bash `$x`, `x=`) ; un
+    /// `word` Bash seulement comme nom de commande ou de fonction.
+    ///
+    /// PHP : le `name` d'un `variable_name` (`$helper`, `$this`) est une
+    /// variable, dans un autre espace de noms que les fonctions, méthodes et
+    /// classes ; il n'est pas indexé (`$this->helper` garde `helper`) (#141).
+    fn is_identifier(&self) -> bool {
+        let k = self.k;
+        if k.has(self.node, flag::NAME) && self.up(0).is_some_and(|p| k.has(p, flag::VARIABLE_NAME))
+        {
+            return false;
+        }
+        if k.has(self.node, flag::IDENTIFIER_LIKE) {
+            return true;
+        }
+        k.has(self.node, flag::WORD) && self.up(0).is_some_and(|p| k.has(p, flag::WORD_CONTEXT))
+    }
+
+    /// Rust : la chaîne est-elle la valeur d'une clé `key = "..."` de
+    /// [`RUST_FUNCTION_PATH_KEYS`] ? Dans le `token_tree`, les frères
+    /// précédents du `string_literal` (parent de la feuille) sont `=` puis le
+    /// jeton de la clé (un `identifier`, ou un mot-clé comme `default` dont
+    /// le kind est le texte lui-même).
+    fn is_rust_function_path_value(&self, source: &str) -> bool {
+        let k = self.k;
+        let (Some(string_literal), Some(token_tree)) = (self.up(0), self.up(1)) else {
+            return false;
+        };
+        let (Some(eq), _) = siblings(token_tree, string_literal) else {
+            return false;
+        };
+        if !k.has(eq, flag::EQ) {
+            return false;
+        }
+        siblings(token_tree, eq).0.is_some_and(|key| {
+            !k.has(key, flag::TOKEN_TREE)
+                && key
+                    .utf8_text(source.as_bytes())
+                    .is_ok_and(|k| RUST_FUNCTION_PATH_KEYS.contains(&k))
+        })
+    }
+
+    /// Le contenu d'une chaîne littérale située dans les arguments d'un
+    /// attribut, s'il a la forme d'un identifiant ou d'un chemin
+    /// (`default_true`, `Default::default`, `my_mod::serialize`) : la
+    /// fonction qu'il nomme est utilisée par la macro ou le framework, donc
+    /// référencée. Retourne le dernier segment du chemin.
+    ///
+    /// Périmètre volontairement étroit, pour ne pas inventer d'usages dans
+    /// `find_refs` / `impact` / repo map : en Rust seules les valeurs des
+    /// clés de [`RUST_FUNCTION_PATH_KEYS`] comptent (`#[cfg(feature = "x")]`
+    /// et `#[serde(rename = "x")]` ne référencent rien) ; pour les
+    /// décorateurs et annotations, les attributs de [`NON_SYMBOL_ATTRIBUTES`]
+    /// sont ignorés.
+    fn attribute_string_name<'s>(&self, source: &'s str, language: Language) -> Option<&'s str> {
+        let k = self.k;
+        if !k.has(self.node, flag::STRING_CONTENT) || !k.has_attribute {
+            return None;
+        }
+        let mut found = false;
+        for depth in 0..MAX_ATTRIBUTE_DEPTH {
+            let Some(n) = self.up(depth) else {
+                break;
+            };
+            if k.has(n, flag::ATTRIBUTE) {
+                if language == Language::Rust {
+                    if !self.is_rust_function_path_value(source) {
+                        return None;
+                    }
+                } else if attribute_name(n, source)
+                    .is_some_and(|a| NON_SYMBOL_ATTRIBUTES.contains(&a))
+                {
+                    return None;
+                }
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+        let text = self.node.utf8_text(source.as_bytes()).ok()?;
+        let is_ident = |s: &str| {
+            let mut chars = s.chars();
+            chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && chars.all(|c| c.is_alphanumeric() || c == '_')
+        };
+        let mut segments = text.split("::");
+        let mut last = segments.next()?;
+        if !is_ident(last) {
+            return None;
+        }
+        for segment in segments {
+            if !is_ident(segment) {
+                return None;
+            }
+            last = segment;
+        }
+        Some(last)
+    }
+
+    /// Classe une occurrence ; `None` = mot-clé à ne pas indexer (Elixir `def`).
+    fn classify(&self, text: &str, source: &[u8], language: Language) -> Option<ReferenceKind> {
+        if language == Language::Elixir
+            && let Some(kind) = self.classify_elixir(text, source)
+        {
+            return kind;
+        }
+        // JSX : noms d'attributs, balises intrinsèques et fermantes ne sont
+        // pas des symboles.
+        if self.is_jsx_noise(text) {
+            return None;
+        }
+        // Import d'abord : `import { Foo }` a un champ `name` dans un
+        // `*_specifier`.
+        Some(if self.in_import() {
+            ReferenceKind::Import
+        } else if self.is_jsx_tag_name() {
+            ReferenceKind::Call
+        } else if self.is_definition_name() {
+            ReferenceKind::Definition
+        } else if self.is_callee() {
+            ReferenceKind::Call
+        } else if self.is_type() {
+            ReferenceKind::Type
+        } else {
+            ReferenceKind::Reference
+        })
+    }
+
+    /// Elixir : les mots-clés `def*` / `alias` / `import`… sont des `call`
+    /// dans l'AST. Retourne `Some(None)` pour le mot-clé lui-même (pas
+    /// indexé), `Some(Some(Definition))` pour le nom qu'il déclare,
+    /// `Some(Some(Import))` pour l'argument d'une directive, et `None` quand
+    /// le classement générique s'applique.
+    fn classify_elixir(&self, text: &str, source: &[u8]) -> Option<Option<ReferenceKind>> {
+        let k = self.k;
+        let node = self.node;
+        let parent = self.up(0)?;
+        // Le mot-clé : `def` dans `(call target: (identifier))`.
+        if k.has(node, flag::IDENTIFIER)
+            && k.has(parent, flag::CALL_NODE)
+            && k.is_field(parent, node, k.target)
+            && (ELIXIR_DEFINERS.contains(&text) || ELIXIR_DIRECTIVES.contains(&text))
+        {
+            return Some(None);
+        }
+        // Le nom déclaré : premier argument du mot-clé, directement (`def foo`,
+        // `defmodule M`), comme cible d'un appel (`def foo(x)`) ou à gauche
+        // d'un `when` (`def foo(x) when ...`). `head_depth` est la profondeur
+        // de la tête au-dessus de la feuille.
+        let head_depth = if k.has(parent, flag::ARGUMENTS) {
+            0
+        } else if k.has(parent, flag::CALL_NODE) && k.is_field(parent, node, k.target) {
+            match self.up(1) {
+                Some(op) if k.has(op, flag::BINARY_OPERATOR) && k.is_field(op, parent, k.left) => 2,
+                _ => 1,
+            }
+        } else {
+            return None;
+        };
+        let head = self.node_at(head_depth)?;
+        let arguments = self.node_at(head_depth + 1)?;
+        if !k.has(arguments, flag::ARGUMENTS) || arguments.named_child(0) != Some(head) {
+            return None;
+        }
+        let keyword = self.node_at(head_depth + 2)?;
+        if !k.has(keyword, flag::CALL_NODE) {
+            return None;
+        }
+        let keyword_text = keyword
+            .child_by_field_id(k.target)
+            .and_then(|t| t.utf8_text(source).ok())?;
+        // `defimpl Proto, for: T` ne déclare ni `Proto` ni `T`.
+        if ELIXIR_DEFINERS.contains(&keyword_text) && keyword_text != "defimpl" {
+            Some(Some(ReferenceKind::Definition))
+        } else if ELIXIR_DIRECTIVES.contains(&keyword_text) {
+            Some(Some(ReferenceKind::Import))
+        } else {
+            None
+        }
+    }
+
+    /// L'élément JSX (grammaire TSX) dont la feuille est la balise :
+    /// `<Button>`, `<Ui.Card>` (dernier segment d'un `member_expression`).
+    fn jsx_element_of(&self) -> Option<Node<'t>> {
+        let k = self.k;
+        let mut current = self.node;
+        let mut depth = 0;
+        while let Some(p) = self.up(depth)
+            && k.has(p, flag::MEMBER_EXPRESSION)
+        {
+            if !k.is_field(p, current, k.property) {
+                return None;
+            }
+            current = p;
+            depth += 1;
+        }
+        self.up(depth)
+            .filter(|p| k.has(*p, flag::JSX_ELEMENT) && k.is_field(*p, current, k.name))
+    }
+
+    /// JSX (grammaires TSX et JavaScript) : le nom d'un attribut (`onClick=`,
+    /// `className=`), un nom à espace de noms (`<svg:rect>`, `xlink:href=`),
+    /// une balise intrinsèque (`<div>`, `<motion.div>` : dernier segment en
+    /// minuscules) et une balise fermante (`</Button>`, même usage que
+    /// l'ouvrante) ne désignent aucun symbole du projet.
+    fn is_jsx_noise(&self, text: &str) -> bool {
+        let k = self.k;
+        if self.up(0).is_some_and(|p| {
+            k.has(p, flag::JSX_NAMESPACE_NAME)
+                || (k.has(p, flag::JSX_ATTRIBUTE) && p.named_child(0) == Some(self.node))
+        }) {
+            return true;
+        }
+        // Balise fermante : tout son nom, `Ui` compris dans `</Ui.Card>`.
+        let mut depth = 0;
+        while let Some(a) = self.up(depth)
+            && k.has(a, flag::MEMBER_EXPRESSION)
+        {
+            depth += 1;
+        }
+        if self
+            .up(depth)
+            .is_some_and(|a| k.has(a, flag::JSX_CLOSING_ELEMENT))
+        {
+            return true;
+        }
+        self.jsx_element_of().is_some() && text.starts_with(|c: char| c.is_lowercase())
+    }
+
+    /// Balise d'un composant JSX (`<Button />`, `<Ui.Card>`) : rendre le
+    /// composant l'appelle (arête `App -> Button`).
+    fn is_jsx_tag_name(&self) -> bool {
+        self.jsx_element_of()
+            .is_some_and(|element| !self.k.has(element, flag::JSX_CLOSING_ELEMENT))
+    }
+
+    /// Le nœud est-il le nom déclaré par une définition (`fn foo`, `class
+    /// Foo`…) ?
+    ///
+    /// Le champ `name` existe aussi hors définitions (`Foo::new`, `obj.meth()`
+    /// en Java), d'où le filtre sur le type du parent. Un `export_specifier`
+    /// (`export { foo }`) réexporte un nom sans le définir.
+    fn is_definition_name(&self) -> bool {
+        let k = self.k;
+        let node = self.node;
+        let Some(parent) = self.up(0) else {
+            return false;
+        };
+        if k.has(parent, flag::EXPORT_SPECIFIER) {
+            return false;
+        }
+
+        // C/C++ : `int foo(...)` → function_declarator(declarator: identifier)
+        if k.has(parent, flag::FUNCTION_DECLARATOR) {
+            return k.is_field(parent, node, k.declarator);
+        }
+        // Bash : `foo() { ... }`
+        if k.has(parent, flag::FUNCTION_DEFINITION) && k.has(node, flag::WORD) {
+            return true;
+        }
+
+        (k.has(parent, flag::DECLARES) && k.is_field(parent, node, k.name))
+            // Kotlin `enum_entry` has no `name` field: the entry's name is its
+            // first named child.
+            || (k.has(parent, flag::ENUM_ENTRY) && parent.named_child(0) == Some(node))
+            // TypeScript `enum E { A, B, C }`: every unassigned member is a
+            // repeated `name` field of `enum_body`, and `child_by_field_id`
+            // only returns the first. An identifier directly under
+            // `enum_body` can only be a member name (assigned members sit
+            // under `enum_assignment`, computed names under
+            // `computed_property_name`).
+            || k.has(parent, flag::ENUM_BODY)
+    }
+
+    fn in_import(&self) -> bool {
+        let k = self.k;
+        for depth in 0..MAX_IMPORT_DEPTH {
+            let Some(n) = self.up(depth) else {
+                return false;
+            };
+            if k.has(n, flag::IMPORT_CONTEXT)
+                // `export { a } from './a'` : réexport d'un nom importé.
+                || (k.has(n, flag::EXPORT_STATEMENT) && n.child_by_field_id(k.source).is_some())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Le nœud est-il ce qui est appelé (et non un argument ou le receveur) ?
+    fn is_callee(&self) -> bool {
+        let k = self.k;
+        // Remonte la partie droite des accès membres : dans `obj.meth()`,
+        // c'est `meth` qui est appelé, pas `obj`.
+        let mut current = self.node;
+        let mut depth = 0;
+        while let Some(p) = self.up(depth) {
+            if k.has(p, flag::MEMBER_ACCESS) {
+                let is_last =
+                    p.named_child(p.named_child_count().saturating_sub(1)) == Some(current);
+                if !is_last {
+                    return false;
+                }
+            } else if k.has(p, flag::GENERIC_CALLEE)
+                && (k.is_field(p, current, k.callee[0]) || k.is_field(p, current, k.name))
+            {
+                // `f::<T>()`, `s.parse::<T>()`, `std::make_unique<T>()`: the
+                // type arguments wrap the callee, before or after the member
+                // accesses (#80).
+            } else {
+                break;
+            }
+            current = p;
+            depth += 1;
+        }
+
+        let Some(call) = self.up(depth) else {
+            return false;
+        };
+        // Rust : les arguments d'une macro (`assert_eq!(f(x), 1)`, `vec![g()]`,
+        // `tracing::info!(n = h())`) ne sont pas parsés en expressions.
+        if k.has(call, flag::TOKEN_TREE) {
+            return self.is_macro_argument_call(current, depth);
+        }
+        if !k.has(call, flag::CALL) {
+            return false;
+        }
+
+        if k.callee.iter().any(|&f| k.is_field(call, current, f)) {
+            return true;
+        }
+        // Grammaires sans champ nommé (Kotlin, Scala, PHP `new`, Bash) :
+        // l'appelé est le premier enfant, à condition que le receveur ne soit
+        // pas un champ.
+        !k.receiver.iter().any(|&f| k.is_field(call, current, f))
+            && call.named_child(0) == Some(current)
+    }
+
+    /// Rust : un identifiant dans le `token_tree` d'une `macro_invocation`
+    /// est un appel quand il est suivi de `(` (`f(x)`) ou de `!(` (macro
+    /// imbriquée). Volontairement conservateur : `x = f()` donne `f` seul,
+    /// `Foo::bar()` donne `bar` seul. Les `token_tree` d'attributs
+    /// (`#[cfg(all(...))]`) et de `macro_rules!` ne sont pas concernés.
+    /// `node` est le nœud dont le parent, `up(depth)`, est le `token_tree`.
+    fn is_macro_argument_call(&self, node: Node<'t>, depth: usize) -> bool {
+        let k = self.k;
+        let mut outer_depth = depth;
+        while let Some(tree) = self.up(outer_depth) {
+            if !k.has(tree, flag::TOKEN_TREE) {
+                break;
+            }
+            outer_depth += 1;
+        }
+        if !self
+            .up(outer_depth)
+            .is_some_and(|n| k.has(n, flag::MACRO_INVOCATION))
+        {
+            return false;
+        }
+        let Some(token_tree) = self.up(depth) else {
+            return false;
+        };
+        let (_, mut next) = siblings(token_tree, node);
+        if next.is_some_and(|n| k.has(n, flag::BANG)) {
+            next = next.and_then(|n| siblings(token_tree, n).1);
+        }
+        next.is_some_and(|n| {
+            k.has(n, flag::TOKEN_TREE) && n.child(0).is_some_and(|c| k.has(c, flag::LPAREN))
+        })
+    }
+
+    fn is_type(&self) -> bool {
+        let k = self.k;
+        if k.has(self.node, flag::TYPE_IDENTIFIER) {
+            return true;
+        }
+        // PHP `implements \JsonSerializable`, `extends \Foo\Bar`: the last
+        // segment of a `qualified_name` sits one level below the clause.
+        let depth = match self.up(0) {
+            Some(p)
+                if k.has(p, flag::QUALIFIED_NAME)
+                    && p.named_child(p.named_child_count().saturating_sub(1))
+                        == Some(self.node) =>
+            {
+                1
+            }
+            _ => 0,
+        };
+        self.up(depth).is_some_and(|p| k.has(p, flag::TYPE_CONTEXT))
+    }
 }
 
 /// Mots-clés Elixir qui déclarent un symbole : `def foo(x)` est un `call` dont
@@ -371,174 +982,6 @@ const ELIXIR_DEFINERS: [&str; 15] = [
 
 /// Directives Elixir : leurs arguments sont des imports, pas des appels.
 const ELIXIR_DIRECTIVES: [&str; 4] = ["alias", "import", "use", "require"];
-
-/// Elixir : les mots-clés `def*` / `alias` / `import`… sont des `call` dans
-/// l'AST. Retourne `Some(None)` pour le mot-clé lui-même (pas indexé),
-/// `Some(Some(Definition))` pour le nom qu'il déclare, `Some(Some(Import))`
-/// pour l'argument d'une directive, et `None` quand le classement générique
-/// s'applique.
-fn classify_elixir(node: Node, text: &str, source: &[u8]) -> Option<Option<ReferenceKind>> {
-    let parent = node.parent()?;
-    // Le mot-clé : `def` dans `(call target: (identifier))`.
-    if node.kind() == "identifier"
-        && parent.kind() == "call"
-        && is_field(parent, node, "target")
-        && (ELIXIR_DEFINERS.contains(&text) || ELIXIR_DIRECTIVES.contains(&text))
-    {
-        return Some(None);
-    }
-    // Le nom déclaré : premier argument du mot-clé, directement (`def foo`,
-    // `defmodule M`), comme cible d'un appel (`def foo(x)`) ou à gauche d'un
-    // `when` (`def foo(x) when ...`).
-    let head = if parent.kind() == "arguments" {
-        node
-    } else if parent.kind() == "call" && is_field(parent, node, "target") {
-        let mut head = parent;
-        if let Some(op) = head.parent()
-            && op.kind() == "binary_operator"
-            && is_field(op, head, "left")
-        {
-            head = op;
-        }
-        head
-    } else {
-        return None;
-    };
-    let arguments = head.parent()?;
-    if arguments.kind() != "arguments" || arguments.named_child(0) != Some(head) {
-        return None;
-    }
-    let keyword = arguments.parent()?;
-    if keyword.kind() != "call" {
-        return None;
-    }
-    let keyword_text = keyword
-        .child_by_field_name("target")
-        .and_then(|t| t.utf8_text(source).ok())?;
-    // `defimpl Proto, for: T` ne déclare ni `Proto` ni `T`.
-    if ELIXIR_DEFINERS.contains(&keyword_text) && keyword_text != "defimpl" {
-        Some(Some(ReferenceKind::Definition))
-    } else if ELIXIR_DIRECTIVES.contains(&keyword_text) {
-        Some(Some(ReferenceKind::Import))
-    } else {
-        None
-    }
-}
-
-fn is_field(parent: Node, child: Node, field: &str) -> bool {
-    parent.child_by_field_name(field) == Some(child)
-}
-
-/// L'élément JSX (grammaire TSX) dont `node` est la balise : `<Button>`,
-/// `<Ui.Card>` (dernier segment d'un `member_expression`).
-fn jsx_element_of(node: Node) -> Option<Node> {
-    let mut current = node;
-    let mut parent = node.parent();
-    while let Some(p) = parent
-        && p.kind() == "member_expression"
-    {
-        if !is_field(p, current, "property") {
-            return None;
-        }
-        current = p;
-        parent = p.parent();
-    }
-    parent.filter(|p| {
-        matches!(
-            p.kind(),
-            "jsx_opening_element" | "jsx_closing_element" | "jsx_self_closing_element"
-        ) && is_field(*p, current, "name")
-    })
-}
-
-/// JSX (grammaires TSX et JavaScript) : le nom d'un attribut (`onClick=`,
-/// `className=`), un nom à espace de noms (`<svg:rect>`, `xlink:href=`), une
-/// balise intrinsèque (`<div>`, `<motion.div>` : dernier segment en
-/// minuscules) et une balise fermante (`</Button>`, même usage que
-/// l'ouvrante) ne désignent aucun symbole du projet.
-fn is_jsx_noise(node: Node, text: &str) -> bool {
-    if node.parent().is_some_and(|p| {
-        p.kind() == "jsx_namespace_name"
-            || (p.kind() == "jsx_attribute" && p.named_child(0) == Some(node))
-    }) {
-        return true;
-    }
-    // Balise fermante : tout son nom, `Ui` compris dans `</Ui.Card>`.
-    let mut ancestor = node.parent();
-    while let Some(a) = ancestor
-        && a.kind() == "member_expression"
-    {
-        ancestor = a.parent();
-    }
-    if ancestor.is_some_and(|a| a.kind() == "jsx_closing_element") {
-        return true;
-    }
-    jsx_element_of(node).is_some() && text.starts_with(|c: char| c.is_lowercase())
-}
-
-/// Balise d'un composant JSX (`<Button />`, `<Ui.Card>`) : rendre le
-/// composant l'appelle (arête `App -> Button`).
-fn is_jsx_tag_name(node: Node) -> bool {
-    jsx_element_of(node).is_some_and(|element| element.kind() != "jsx_closing_element")
-}
-
-/// Le nœud est-il le nom déclaré par une définition (`fn foo`, `class Foo`…) ?
-///
-/// Le champ `name` existe aussi hors définitions (`Foo::new`, `obj.meth()` en
-/// Java), d'où le filtre sur le type du parent. Un `export_specifier`
-/// (`export { foo }`) réexporte un nom sans le définir.
-fn is_definition_name(node: Node) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    let kind = parent.kind();
-    if kind == "export_specifier" {
-        return false;
-    }
-
-    // C/C++ : `int foo(...)` → function_declarator(declarator: identifier)
-    if kind == "function_declarator" {
-        return is_field(parent, node, "declarator");
-    }
-    // Bash : `foo() { ... }`
-    if kind == "function_definition" && node.kind() == "word" {
-        return true;
-    }
-
-    let declares = kind.contains("definition")
-        || kind.contains("declaration")
-        || kind.contains("declarator")
-        || kind.ends_with("_item")
-        || kind.ends_with("_spec")
-        || kind.ends_with("_specifier")
-        || matches!(kind, "class" | "module" | "method" | "singleton_method");
-    declares && is_field(parent, node, "name")
-}
-
-fn in_import(node: Node) -> bool {
-    let mut current = node.parent();
-    for _ in 0..MAX_IMPORT_DEPTH {
-        let Some(n) = current else {
-            return false;
-        };
-        let kind = n.kind();
-        if kind.contains("import")
-            || matches!(
-                kind,
-                "use_declaration"
-                    | "using_directive"
-                    | "namespace_use_declaration"
-                    | "preproc_include"
-            )
-            // `export { a } from './a'` : réexport d'un nom importé.
-            || (kind == "export_statement" && n.child_by_field_name("source").is_some())
-        {
-            return true;
-        }
-        current = n.parent();
-    }
-    false
-}
 
 /// Accès membre / chemin qualifié : `obj.meth`, `Foo::new`, `a.b.c`.
 fn is_member_access(kind: &str) -> bool {
@@ -574,94 +1017,6 @@ fn is_call(kind: &str) -> bool {
             | "constructor_invocation"
             | "command_name"
     )
-}
-
-/// Le nœud est-il ce qui est appelé (et non un argument ou le receveur) ?
-fn is_callee(node: Node) -> bool {
-    // Remonte la partie droite des accès membres : dans `obj.meth()`, c'est
-    // `meth` qui est appelé, pas `obj`.
-    let mut current = node;
-    let mut parent = node.parent();
-    while let Some(p) = parent {
-        if !is_member_access(p.kind()) {
-            break;
-        }
-        let is_last = p.named_child(p.named_child_count().saturating_sub(1)) == Some(current);
-        if !is_last {
-            return false;
-        }
-        current = p;
-        parent = p.parent();
-    }
-
-    let Some(call) = parent else {
-        return false;
-    };
-    // Rust : les arguments d'une macro (`assert_eq!(f(x), 1)`, `vec![g()]`,
-    // `tracing::info!(n = h())`) ne sont pas parsés en expressions.
-    if call.kind() == "token_tree" {
-        return is_macro_argument_call(current);
-    }
-    if !is_call(call.kind()) {
-        return false;
-    }
-
-    const CALLEE_FIELDS: [&str; 7] = [
-        "function",
-        "name",
-        "method",
-        "constructor",
-        "macro",
-        "type",
-        "target",
-    ];
-    if CALLEE_FIELDS.iter().any(|f| is_field(call, current, f)) {
-        return true;
-    }
-    // Grammaires sans champ nommé (Kotlin, Scala, PHP `new`, Bash) : l'appelé
-    // est le premier enfant, à condition que le receveur ne soit pas un champ.
-    !["receiver", "object", "expression"]
-        .iter()
-        .any(|f| is_field(call, current, f))
-        && call.named_child(0) == Some(current)
-}
-
-/// Rust : un identifiant dans le `token_tree` d'une `macro_invocation` est un
-/// appel quand il est suivi de `(` (`f(x)`) ou de `!(` (macro imbriquée).
-/// Volontairement conservateur : `x = f()` donne `f` seul, `Foo::bar()` donne
-/// `bar` seul. Les `token_tree` d'attributs (`#[cfg(all(...))]`) et de
-/// `macro_rules!` ne sont pas concernés.
-fn is_macro_argument_call(node: Node) -> bool {
-    let mut outer = node.parent();
-    while let Some(tree) = outer {
-        if tree.kind() != "token_tree" {
-            break;
-        }
-        outer = tree.parent();
-    }
-    if outer.map(|n| n.kind()) != Some("macro_invocation") {
-        return false;
-    }
-    let mut next = node.next_sibling();
-    if next.is_some_and(|n| n.kind() == "!") {
-        next = next.and_then(|n| n.next_sibling());
-    }
-    next.is_some_and(|n| n.kind() == "token_tree" && n.child(0).is_some_and(|c| c.kind() == "("))
-}
-
-fn is_type(node: Node) -> bool {
-    if node.kind() == "type_identifier" {
-        return true;
-    }
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    let kind = parent.kind();
-    kind.contains("type")
-        || matches!(
-            kind,
-            "superclass" | "base_class_clause" | "extends_clause" | "base_list" | "base_clause"
-        )
 }
 
 #[cfg(test)]

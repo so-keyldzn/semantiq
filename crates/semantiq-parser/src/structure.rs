@@ -410,9 +410,12 @@ fn relations_of(node: Node, src: &[u8], language: Language, out: &mut Vec<TypeRe
             ) else {
                 return;
             };
-            let is_interface = node
-                .child(0)
-                .is_some_and(|c| c.utf8_text(src).ok() == Some("interface"));
+            // The `interface` keyword follows any `modifiers` node (`public
+            // interface`, `sealed interface`, `@Ann interface`) (#153).
+            let is_interface = {
+                let mut cursor = node.walk();
+                node.children(&mut cursor).any(|c| c.kind() == "interface")
+            };
             for specifier in named_children(specifiers) {
                 // `B()` calls a superclass constructor; a bare type is an
                 // interface (or a superclass declared elsewhere).
@@ -487,14 +490,32 @@ fn relations_of(node: Node, src: &[u8], language: Language, out: &mut Vec<TypeRe
             }
         }
         Language::Ruby => {
-            if kind == "class"
-                && let (Some(name), Some(superclass)) = (
-                    declared_name(node, src),
-                    node.child_by_field_name("superclass"),
-                )
-            {
+            if !matches!(kind, "class" | "module") {
+                return;
+            }
+            let Some(name) = declared_name(node, src) else {
+                return;
+            };
+            if let Some(superclass) = node.child_by_field_name("superclass") {
                 for value in type_children(superclass) {
                     push(&name, value, RelationKind::Extends);
+                }
+            }
+            // Mixins: `include M` / `extend M` / `prepend M` directly in the
+            // class or module body are `implements` relations (#152).
+            if let Some(body) = node.child_by_field_name("body") {
+                for call in named_children(body) {
+                    if call.kind() != "call" || !is_ruby_mixin(call, src) {
+                        continue;
+                    }
+                    let Some(arguments) = call.child_by_field_name("arguments") else {
+                        continue;
+                    };
+                    for value in named_children(arguments) {
+                        if matches!(value.kind(), "constant" | "scope_resolution") {
+                            push(&name, value, RelationKind::Implements);
+                        }
+                    }
                 }
             }
         }
@@ -524,6 +545,15 @@ fn relations_of(node: Node, src: &[u8], language: Language, out: &mut Vec<TypeRe
         // inheritance syntax.
         _ => {}
     }
+}
+
+/// Ruby `include` / `extend` / `prepend` call (without receiver).
+fn is_ruby_mixin(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("receiver").is_none()
+        && call
+            .child_by_field_name("method")
+            .and_then(|m| m.utf8_text(src).ok())
+            .is_some_and(|m| matches!(m, "include" | "extend" | "prepend"))
 }
 
 fn looks_like_interface(name: &str) -> bool {
