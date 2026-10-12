@@ -138,6 +138,66 @@ const SEMANTIQ_PREFIX: &str = ".semantiq";
 /// would otherwise be parsed, chunked, embedded and returned by search.
 const CREDENTIAL_PREFIXES: &[&str] = &[".env", ".secret", ".credential"];
 
+/// Extensions of data files whose name marks them as a credential store
+/// (see [`CREDENTIAL_STEM_MARKERS`]): `secrets.yaml`, `credentials.json`,
+/// `service-account.json`, `app-firebase-adminsdk-x.json`... Code files
+/// (`secrets.rs`, `credentials.ts`) are never excluded by their name: they
+/// are the code that reads the store, not the store.
+const CREDENTIAL_DATA_EXTENSIONS: &[&str] = &["json", "yaml", "yml", "toml", "ini", "properties"];
+
+/// Words in the stem of a data file that mark it as a credential store,
+/// matched case-insensitively (`Secrets.json`, `my_secret.toml`,
+/// `serviceAccount.json`, `x-firebase-adminsdk-y.json`).
+const CREDENTIAL_STEM_MARKERS: &[&str] = &[
+    "secret",
+    "credential",
+    "service-account",
+    "service_account",
+    "serviceaccount",
+    "adminsdk",
+];
+
+/// Name prefixes of credential files whatever their extension, matched
+/// case-insensitively: `kubeconfig`, `kubeconfig.yaml`, `kubeconfig-prod`,
+/// `id_rsa`, `id_ed25519.pub`...
+const CREDENTIAL_NAME_PREFIXES: &[&str] =
+    &["kubeconfig", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"];
+
+/// Extensions of files that are private keys, certificates or key stores
+/// (`server.pem`, `deploy.key`, `cert.p12`, `release.jks`...), or dotenv
+/// files under any name (`secrets.env`, `prod.env`, the ones a client's
+/// `file_type: "env"` filter would otherwise hand to the text search).
+/// Matched case-insensitively.
+const CREDENTIAL_EXTENSIONS: &[&str] = &[
+    "env", "pem", "key", "p12", "pfx", "jks", "keystore", "ppk", "asc", "gpg", "kdbx",
+];
+
+/// Whether `name` (one path component, lowercased) names a credential store
+/// by its stem, prefix or extension: see [`CREDENTIAL_DATA_EXTENSIONS`],
+/// [`CREDENTIAL_STEM_MARKERS`], [`CREDENTIAL_NAME_PREFIXES`] and
+/// [`CREDENTIAL_EXTENSIONS`].
+fn is_credential_name(lower: &str) -> bool {
+    if CREDENTIAL_NAME_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return true;
+    }
+    let Some((stem, ext)) = lower.rsplit_once('.') else {
+        return false;
+    };
+    if stem.is_empty() {
+        // A hidden file without an extension (`.pem` is a name, not a
+        // suffix): the dot-prefix rules above decide.
+        return false;
+    }
+    CREDENTIAL_EXTENSIONS.contains(&ext)
+        || (CREDENTIAL_DATA_EXTENSIONS.contains(&ext)
+            && CREDENTIAL_STEM_MARKERS
+                .iter()
+                .any(|marker| stem.contains(marker)))
+}
+
 /// Check if a path should be excluded from indexing
 ///
 /// Returns true if any component of the path is an excluded name (see
@@ -166,8 +226,12 @@ pub fn should_exclude(path: &Path) -> bool {
 /// Check if a directory entry name should be excluded (for WalkBuilder filter).
 ///
 /// Returns true for the names in [`EXCLUDED_DIRS`], for Semantiq's own files
-/// (`.semantiq*`) and for credential files (`.env*`, `.secret*`,
-/// `.credential*`). Other hidden names are kept: `.github/workflows`,
+/// (`.semantiq*`) and for credential files: `.env*`, `.secret*`,
+/// `.credential*`, data files whose stem says `secret`, `credential`,
+/// `service-account` or `adminsdk` (`secrets.yaml`, `credentials.json`),
+/// `kubeconfig*`, SSH keys (`id_rsa*`), dotenv files (`*.env`) and key or
+/// certificate files (`*.pem`, `*.key`, `*.p12`...), see
+/// [`is_credential_name`]. Other hidden names are kept: `.github/workflows`,
 /// `.storybook/main.ts` or `.eslintrc.json` are project source and follow
 /// `.gitignore` like everything else.
 pub fn should_exclude_entry(name: &str) -> bool {
@@ -176,6 +240,7 @@ pub fn should_exclude_entry(name: &str) -> bool {
             .iter()
             .any(|prefix| name.starts_with(prefix))
         || EXCLUDED_DIRS.contains(&name)
+        || is_credential_name(&name.to_ascii_lowercase())
 }
 
 /// Whether a walked entry is excluded by name ([`should_exclude_entry`]).
@@ -186,9 +251,14 @@ pub fn should_exclude_dir_entry(entry: &DirEntry) -> bool {
 }
 
 /// The walk every indexing path uses for `root`: hidden entries included,
-/// `.gitignore`, the global git excludes and `.git/info/exclude` honoured,
-/// excluded names ([`should_exclude_dir_entry`]) pruned. Symlinks are not
-/// followed. Build with `.build()`, or chain further settings first.
+/// `.gitignore`, `.ignore`, the global git excludes and `.git/info/exclude`
+/// honoured, inside a git repository or not (an exported archive, a build
+/// directory or a mounted volume has a `.gitignore` worth following and no
+/// `.git`), excluded names ([`should_exclude_dir_entry`]) pruned. Symlinks
+/// are neither followed nor yielded ([`is_symlink_entry`]): a link to a file
+/// or directory outside the project would otherwise be read through, and a
+/// link inside it would index the same file twice. Build with `.build()`, or
+/// chain further settings first.
 pub fn project_walker(root: &Path) -> WalkBuilder {
     project_walker_with(root, |_| true)
 }
@@ -206,8 +276,19 @@ where
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
-        .filter_entry(move |entry| !should_exclude_dir_entry(entry) && keep(entry));
+        .require_git(false)
+        .follow_links(false)
+        .filter_entry(move |entry| {
+            !should_exclude_dir_entry(entry) && !is_symlink_entry(entry) && keep(entry)
+        });
     builder
+}
+
+/// Whether a walked entry is a symbolic link. The root of the walk (depth 0)
+/// never is: a project root given through a link (`/tmp` on macOS) is the
+/// project, and the walker follows it.
+pub fn is_symlink_entry(entry: &DirEntry) -> bool {
+    entry.depth() > 0 && entry.path_is_symlink()
 }
 
 /// Where a project walk failed: the directories it could not list, relative
@@ -330,6 +411,58 @@ mod tests {
             "src/secrets.rs",
             "lib/credentials.ts",
             "environment.yml",
+        ] {
+            assert!(!should_exclude_path(Path::new(path)), "{path}");
+        }
+    }
+
+    /// Credential stores are excluded by their name, dot-prefixed or not
+    /// (#113): a plain folder without `.gitignore` indexes `secrets.yaml`
+    /// otherwise, keys as symbols and values as chunks.
+    #[test]
+    fn test_should_exclude_credential_stores_by_name() {
+        for path in [
+            "secrets.yaml",
+            "config/Secrets.json",
+            "secret.toml",
+            "my_secrets.yml",
+            "credentials.json",
+            "aws-credentials.ini",
+            "service-account.json",
+            "serviceAccount.json",
+            "gcp_service_account.json",
+            "app-firebase-adminsdk-abc12.json",
+            "kubeconfig",
+            "kubeconfig.yaml",
+            "kubeconfig-prod",
+            "keys/id_rsa",
+            "keys/id_ed25519.pub",
+            "secrets.env",
+            "prod.ENV",
+            "certs/server.pem",
+            "deploy.key",
+            "cert.p12",
+            "release.jks",
+            "backup.kdbx",
+        ] {
+            assert!(should_exclude_path(Path::new(path)), "{path}");
+        }
+        // Code and ordinary configuration stay: the marker words apply to
+        // data files only, and a dotted-only name is not an extension.
+        for path in [
+            "src/secrets.rs",
+            "src/secret_store.py",
+            "lib/credentials.ts",
+            "src/service_account.go",
+            "config/app.yaml",
+            "config.json",
+            "Cargo.toml",
+            "package.json",
+            "environment.yml",
+            "src/keys.rs",
+            "docs/secrets.md",
+            ".pem",
+            "appsettings.Development.json",
         ] {
             assert!(!should_exclude_path(Path::new(path)), "{path}");
         }
@@ -466,14 +599,14 @@ mod tests {
             (".env.json", "{\"TOKEN\": \"x\"}"),
             (".docker/config.json", "{\"auths\": {}}"),
             ("generated/schema.ts", "export type S = 1;"),
+            ("secrets.yaml", "token: x"),
             (".gitignore", "generated/\n"),
         ] {
             let path = root.join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();
         }
-        // `.gitignore` is only honoured inside a git repository.
-        std::fs::create_dir_all(root.join(".git")).unwrap();
+        // No `.git` directory: `.gitignore` is honoured all the same (#113).
 
         let mut walked: Vec<String> = project_walker(&root)
             .build()
@@ -498,6 +631,50 @@ mod tests {
                 ".vscode/settings.json",
                 "src/main.rs",
             ]
+        );
+    }
+
+    /// Symlinks are not walked (#109): a link to a file or directory outside
+    /// the project would be read through, a link inside it would index the
+    /// same file twice. A root given through a link is still walked.
+    #[cfg(unix)]
+    #[test]
+    fn test_project_walker_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        let root = tmp.path().join("project");
+        for (path, content) in [
+            (outside.join("private.rs"), "fn outside_fn() {}"),
+            (outside.join("dir/leaked.rs"), "fn leaked() {}"),
+            (root.join("src/main.rs"), "fn main() {}"),
+            (root.join("src/util.rs"), "fn util() {}"),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        symlink(outside.join("private.rs"), root.join("linked.rs")).unwrap();
+        symlink(&outside, root.join("vendored")).unwrap();
+        symlink(outside.join("dir"), root.join("src/linked_dir")).unwrap();
+        symlink("util.rs", root.join("src/link.rs")).unwrap();
+        // The root itself reached through a link.
+        symlink(&root, tmp.path().join("project-link")).unwrap();
+
+        let walk = |root: &Path| {
+            let mut walked: Vec<String> = project_walker(root)
+                .build()
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
+                .map(|entry| to_relative_string(entry.path(), root))
+                .collect();
+            walked.sort();
+            walked
+        };
+        assert_eq!(walk(&root), ["src/main.rs", "src/util.rs"]);
+        assert_eq!(
+            walk(&tmp.path().join("project-link")),
+            ["src/main.rs", "src/util.rs"]
         );
     }
 }
