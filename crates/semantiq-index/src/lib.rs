@@ -16,8 +16,8 @@ pub use exclusions::{
     should_exclude_dir_entry, should_exclude_entry, should_exclude_path, walk_error_path,
 };
 pub use schema::{
-    CallEdgeRecord, ChunkRecord, DependencyRecord, FileRecord, ReferenceRecord, SymbolRecord,
-    TypeRelationRecord, UnreferencedSymbol,
+    CallEdgeRecord, ChunkRecord, DependencyRecord, EmbeddingSpace, FileRecord, ReferenceRecord,
+    SymbolRecord, TypeRelationRecord, UnreferencedSymbol,
 };
 pub use store::{
     CalibrationData, CalibrationRecord, ChunkHit, ChunkTextHit, DependencyInsert, EmbeddingCounts,

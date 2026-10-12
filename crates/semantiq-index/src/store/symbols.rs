@@ -173,7 +173,7 @@ impl IndexStore {
     /// counts them as `imported_in`).
     pub fn find_symbol_by_name(&self, name: &str) -> Result<Vec<SymbolRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, file_id, name, kind, start_line, end_line,
                         signature, doc_comment, parent
                  FROM symbols WHERE name = ?1",
@@ -202,7 +202,7 @@ impl IndexStore {
     /// Get all symbols for a file, ordered by start line.
     pub fn get_symbols_by_file(&self, file_id: i64) -> Result<Vec<SymbolRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, file_id, name, kind, start_line, end_line,
                         signature, doc_comment, parent
                  FROM symbols WHERE file_id = ?1

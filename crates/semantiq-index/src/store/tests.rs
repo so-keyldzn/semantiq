@@ -133,8 +133,12 @@ fn test_check_and_prepare_for_reindex() {
     let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
     assert!(needs_reindex);
 
+    // The file row stays, with its hash reset so the next walk re-extracts
+    // it (and carries its chunks' embeddings over, #86).
     let stats = store.get_stats().unwrap();
-    assert_eq!(stats.file_count, 0);
+    assert_eq!(stats.file_count, 1);
+    assert!(store.needs_reindex("test.rs", "fn main() {}").unwrap());
+    assert_eq!(store.get_file_by_path("test.rs").unwrap().unwrap().hash, "");
 
     let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
     assert!(!needs_reindex);
@@ -1518,4 +1522,118 @@ fn test_repo_graph_leaves_out_names_defined_almost_everywhere() {
             .count(),
         MAX_NAME_DEFINERS + 1
     );
+}
+
+/// Regression for #165: the repo map cache key must be O(1) (no scan of
+/// `files` or `refs`) and still move on every change of the graph.
+#[test]
+fn test_graph_fingerprint_is_constant_time_and_tracks_every_write() {
+    let store = IndexStore::open_in_memory().unwrap();
+    let plan: Vec<String> = store
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "EXPLAIN QUERY PLAN SELECT
+                    COALESCE((SELECT value FROM metadata WHERE key = 'graph_generation'), '0'),
+                    (SELECT COALESCE(MAX(id), 0) FROM files),
+                    (SELECT COALESCE(MAX(id), 0) FROM symbols),
+                    (SELECT COALESCE(MAX(id), 0) FROM dependencies)",
+            )?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    let plan_text = plan.join("\n");
+    // `SCAN CONSTANT ROW` is the FROM-less outer row; every table access
+    // must be a SEARCH (an index probe), never a SCAN.
+    assert!(
+        !plan
+            .iter()
+            .any(|step| step.starts_with("SCAN ") && step != "SCAN CONSTANT ROW"),
+        "fingerprint scans a table:\n{plan_text}"
+    );
+
+    let f0 = store.graph_fingerprint().unwrap();
+    let a = store.insert_file("a.rs", Some("rust"), "v1", 1).unwrap();
+    let f1 = store.graph_fingerprint().unwrap();
+    assert_ne!(f0, f1, "a new file");
+    // Reindexing an unchanged path (upsert) moves it too.
+    store.insert_file("a.rs", Some("rust"), "v2", 2).unwrap();
+    let f2 = store.graph_fingerprint().unwrap();
+    assert_ne!(f1, f2, "a reindexed file");
+    store
+        .insert_symbols(
+            a,
+            &[Symbol {
+                name: "x".into(),
+                kind: SymbolKind::Function,
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 1,
+                signature: None,
+                doc_comment: None,
+                parent: None,
+            }],
+        )
+        .unwrap();
+    let f3 = store.graph_fingerprint().unwrap();
+    assert_ne!(f2, f3, "new symbols");
+    // Embeddings are not part of the graph: phase 2 keeps the cache warm.
+    store
+        .insert_chunks(
+            a,
+            &[CodeChunk {
+                content: "fn x() {}".into(),
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 9,
+                symbols: vec![],
+            }],
+        )
+        .unwrap();
+    let chunk_id = store.get_chunks_by_file(a).unwrap()[0].id;
+    let f4 = store.graph_fingerprint().unwrap();
+    store
+        .store_chunk_embeddings(&[(
+            chunk_id,
+            vec![0.5; crate::schema::EMBEDDING_DIMENSION].as_slice(),
+        )])
+        .unwrap();
+    assert_eq!(f4, store.graph_fingerprint().unwrap(), "embeddings alone");
+    store.delete_file("a.rs").unwrap();
+    let f5 = store.graph_fingerprint().unwrap();
+    assert_ne!(f4, f5, "a deleted file");
+    // Each file of a full clear bumps the counter; the clear itself is seen.
+    store.insert_file("b.rs", Some("rust"), "v1", 1).unwrap();
+    let f6 = store.graph_fingerprint().unwrap();
+    store.clear_all_data().unwrap();
+    assert_ne!(f6, store.graph_fingerprint().unwrap(), "clear_all_data");
+}
+
+/// Regression for #139: a failing statement inside `clear_all_data` must not
+/// leave the shared connection in an open transaction.
+#[test]
+fn test_clear_all_data_rolls_back_on_error() {
+    let store = IndexStore::open_in_memory().unwrap();
+    store.insert_file("a.rs", Some("rust"), "x", 1).unwrap();
+    // Make the clear fail half-way: `files` cannot be deleted from.
+    store
+        .with_conn(|conn| {
+            conn.execute_batch(
+                "CREATE TRIGGER files_bd BEFORE DELETE ON files BEGIN
+                    SELECT RAISE(ABORT, 'disk full');
+                 END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(store.clear_all_data().is_err());
+    // The connection is usable again: the next writer can open a transaction
+    // and the earlier deletes were rolled back with the failed one.
+    assert!(store.with_conn(|conn| Ok(conn.is_autocommit())).unwrap());
+    store.insert_file("b.rs", Some("rust"), "y", 1).unwrap();
+    assert_eq!(store.get_stats().unwrap().file_count, 2);
 }

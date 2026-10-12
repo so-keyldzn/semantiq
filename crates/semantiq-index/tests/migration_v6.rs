@@ -1,6 +1,6 @@
 //! Integration tests for the v5 -> v6 schema migration (MiniLM 384-dim ->
-//! CodeRankEmbed 768-dim) and for the embedding-model metadata check that
-//! rebuilds the vector index whenever the stored model differs.
+//! CodeRankEmbed 768-dim) and for the embedding-model reconciliation that
+//! phase 2 runs before writing vectors (`IndexStore::prepare_embedding_space`).
 //!
 //! A vec0 column's dimension is fixed at CREATE time, so the migration must
 //! DROP + recreate `chunks_vec`; distance observations and calibrated
@@ -8,11 +8,16 @@
 //! forced. These tests seed an on-disk v5 database by hand, open it through
 //! `IndexStore::open` (the production path) and inspect the result with a raw
 //! connection.
+//!
+//! Outside that migration a model change only concerns the vectors (#86):
+//! the structural index (files, symbols, references...) stays, every chunk
+//! becomes pending again, and the stub never resets a real model's vectors.
 
 use rusqlite::{Connection, params};
-use semantiq_embeddings::{CODERANKEMBED_MODEL_ID, STUB_EMBEDDING_MODEL_ID};
-use semantiq_index::IndexStore;
+use semantiq_embeddings::STUB_EMBEDDING_MODEL_ID;
 use semantiq_index::schema::{EMBEDDING_DIMENSION, SCHEMA_VERSION, embedding_model_id};
+use semantiq_index::{EmbeddingSpace, IndexStore};
+use semantiq_parser::{Symbol, SymbolKind};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -230,105 +235,240 @@ fn reopening_with_same_model_keeps_data() {
     let store = IndexStore::open(&db).unwrap();
     assert!(!store.needs_full_reindex().unwrap());
     assert!(store.get_file_by_path("src/a.rs").unwrap().is_some());
-}
-
-#[test]
-fn embedding_model_change_without_schema_bump_rebuilds_vectors() {
-    register_sqlite_vec();
-    let dir = TempDir::new().unwrap();
-    let db = dir.path().join("index.db");
-
-    let store = IndexStore::open(&db).unwrap();
-    store.set_parser_version().unwrap();
-    store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
-        .unwrap();
-    drop(store);
-
-    // Simulate an index built by a different model at the current schema.
-    {
-        let conn = Connection::open(&db).unwrap();
-        conn.execute_batch(
-            "UPDATE metadata SET value = 'some/other-model' WHERE key = 'embedding_model';
-             INSERT INTO distance_observations (language, distance, query_hash, timestamp)
-             VALUES ('rust', 0.8, 1, 1000);",
-        )
-        .unwrap();
-    }
-
-    let store = IndexStore::open(&db).unwrap();
-    assert!(store.needs_full_reindex().unwrap());
-    assert!(store.get_file_by_path("src/a.rs").unwrap().is_none());
-    drop(store);
-
-    let conn = Connection::open(&db).unwrap();
-    assert_eq!(count(&conn, "distance_observations"), 0);
     assert_eq!(
-        metadata(&conn, "embedding_model").as_deref(),
-        Some(embedding_model_id())
+        store.prepare_embedding_space().unwrap(),
+        EmbeddingSpace::Current
     );
 }
 
-/// An index built by a stub build (zero vectors, `embedding_model = 'stub'`)
-/// must be reset when opened by an ONNX build — otherwise unchanged files are
-/// skipped by `needs_reindex` and the zero vectors survive forever. The
-/// reverse switch resets too. Run with and without the `onnx` feature to
-/// cover both directions.
-#[test]
-fn switching_between_stub_and_onnx_builds_resets_index() {
-    register_sqlite_vec();
-    let dir = TempDir::new().unwrap();
-    let db = dir.path().join("index.db");
-
-    let other_id = if embedding_model_id() == STUB_EMBEDDING_MODEL_ID {
-        CODERANKEMBED_MODEL_ID
-    } else {
-        STUB_EMBEDDING_MODEL_ID
-    };
-
-    let store = IndexStore::open(&db).unwrap();
+/// A file with one symbol, one embedded chunk and one pending chunk, plus a
+/// distance observation; `parser_version` stamped.
+fn seed_embedded_index(db: &Path) {
+    let store = IndexStore::open(db).unwrap();
     store.set_parser_version().unwrap();
     let file_id = store
-        .insert_file("src/a.rs", Some("rust"), "fn a() {}", 1000)
+        .insert_file("src/a.rs", Some("rust"), "fn a() {}\nfn b() {}", 1000)
         .unwrap();
     store
-        .insert_chunks(
+        .insert_symbols(
             file_id,
-            &[semantiq_parser::CodeChunk {
-                content: "fn a() {}".to_string(),
+            &[Symbol {
+                name: "a".into(),
+                kind: SymbolKind::Function,
                 start_line: 1,
                 end_line: 1,
                 start_byte: 0,
                 end_byte: 9,
-                symbols: vec!["a".to_string()],
+                signature: None,
+                doc_comment: None,
+                parent: None,
             }],
         )
         .unwrap();
+    let chunk = |content: &str, line: usize| semantiq_parser::CodeChunk {
+        content: content.to_string(),
+        start_line: line,
+        end_line: line,
+        start_byte: 0,
+        end_byte: 9,
+        symbols: vec![],
+    };
+    store
+        .insert_chunks(file_id, &[chunk("fn a() {}", 1), chunk("fn b() {}", 2)])
+        .unwrap();
     let chunk_id = store.get_chunks_by_file(file_id).unwrap()[0].id;
     store
-        .store_chunk_embeddings(&[(chunk_id, vec![0.0; EMBEDDING_DIMENSION].as_slice())])
+        .store_chunk_embeddings(&[(chunk_id, vec![0.1; EMBEDDING_DIMENSION].as_slice())])
         .unwrap();
     drop(store);
-
-    // Pretend the index was written by the other kind of build.
-    {
-        let conn = Connection::open(&db).unwrap();
-        conn.execute(
-            "UPDATE metadata SET value = ?1 WHERE key = 'embedding_model'",
-            params![other_id],
+    Connection::open(db)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO distance_observations (language, distance, query_hash, timestamp)
+             VALUES ('rust', 0.8, 1, 1000);",
         )
         .unwrap();
-    }
+}
+
+/// Regression for #86: opening an index stamped with another model (any
+/// command, `semantiq stats` included) changes nothing at all.
+#[test]
+fn opening_with_another_model_touches_nothing() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+    seed_embedded_index(&db);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE metadata SET value = 'some/other-model' WHERE key = 'embedding_model'",
+            [],
+        )
+        .unwrap();
 
     let store = IndexStore::open(&db).unwrap();
-    assert!(store.needs_full_reindex().unwrap());
-    assert!(store.get_file_by_path("src/a.rs").unwrap().is_none());
+    assert!(!store.needs_full_reindex().unwrap());
+    assert!(store.get_file_by_path("src/a.rs").unwrap().is_some());
+    assert_eq!(store.find_symbol_by_name("a").unwrap().len(), 1);
+    drop(store);
+
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(count(&conn, "chunks_vec"), 1);
+    assert_eq!(count(&conn, "distance_observations"), 1);
+    assert_eq!(
+        metadata(&conn, "embedding_model").as_deref(),
+        Some("some/other-model")
+    );
+}
+
+/// A real model finding another model's vectors drops them and makes every
+/// chunk pending again; files, symbols and the parser version stay.
+#[test]
+fn real_model_change_resets_vectors_and_keeps_the_structure() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+    seed_embedded_index(&db);
+
+    let store = IndexStore::open(&db).unwrap();
+    assert_eq!(
+        store
+            .prepare_embedding_space_for("vendor/new-model", false)
+            .unwrap(),
+        EmbeddingSpace::Reset {
+            previous: embedding_model_id().to_string()
+        }
+    );
+    assert!(!store.needs_full_reindex().unwrap());
+    assert!(store.get_file_by_path("src/a.rs").unwrap().is_some());
+    assert_eq!(store.find_symbol_by_name("a").unwrap().len(), 1);
+    let counts = store.embedding_counts().unwrap();
+    assert_eq!((counts.total, counts.pending()), (2, 2));
+    // Settled: the next pass finds its own model.
+    assert_eq!(
+        store
+            .prepare_embedding_space_for("vendor/new-model", false)
+            .unwrap(),
+        EmbeddingSpace::Current
+    );
     drop(store);
 
     let conn = Connection::open(&db).unwrap();
     assert_eq!(count(&conn, "chunks_vec"), 0);
+    assert_eq!(count(&conn, "chunks"), 2);
+    assert_eq!(count(&conn, "distance_observations"), 0);
+    assert_eq!(count(&conn, "threshold_calibration"), 0);
     assert_eq!(
         metadata(&conn, "embedding_model").as_deref(),
-        Some(embedding_model_id())
+        Some("vendor/new-model")
     );
+    assert_eq!(
+        metadata(&conn, "embedding_dim"),
+        Some(EMBEDDING_DIMENSION.to_string())
+    );
+    assert_eq!(
+        metadata(&conn, "parser_version"),
+        Some(semantiq_parser::PARSER_VERSION.to_string())
+    );
+    let sql = chunks_vec_sql(&conn);
+    assert!(
+        sql.contains(&format!("float[{EMBEDDING_DIMENSION}]")),
+        "{sql}"
+    );
+}
+
+/// The stub (a build without `onnx`, `SEMANTIQ_EMBEDDINGS=stub`) must never
+/// destroy a real model's vectors: it reports them foreign and writes nothing.
+#[test]
+fn stub_never_resets_a_real_models_vectors() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+    seed_embedded_index(&db);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE metadata SET value = 'vendor/real-model' WHERE key = 'embedding_model'",
+            [],
+        )
+        .unwrap();
+
+    let store = IndexStore::open(&db).unwrap();
+    assert_eq!(
+        store
+            .prepare_embedding_space_for(STUB_EMBEDDING_MODEL_ID, true)
+            .unwrap(),
+        EmbeddingSpace::Foreign {
+            model: "vendor/real-model".to_string()
+        }
+    );
+    drop(store);
+
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(count(&conn, "chunks_vec"), 1);
+    assert_eq!(
+        metadata(&conn, "embedding_model").as_deref(),
+        Some("vendor/real-model")
+    );
+}
+
+/// A stub-built index (zero vectors) opened by a real model is reset: the
+/// zero vectors must not survive as "already embedded".
+#[test]
+fn real_model_resets_a_stub_built_index() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+    seed_embedded_index(&db);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE metadata SET value = ?1 WHERE key = 'embedding_model'",
+            params![STUB_EMBEDDING_MODEL_ID],
+        )
+        .unwrap();
+
+    let store = IndexStore::open(&db).unwrap();
+    assert_eq!(
+        store
+            .prepare_embedding_space_for("vendor/real-model", false)
+            .unwrap(),
+        EmbeddingSpace::Reset {
+            previous: STUB_EMBEDDING_MODEL_ID.to_string()
+        }
+    );
+    assert_eq!(store.embedding_counts().unwrap().pending(), 2);
+    assert!(store.get_file_by_path("src/a.rs").unwrap().is_some());
+}
+
+/// A dimension mismatch means the table cannot even take this build's
+/// vectors: reset whoever asks, stub included.
+#[test]
+fn dimension_mismatch_resets_even_for_the_stub() {
+    register_sqlite_vec();
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("index.db");
+    seed_embedded_index(&db);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE metadata SET value = '384' WHERE key = 'embedding_dim'",
+            [],
+        )
+        .unwrap();
+
+    let store = IndexStore::open(&db).unwrap();
+    assert!(matches!(
+        store
+            .prepare_embedding_space_for(STUB_EMBEDDING_MODEL_ID, true)
+            .unwrap(),
+        EmbeddingSpace::Reset { .. }
+    ));
+    drop(store);
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        metadata(&conn, "embedding_dim"),
+        Some(EMBEDDING_DIMENSION.to_string())
+    );
+    assert_eq!(count(&conn, "chunks_vec"), 0);
 }

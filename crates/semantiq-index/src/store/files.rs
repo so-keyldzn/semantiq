@@ -272,7 +272,8 @@ impl IndexStore {
     /// Get a file record by its path.
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            // Called once per file by the refresh walk: cached statement.
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, path, language, hash, last_modified, indexed_at
                  FROM files WHERE path = ?1",
             )?;
@@ -517,26 +518,47 @@ impl IndexStore {
         self.with_conn(Self::clear_all_data_impl)
     }
 
-    /// Internal implementation for use within a transaction.
+    /// Internal implementation: one transaction, rolled back on error so a
+    /// failing `DELETE` (I/O error, `SQLITE_FULL`, a busy checkpoint) never
+    /// leaves the shared connection inside an open transaction, where every
+    /// later `BEGIN IMMEDIATE` would fail until restart (#139).
     pub(crate) fn clear_all_data_impl(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "BEGIN IMMEDIATE;
-             DELETE FROM chunks_vec;
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        let result = conn.execute_batch(
+            "DELETE FROM chunks_vec;
              DELETE FROM refs;
+             DELETE FROM names;
              DELETE FROM call_edges;
              DELETE FROM type_relations;
              DELETE FROM dependencies;
              DELETE FROM chunks;
              DELETE FROM symbols;
-             DELETE FROM files;
-             COMMIT;",
-        )?;
-        debug!("Cleared all indexed data");
-        Ok(())
+             DELETE FROM files;",
+        );
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", [])?;
+                debug!("Cleared all indexed data");
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                Err(e.into())
+            }
+        }
     }
 
-    /// Check if re-index is needed and prepare (clear data, set version).
-    /// Returns true if a full re-index is required.
+    /// Check whether the parser version changed and, if so, prepare the full
+    /// re-index phase 1 is about to run: the structural tables (symbols,
+    /// references, call edges, type relations, imports) are cleared and every
+    /// file's hash is reset so the next walk re-extracts it; the version is
+    /// stamped. Returns true when that happened.
+    ///
+    /// Files and chunks stay, embeddings included: `insert_chunks` carries
+    /// the embedding of a chunk whose content did not change over to the
+    /// re-extracted chunk, so a parser bump no longer redoes phase 2 (the
+    /// most expensive part) for code that did not move (#86). Files that
+    /// vanished meanwhile are pruned by the walk as usual.
     pub fn check_and_prepare_for_reindex(&self) -> Result<bool> {
         let conn = self
             .conn
@@ -545,33 +567,37 @@ impl IndexStore {
                 anyhow!("Database lock poisoned: {}", e)
             })?;
 
-        if !Self::needs_full_reindex_impl(&conn)? {
-            return Ok(false);
-        }
-
-        // Single transaction for check + clear + set version
+        // Single transaction for check + clear + set version. The version is
+        // read under the lock: two processes opening the same index together
+        // (`serve` and a CLI command) prepare it once, not twice.
         conn.execute("BEGIN IMMEDIATE", [])?;
 
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<bool> {
+            if !Self::needs_full_reindex_impl(&conn)? {
+                return Ok(false);
+            }
             conn.execute_batch(
-                "DELETE FROM chunks_vec;
-                 DELETE FROM refs;
+                "DELETE FROM refs;
+                 DELETE FROM names;
                  DELETE FROM call_edges;
                  DELETE FROM type_relations;
                  DELETE FROM dependencies;
-                 DELETE FROM chunks;
                  DELETE FROM symbols;
-                 DELETE FROM files;",
+                 UPDATE files SET hash = '';",
             )?;
             Self::set_parser_version_impl(&conn)?;
-            Ok(())
+            Ok(true)
         })();
 
         match result {
-            Ok(()) => {
+            Ok(prepared) => {
                 conn.execute("COMMIT", [])?;
-                info!("Parser version or embedding model changed - index cleared for full reindex");
-                Ok(true)
+                if prepared {
+                    info!(
+                        "Parser version changed - structure cleared for a full reindex (embeddings kept)"
+                    );
+                }
+                Ok(prepared)
             }
             Err(e) => {
                 let _ = conn.execute("ROLLBACK", []);

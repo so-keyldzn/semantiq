@@ -138,7 +138,23 @@ pub fn embed_pending(
     // model used to leave it set, and the "N% ready" notice never went away.
     let _finish = FinishOnDrop(progress);
     progress.start(store.embedding_counts()?);
-    embed_pending_inner(store, model, batch_size, progress, should_stop, on_batch)
+    match store.prepare_embedding_space()? {
+        // Another real model's vectors; the stub's zeros must not join them.
+        crate::EmbeddingSpace::Foreign { model: foreign } => {
+            warn!(
+                "The index holds vectors of {foreign} and this process embeds with the stub: \
+                 phase 2 skipped, nothing written"
+            );
+            Ok(EmbedResult::default())
+        }
+        space => {
+            if let crate::EmbeddingSpace::Reset { previous } = space {
+                info!("Vectors of {previous} dropped: every chunk is pending again");
+                progress.start(store.embedding_counts()?);
+            }
+            embed_pending_inner(store, model, batch_size, progress, should_stop, on_batch)
+        }
+    }
 }
 
 /// Clears `running` when dropped, whatever path the pass took.
