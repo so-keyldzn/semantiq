@@ -484,10 +484,13 @@ Returns:
 List what may break if a function, method or type changes: every place that
 uses it, then the users of those places, grouped by file, with the test files
 to run. Each site has a confidence (`same_file`, `imports`, `unique_name`,
-`name_only`) since matching is by name.
+`name_only`) since matching is by name; a name the project does not define is
+`name_only` everywhere and not followed. `definitions` lists at most 20 of the
+`definition_count` definitions; a file's `is_test` is present only when true.
 
 **Parameters:** `symbol` (required), `file_path` (pick one of several
-definitions), `max_depth` (default 2, max 4), `limit` (default 200, max 1000).
+definitions; an error names the defining files when it defines none),
+`max_depth` (default 2, max 4), `limit` (default 200, max 1000).
 
 ### `semantiq_calls`
 
@@ -501,7 +504,7 @@ does not define are listed in `external_callees`.
 |-----------|------|---------|-------------|
 | `symbol` | string | required | Function or method name |
 | `direction` | string | `both` | `callers`, `callees` or `both` |
-| `file_path` | string | - | Restrict to the definition in this file |
+| `file_path` | string | - | Restrict to the definition in this file (an error names the defining files when it defines none) |
 | `max_depth` | number | 1 | Call levels to follow (max 3) |
 | `limit` | number | 100 | Maximum call edges (max 1000) |
 
