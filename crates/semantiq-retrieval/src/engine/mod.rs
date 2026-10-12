@@ -14,10 +14,10 @@ mod threshold;
 
 use crate::repo_map::RankedRepo;
 use crate::threshold::{CollectorConfig, DistanceCollector, ThresholdConfig};
-use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
+use semantiq_embeddings::{EmbeddingModel, ModelSlot, RetryPolicy, create_embedding_model};
 use semantiq_index::IndexStore;
 use std::sync::{Arc, Mutex, RwLock};
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Accept a project-relative path argument written with either separator
 /// (`src/a.rs`, `src\\a.rs`, `./src/a.rs`) and return the form the index
@@ -54,7 +54,10 @@ pub use impact::{
 pub struct RetrievalEngine {
     pub(crate) store: Arc<IndexStore>,
     pub(crate) root_path: String,
-    pub(crate) embedding_model: Option<Box<dyn EmbeddingModel>>,
+    /// The embedding model, loaded on the first search that needs it and
+    /// retried with a backoff after a failure (#76). Shared with the
+    /// background embedder by `serve`, so the model is loaded once.
+    pub(crate) model_slot: Arc<ModelSlot>,
     /// Adaptive threshold configuration (loaded from calibration).
     pub(crate) threshold_config: Arc<RwLock<ThresholdConfig>>,
     /// Distance collector for ML calibration (optional).
@@ -73,20 +76,28 @@ impl RetrievalEngine {
     ///
     /// When `enable_collection` is true, distance observations are collected
     /// during semantic search for later ML calibration.
+    ///
+    /// The embedding model is not loaded here: the first `search()` (or
+    /// `embedding_model()`) loads it, so a server answers `initialize`
+    /// before the first download, and a failed load is retried after a
+    /// backoff instead of leaving semantic search off until a restart.
     pub fn with_options(store: Arc<IndexStore>, root_path: &str, enable_collection: bool) -> Self {
-        // Try to load embedding model
-        let embedding_model = match create_embedding_model(None) {
-            Ok(model) => {
-                debug!("Embedding model loaded (dim={})", model.dimension());
-                Some(model)
-            }
-            Err(e) => {
-                debug!("Failed to load embedding model: {}", e);
-                None
-            }
-        };
+        let slot = ModelSlot::new(
+            Box::new(|| create_embedding_model(None)),
+            RetryPolicy::default(),
+        );
+        Self::build(store, root_path, Arc::new(slot), enable_collection)
+    }
 
-        Self::build(store, root_path, embedding_model, enable_collection)
+    /// `with_options` with the caller's model slot: `serve` hands the same
+    /// slot to the background embedder; tests inject a loader.
+    pub fn with_model_slot(
+        store: Arc<IndexStore>,
+        root_path: &str,
+        slot: Arc<ModelSlot>,
+        enable_collection: bool,
+    ) -> Self {
+        Self::build(store, root_path, slot, enable_collection)
     }
 
     /// Create a RetrievalEngine without an embedding model or distance collection.
@@ -96,13 +107,13 @@ impl RetrievalEngine {
     /// only need references, dependencies, explanations or impact (e.g. one-shot
     /// CLI commands) use this to answer without paying for the model.
     pub fn without_embeddings(store: Arc<IndexStore>, root_path: &str) -> Self {
-        Self::build(store, root_path, None, false)
+        Self::build(store, root_path, Arc::new(ModelSlot::disabled()), false)
     }
 
     fn build(
         store: Arc<IndexStore>,
         root_path: &str,
-        embedding_model: Option<Box<dyn EmbeddingModel>>,
+        model_slot: Arc<ModelSlot>,
         enable_collection: bool,
     ) -> Self {
         // Load calibrated thresholds from database
@@ -161,16 +172,26 @@ impl RetrievalEngine {
         Self {
             store,
             root_path: root_path.to_string(),
-            embedding_model,
+            model_slot,
             threshold_config: Arc::new(RwLock::new(threshold_config)),
             distance_collector,
             repo_map_cache: Mutex::new(None),
         }
     }
 
-    /// The embedding model, when one is loaded (not with `without_embeddings`).
-    pub fn embedding_model(&self) -> Option<&dyn EmbeddingModel> {
-        self.embedding_model.as_deref()
+    /// The embedding model, loading it on this call if it is not yet (the
+    /// first download happens here for a CLI `search`). `None` when the slot
+    /// is disabled (`without_embeddings`), while another thread loads it, or
+    /// after a failed load until its backoff elapses; the slot's `status()`
+    /// says which.
+    pub fn embedding_model(&self) -> Option<Arc<dyn EmbeddingModel>> {
+        self.model_slot.get_or_load().ok()
+    }
+
+    /// The slot holding the embedding model (status, sharing with the
+    /// background embedder).
+    pub fn model_slot(&self) -> &Arc<ModelSlot> {
+        &self.model_slot
     }
 
     /// Get the current threshold configuration.

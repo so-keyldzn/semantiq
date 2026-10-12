@@ -6,6 +6,7 @@ use rmcp::{
     service::{NotificationContext, Peer, RoleServer},
     tool, tool_handler, tool_router,
 };
+use semantiq_embeddings::ModelStatus;
 use semantiq_index::{AutoIndexer, BackgroundEmbedder, EmbeddingCounts, IndexStore};
 use semantiq_retrieval::RetrievalEngine;
 use serde::Serialize;
@@ -182,22 +183,22 @@ impl SemantiqServer {
         self.embedder.get()?.progress().in_progress()
     }
 
-    /// Why the background embedder could not load the embedding model (last
-    /// attempt failed; it retries with a backoff), `None` otherwise.
+    /// Why the background embedder's last pass failed (model load, or a
+    /// pass that stopped unexpectedly; both retried with a backoff), `None`
+    /// otherwise. Short text, safe for clients.
     pub fn embedding_model_error(&self) -> Option<String> {
         self.embedder.get()?.progress().model_error()
     }
 
     /// Why semantic search is off right now, most permanent first: the stub
-    /// backend; the engine's own model copy missing (`RetrievalEngine::new`
-    /// loads it once at startup and never retries, so `search()` has no
-    /// model until a restart even after the embedder recovers); the
-    /// embedder's last load failed (retried in the background). `None` =
-    /// available.
+    /// backend; the shared model slot (loading, or its last load failed and
+    /// is retried after a backoff, by the embedder thread and by the next
+    /// search); the embedder's last pass failed. `None` = available. Never
+    /// loads the model itself.
     pub fn semantic_search_unavailable_reason(&self) -> Option<String> {
         unavailable_reason(
             semantiq_embeddings::semantic_search_unavailable_reason(),
-            self.engine.embedding_model().is_none(),
+            self.engine.model_slot().status(),
             self.embedding_model_error(),
         )
     }
@@ -207,7 +208,7 @@ impl SemantiqServer {
     fn runtime_unavailable_reason(&self) -> Option<String> {
         unavailable_reason(
             None,
-            self.engine.embedding_model().is_none(),
+            self.engine.model_slot().status(),
             self.embedding_model_error(),
         )
     }
@@ -253,9 +254,15 @@ impl SemantiqServer {
             let watching = self.watching;
             initial_indexing.store(true, Ordering::Relaxed);
 
+            // The embedder loads the engine's own model slot: one copy of
+            // the model, loaded after phase 1 (off the transport path), and
+            // a load by either side serves both (#76, #97). `load_now`
+            // follows the embedder's schedule, not the slot's backoff, and
+            // returns the short public reason on failure (#100).
+            let slot = Arc::clone(self.engine.model_slot());
             let embedder = match BackgroundEmbedder::spawn(
                 Arc::clone(&self.store),
-                Box::new(|| semantiq_embeddings::create_embedding_model(None)),
+                Box::new(move || slot.load_now().map_err(anyhow::Error::new)),
             ) {
                 Ok(embedder) => {
                     let _ = self.embedder.set(embedder);
@@ -348,31 +355,33 @@ impl SemantiqServer {
     }
 }
 
-/// Reason when the search engine's own model copy is missing: loaded once by
-/// `RetrievalEngine::new`, never retried.
-const ENGINE_MODEL_MISSING_REASON: &str =
-    "the embedding model failed to load at startup; restart the server";
-
 /// Reason semantic search is unavailable, most permanent first; `None` when
-/// the backend is ONNX, the engine has its model and the embedder's last
-/// load succeeded (or has not run yet).
+/// the backend is ONNX, the shared model is loaded (or not asked for yet:
+/// the next search loads it) and the embedder's last pass succeeded.
 fn unavailable_reason(
     backend_reason: Option<&str>,
-    engine_model_missing: bool,
+    model_status: ModelStatus,
     model_error: Option<String>,
 ) -> Option<String> {
-    backend_reason
-        .map(str::to_string)
-        .or_else(|| engine_model_missing.then(|| ENGINE_MODEL_MISSING_REASON.to_string()))
-        .or_else(|| model_error.map(model_error_reason))
+    if let Some(reason) = backend_reason {
+        return Some(reason.to_string());
+    }
+    match model_status {
+        ModelStatus::Failed { reason, .. } => Some(model_error_reason(reason)),
+        ModelStatus::Loading => Some(
+            "the embedding model is being loaded; semantic matches are included once it is ready"
+                .to_string(),
+        ),
+        ModelStatus::Disabled => Some("no embedding model is loaded in this context".to_string()),
+        ModelStatus::NotLoaded | ModelStatus::Loaded => model_error.map(model_error_reason),
+    }
 }
 
 /// Reason shown by the search notice and `GET /stats` when the embedding
-/// model failed to load.
+/// model failed to load. `error` is the short classified reason, never the
+/// raw error text (#100).
 fn model_error_reason(error: String) -> String {
-    format!(
-        "the embedding model could not be loaded ({error}); loading is retried in the background"
-    )
+    format!("{error}; loading is retried in the background")
 }
 
 /// Notice prepended to a `semantiq_search` output. With the stub backend

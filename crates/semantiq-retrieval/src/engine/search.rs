@@ -5,6 +5,7 @@ use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
 use crate::text_searcher::{CompiledMatcher, HashLine, TextSearcher, looks_generated};
 use anyhow::Result;
+use semantiq_embeddings::EmbeddingModel;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -90,13 +91,9 @@ impl RetrievalEngine {
         // score 1.0. That would flood the merge with arbitrary, off-topic
         // chunks ranked above genuine symbol/text matches. Only run semantic
         // search when a real model is present.
-        let semantic_enabled = self
-            .embedding_model
-            .as_ref()
-            .map(|m| !m.is_stub())
-            .unwrap_or(false);
-        if semantic_enabled {
-            let mut semantic_results = self.search_semantic(query_text, safe_limit, &opts)?;
+        if let Some(model) = self.embedding_model().filter(|m| !m.is_stub()) {
+            let mut semantic_results =
+                self.search_semantic(model.as_ref(), query_text, safe_limit, &opts)?;
             above_floor(&mut semantic_results);
             weight_strategy(&mut semantic_results, WEIGHT_SEMANTIC);
             all_results.extend(semantic_results);
@@ -156,15 +153,11 @@ impl RetrievalEngine {
     /// Perform semantic (vector similarity) search.
     pub(crate) fn search_semantic(
         &self,
+        model: &dyn EmbeddingModel,
         query_text: &str,
         limit: usize,
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        let model = match &self.embedding_model {
-            Some(m) => m,
-            None => return Ok(Vec::new()),
-        };
-
         // Generate query embedding (query-side encoding, see EmbeddingModel::embed_query)
         let query_embedding = model.embed_query(query_text)?;
 

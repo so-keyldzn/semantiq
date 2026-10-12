@@ -59,6 +59,7 @@ pub fn public_load_reason(error: &anyhow::Error) -> String {
 /// Directory of the model files: `env` (`SEMANTIQ_MODELS_DIR`, blank =
 /// unset) else `<data_dir>/semantiq/models`. Never the current directory
 /// (#115): with neither, the error says what to set.
+#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
 fn resolve_models_dir(
     env: Option<&str>,
     data_dir: Option<PathBuf>,
@@ -259,9 +260,9 @@ fn install_verified(
     let mut buf = vec![0u8; 256 * 1024];
     let mut len: u64 = 0;
     loop {
-        let n = source
-            .read(&mut buf)
-            .map_err(|e| ModelLoadError::Download(anyhow::Error::new(e).context(origin.to_string())))?;
+        let n = source.read(&mut buf).map_err(|e| {
+            ModelLoadError::Download(anyhow::Error::new(e).context(origin.to_string()))
+        })?;
         if n == 0 {
             break;
         }
@@ -351,7 +352,12 @@ pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
     let tokenizer_path = models_dir.join(TOKENIZER_FILENAME);
 
     ensure_file_downloaded(MODEL_URL, &model_path, MODEL_SHA256, "Model")?;
-    ensure_file_downloaded(TOKENIZER_URL, &tokenizer_path, TOKENIZER_SHA256, "Tokenizer")?;
+    ensure_file_downloaded(
+        TOKENIZER_URL,
+        &tokenizer_path,
+        TOKENIZER_SHA256,
+        "Tokenizer",
+    )?;
 
     Ok(EmbeddingConfig {
         model_path: model_path.to_string_lossy().to_string(),
@@ -887,10 +893,9 @@ mod tests {
         assert!(reason.contains("download failed"), "{reason}");
         assert!(!reason.contains("https://"), "{reason}");
 
-        let digest: anyhow::Error = ModelLoadError::DigestMismatch(anyhow::anyhow!(
-            "expected 4eae31d0, got deadbeef"
-        ))
-        .into();
+        let digest: anyhow::Error =
+            ModelLoadError::DigestMismatch(anyhow::anyhow!("expected 4eae31d0, got deadbeef"))
+                .into();
         let reason = public_load_reason(&digest);
         assert!(reason.contains("digest"), "{reason}");
         assert!(!reason.contains("deadbeef"), "{reason}");

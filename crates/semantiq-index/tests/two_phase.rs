@@ -323,7 +323,7 @@ fn background_embedder_fills_pending_chunks_when_notified() {
 
     let embedder = BackgroundEmbedder::spawn(
         Arc::clone(&store),
-        Box::new(|| Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)),
+        Box::new(|| Ok(Arc::new(StubEmbeddingModel::new()) as Arc<dyn EmbeddingModel>)),
     )
     .unwrap();
     // Nothing runs before the first notification (phase 1 owns the CPU).
@@ -383,7 +383,7 @@ fn background_embedder_polls_for_chunks_pending_without_a_notification() {
 
     let embedder = BackgroundEmbedder::spawn_with(
         Arc::clone(&store),
-        Box::new(|| Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)),
+        Box::new(|| Ok(Arc::new(StubEmbeddingModel::new()) as Arc<dyn EmbeddingModel>)),
         quick_config(),
     )
     .unwrap();
@@ -496,7 +496,7 @@ fn background_embedder_retries_a_failed_model_load_with_backoff() {
             if loader_attempts.fetch_add(1, Ordering::SeqCst) < 2 {
                 anyhow::bail!("download failed: connection reset")
             }
-            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+            Ok(Arc::new(StubEmbeddingModel::new()) as Arc<dyn EmbeddingModel>)
         }),
         quick_config(),
     )
@@ -541,7 +541,7 @@ fn background_embedder_clears_a_load_failure_on_a_complete_index_without_notify(
             if loader_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                 anyhow::bail!("disk full")
             }
-            Ok(Box::new(StubEmbeddingModel::new()) as Box<dyn EmbeddingModel>)
+            Ok(Arc::new(StubEmbeddingModel::new()) as Arc<dyn EmbeddingModel>)
         }),
         quick_config(),
     )
@@ -619,7 +619,7 @@ fn background_embedder_poll_retries_failing_chunks_only_after_another_connection
     let shared = Arc::clone(&model);
     let embedder = BackgroundEmbedder::spawn_with(
         Arc::clone(&store),
-        Box::new(move || Ok(Box::new(ArcModel(Arc::clone(&shared))) as Box<dyn EmbeddingModel>)),
+        Box::new(move || Ok(Arc::new(ArcModel(Arc::clone(&shared))) as Arc<dyn EmbeddingModel>)),
         quick_config(),
     )
     .unwrap();
@@ -672,4 +672,109 @@ impl<M: EmbeddingModel> EmbeddingModel for ArcModel<M> {
     fn dimension(&self) -> usize {
         self.0.dimension()
     }
+}
+
+/// #87: a panic in the model loader is one failed pass, not the end of the
+/// thread: `running` is cleared, the failure is reported, and the next
+/// attempt (after the backoff) recovers.
+#[test]
+fn panicking_loader_does_not_kill_the_embedder() {
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    let pending = store.embedding_counts().unwrap().pending();
+    assert!(pending > 0);
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("ort: unexpected graph input");
+            }
+            Ok(Arc::new(StubEmbeddingModel::new()) as Arc<dyn EmbeddingModel>)
+        }),
+        quick_config(),
+    )
+    .unwrap();
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(5)), "thread alive");
+    assert!(!embedder.progress().is_running());
+    assert!(embedder.progress().in_progress().is_none());
+    let error = embedder.progress().model_error().unwrap();
+    assert!(error.contains("unexpectedly"), "{error}");
+    assert!(
+        !error.contains("ort:"),
+        "the panic text stays in the log: {error}"
+    );
+    assert_eq!(store.embedding_counts().unwrap().pending(), pending);
+
+    // Retried after the backoff (poll), like a failed load.
+    assert!(wait_until(Duration::from_secs(10), || {
+        store.embedding_counts().unwrap().pending() == 0
+    }));
+    assert!(embedder.wait_idle(Duration::from_secs(5)));
+    assert!(embedder.progress().model_error().is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// #87: a panic inside `embed_batch` (a loaded model on a bad input) is
+/// caught the same way: no "N% ready" notice stuck forever, the pass is
+/// retried and `notify` keeps working.
+#[test]
+fn panicking_model_does_not_leave_running_set() {
+    struct PanickingModel {
+        calls: AtomicUsize,
+    }
+    impl EmbeddingModel for PanickingModel {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            panic!("tokenizer: index out of bounds");
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            texts.iter().map(|t| self.embed(t)).collect()
+        }
+        fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+            self.embed(query)
+        }
+        fn dimension(&self) -> usize {
+            EMBEDDING_DIMENSION
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    let pending = store.embedding_counts().unwrap().pending();
+    assert!(pending > 0);
+
+    let model = Arc::new(PanickingModel {
+        calls: AtomicUsize::new(0),
+    });
+    let shared = Arc::clone(&model);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || Ok(Arc::clone(&shared) as Arc<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(5)), "thread alive");
+    assert!(!embedder.progress().is_running());
+    assert!(embedder.progress().in_progress().is_none());
+    assert!(embedder.progress().model_error().is_some());
+    let first = model.calls.load(Ordering::SeqCst);
+    assert!(first >= 1);
+
+    // The thread still serves notifications: the pass runs again (and
+    // panics again) once the backoff has elapsed.
+    std::thread::sleep(quick_config().initial_retry_delay * 2);
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(5)));
+    assert!(model.calls.load(Ordering::SeqCst) > first);
+    assert!(!embedder.progress().is_running());
+    assert_eq!(store.embedding_counts().unwrap().pending(), pending);
 }

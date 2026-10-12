@@ -4,10 +4,16 @@
 use super::SemantiqServer;
 use crate::server::{model_error_reason, search_notice, unavailable_reason};
 use rmcp::ServerHandler;
-use semantiq_index::{BackgroundEmbedder, EmbedderConfig, EmbeddingCounts, IndexStore};
-use semantiq_retrieval::RetrievalEngine;
+use semantiq_embeddings::{
+    EMBEDDING_DIMENSION, EmbeddingModel, ModelLoadError, ModelSlot, ModelStatus, RetryPolicy,
+};
+use semantiq_index::{
+    AutoIndexer, BackgroundEmbedder, EmbedderConfig, EmbeddingCounts, IndexStore,
+};
+use semantiq_retrieval::{RetrievalEngine, SearchResultKind};
 use std::fs;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -199,33 +205,49 @@ fn search_notice_has_three_cases() {
     assert_eq!(search_notice(None, None, None, output.clone()), output);
 }
 
-/// The engine's own model copy is loaded once at startup: when it is missing
-/// the reason says to restart, whatever the embedder reports afterwards.
+/// `unavailable_reason` reads the shared model slot: a failed load is
+/// retried (by the embedder thread and by the next search), never "restart
+/// the server"; the embedder's own error is the fallback.
 #[test]
-fn unavailable_reason_orders_backend_engine_then_embedder() {
+fn unavailable_reason_orders_backend_slot_then_embedder() {
+    let failed = ModelStatus::Failed {
+        reason: "the embedding model download failed".into(),
+        retry_in: Duration::from_secs(30),
+    };
     assert_eq!(
-        unavailable_reason(Some("stub selected"), true, Some("x".into())),
+        unavailable_reason(Some("stub selected"), failed.clone(), Some("x".into())),
         Some("stub selected".to_string())
     );
 
-    let restart = unavailable_reason(None, true, Some("download failed".into())).unwrap();
-    assert!(restart.contains("failed to load at startup"), "{restart}");
-    assert!(restart.contains("restart the server"), "{restart}");
-    assert!(!restart.contains("retried"), "{restart}");
-    assert_eq!(unavailable_reason(None, true, None), Some(restart));
-
-    let retried = unavailable_reason(None, false, Some("download failed".into())).unwrap();
-    assert!(retried.contains("download failed"), "{retried}");
+    let retried = unavailable_reason(None, failed, Some("other".into())).unwrap();
+    assert!(
+        retried.starts_with("the embedding model download failed"),
+        "{retried}"
+    );
     assert!(retried.contains("retried in the background"), "{retried}");
+    assert!(!retried.contains("restart"), "{retried}");
 
-    assert_eq!(unavailable_reason(None, false, None), None);
+    let loading = unavailable_reason(None, ModelStatus::Loading, None).unwrap();
+    assert!(loading.contains("being loaded"), "{loading}");
+
+    assert!(unavailable_reason(None, ModelStatus::Disabled, None).is_some());
+
+    // Loaded or not asked for yet: only the embedder's own error counts.
+    let embedder = unavailable_reason(None, ModelStatus::Loaded, Some("pass stopped".into()));
+    assert_eq!(
+        embedder,
+        Some(model_error_reason("pass stopped".into())),
+        "{embedder:?}"
+    );
+    assert_eq!(unavailable_reason(None, ModelStatus::Loaded, None), None);
+    assert_eq!(unavailable_reason(None, ModelStatus::NotLoaded, None), None);
 }
 
-/// A server whose engine has no model reports it (stub build: the backend
-/// reason comes first in `semantic_search_unavailable_reason`, so the engine
-/// check is observed through the runtime reason).
+/// A server whose engine has no model slot to load from reports it (stub
+/// build: the backend reason comes first in `semantic_search_unavailable_reason`,
+/// so the slot is observed through the runtime reason).
 #[test]
-fn server_reports_a_missing_engine_model() {
+fn server_reports_a_disabled_engine_model() {
     let temp = TempDir::new().unwrap();
     let db_path = temp.path().join(".semantiq.db");
     let store = Arc::new(IndexStore::open(&db_path).unwrap());
@@ -237,13 +259,153 @@ fn server_reports_a_missing_engine_model() {
     let server = SemantiqServer { engine, ..server };
     assert!(server.engine().embedding_model().is_none());
     let reason = server.runtime_unavailable_reason().unwrap();
-    assert!(reason.contains("restart the server"), "{reason}");
+    assert!(reason.contains("no embedding model"), "{reason}");
     assert!(server.semantic_search_unavailable_reason().is_some());
 
     let (server, _temp) = super::create_test_server();
     assert!(
+        server.runtime_unavailable_reason().is_none(),
+        "not loaded yet"
+    );
+    assert!(
         server.engine().embedding_model().is_some(),
         "the stub model counts as loaded"
     );
+    assert_eq!(server.engine().model_slot().status(), ModelStatus::Loaded);
     assert!(server.runtime_unavailable_reason().is_none());
+}
+
+/// A real-looking model: the same unit vector for every text, so every
+/// chunk is a semantic match at distance 0. Not a stub.
+struct ConstantModel;
+
+impl EmbeddingModel for ConstantModel {
+    fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        let mut v = vec![0.0; EMBEDDING_DIMENSION];
+        v[0] = 1.0;
+        Ok(v)
+    }
+    fn embed_batch(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        texts.iter().map(|t| self.embed(t)).collect()
+    }
+    fn embed_query(&self, query: &str) -> anyhow::Result<Vec<f32>> {
+        self.embed(query)
+    }
+    fn dimension(&self) -> usize {
+        EMBEDDING_DIMENSION
+    }
+}
+
+/// #76: the engine and the embedder share one model slot. A load that fails
+/// at startup (offline first launch) is retried by the embedder thread; once
+/// it succeeds, `search()` runs its semantic strategy without a restart, and
+/// the reason reported meanwhile carries no URL (#100).
+#[tokio::test]
+async fn engine_model_recovers_with_the_embedder() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "/// Parses the configuration file.
+pub fn parse_config(path: &str) -> u32 { path.len() as u32 }
+",
+    )
+    .unwrap();
+    let db_path = temp.path().join(".semantiq.db");
+    let store = Arc::new(IndexStore::open(&db_path).unwrap());
+    AutoIndexer::without_watcher(Arc::clone(&store), temp.path().to_path_buf())
+        .unwrap()
+        .initial_index()
+        .unwrap();
+    assert!(store.embedding_counts().unwrap().pending() > 0);
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&attempts);
+    let slot = Arc::new(ModelSlot::new(
+        Box::new(move || {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ModelLoadError::Download(anyhow::anyhow!(
+                    "https://huggingface.co/x/model.onnx: connection reset"
+                ))
+                .into());
+            }
+            Ok(Box::new(ConstantModel) as Box<dyn EmbeddingModel>)
+        }),
+        RetryPolicy {
+            initial_delay: Duration::from_secs(60),
+            max_delay: Duration::from_secs(60),
+        },
+    ));
+    let engine = Arc::new(RetrievalEngine::with_model_slot(
+        Arc::clone(&store),
+        temp.path().to_str().unwrap(),
+        Arc::clone(&slot),
+        false,
+    ));
+    let (server, _temp) = super::create_test_server();
+    let server = SemantiqServer {
+        engine,
+        store: Arc::clone(&store),
+        ..server
+    };
+
+    // The embedder's first pass: the load fails.
+    let embedder_slot = Arc::clone(&slot);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || embedder_slot.load_now().map_err(anyhow::Error::new)),
+        EmbedderConfig {
+            poll_interval: Duration::from_millis(50),
+            initial_retry_delay: Duration::from_millis(100),
+            max_retry_delay: Duration::from_millis(100),
+        },
+    )
+    .unwrap();
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(10)));
+    server.embedder.set(embedder).ok().unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+    let reason = server.runtime_unavailable_reason().unwrap();
+    assert!(reason.contains("download failed"), "{reason}");
+    assert!(!reason.contains("huggingface"), "{reason}");
+    assert!(reason.contains("retried"), "{reason}");
+    assert!(!reason.contains("restart"), "{reason}");
+    // A search meanwhile answers without semantic matches and does not
+    // start a load of its own (the slot's backoff is 60 s).
+    let results = server.engine().search("parse config", 5, None).unwrap();
+    assert!(
+        results
+            .results
+            .iter()
+            .all(|r| r.kind != SearchResultKind::SemanticMatch),
+        "{results:?}"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+    // The embedder's retry (100 ms) loads the shared model and embeds.
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            store
+                .embedding_counts()
+                .map(|c| c.pending() == 0)
+                .unwrap_or(false)
+        })
+        .await,
+        "embedder recovered"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(slot.status(), ModelStatus::Loaded);
+    assert!(server.runtime_unavailable_reason().is_none());
+
+    // The engine searches semantically with the model the embedder loaded.
+    let results = server.engine().search("parse config", 5, None).unwrap();
+    assert!(
+        results
+            .results
+            .iter()
+            .any(|r| r.kind == SearchResultKind::SemanticMatch),
+        "{results:?}"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 2, "one model, loaded once");
 }
