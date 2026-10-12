@@ -9,7 +9,9 @@ first time this version opens an index (a few seconds per 100 MB of source);
 it grows the database by about 2.5× the size of the indexed source text.
 
 Existing indexes are rebuilt on the first run of this version
-(`PARSER_VERSION` 18): the parser fixes below change what is extracted.
+(`PARSER_VERSION` 20): the parser fixes below change what is extracted, and
+the import fixes change what `deps`, the repo map and the `imports`
+confidence of `impact` / `calls` see.
 
 ### Changed
 - The text strategy of `search` (and the `refs` fallback for names unknown
@@ -150,7 +152,36 @@ Existing indexes are rebuilt on the first run of this version
   annotation) extends its supertypes instead of implementing them (#153).
 - The Kotlin parser probes `b5_kotlin_kinds` and `b7_kotlin_parent` assert
   the extracted kinds and parents instead of printing them (#123).
-
+- A deeply nested file (10 000 nested JSON arrays, a 10 000-term expression)
+  overflowed the stack of the indexing thread in the import and chunk
+  extractors and aborted `serve` at every restart; both walks are iterative
+  now (#78).
+- Rust `mod x;` (and `#[path = "..."] mod x;`) is a `local` import of the
+  module, resolved to `x.rs` / `x/mod.rs`; `self::` and `super::` paths
+  resolve from the module tree the file layout defines, and a `super::` path
+  written inside an inline module (`mod tests { use super::helper; }`) is
+  stored rebased on the file's module (`self::helper`), so it points at the
+  right file (#143).
+- C/C++ `#include "x.h"` and Ruby `require_relative 'x'` resolve without a
+  leading `./`: next to the including file, then from the project root
+  (`include/` for C, `lib/` for Ruby `require`) (#142).
+- Imports of the project's own packages are `local` and resolved for Java,
+  Kotlin, Scala, C#, PHP and Go without a `go.mod`: the indexer records the
+  `package` / `namespace` declarations of the project's files (and the
+  directories of its Go files) when it starts, and maps an import to the
+  file named after the imported member, else to the single file of the
+  package; `using X = A.B;` (C#) imports `A.B` (#147).
+- Absolute Python imports of the project's own modules (`from app.models
+  import User`) are `local` and resolved, from the importing file's
+  directory, the project root and `src/`; in general an import that names a
+  file of the project is stored `local` whatever its syntax (#81).
+- An import whose `..` climb above the project root (`../../secret` from
+  `src/`) no longer resolves to a root-level homonym; absolute paths never
+  resolve (#83).
+- Ruby: a call whose text merely starts with `require`
+  (`requirements.push("json")`) or has a receiver is no import. Elixir:
+  `alias A.{B, C}` gives one import per leaf instead of the fragment `A.{B`,
+  and `alias A.B, as: C` is named `C` (#84).
 
 ## [0.12.0] - 2026-10-11
 
