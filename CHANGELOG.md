@@ -4,6 +4,39 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Symlinks inside the project are no longer followed by the indexer, the
+  query refresh, the watcher and the text search: a link to a file or
+  directory outside the project (`config.yaml -> ~/.aws/credentials`) was
+  read through, indexed and returned by search, and a link inside the project
+  indexed the same file twice (#109).
+- Credential stores are excluded by name, dot-prefixed or not: data files
+  whose stem says `secret`, `credential`, `service-account` or `adminsdk`
+  (`secrets.yaml`, `credentials.json`, `x-firebase-adminsdk-y.json`),
+  `kubeconfig*`, SSH keys (`id_rsa*`), dotenv files (`*.env`, which the text
+  search read under an explicit `file_type: "env"`) and key or certificate
+  files (`*.pem`, `*.key`, `*.p12`, `*.jks`...). `.gitignore`, `.ignore` and
+  the global git excludes are honoured outside a git repository too (an
+  exported archive, a build directory, a volume without `.git`) (#113).
+
+### Fixed
+- A directory rename, move or removal is applied by `serve`'s watcher: the
+  rows under the old name are removed and the files under the new one
+  indexed, instead of ghost rows until a restart (#85).
+- Editing `.gitignore`, `.ignore` or `.git/info/exclude` while `serve` runs
+  re-applies the rules: files that became ignored lose their rows, files
+  that became un-ignored are indexed (#138).
+- A file whose parse fails no longer keeps the symbols, references, chunks
+  and imports of its previous version: they are cleared, the failure is
+  counted as an error, and the file is parsed again when it changes (#90).
+- The query commands' refresh check sees a source file that became
+  non-UTF-8 or vanished between the listing and the read, as `semantiq
+  index` does: its rows are pruned instead of being served until another
+  file changes (#107).
+- `semantiq index <file>`, `serve --project <file>` and `init <file>` fail
+  with `<file> is not a directory` instead of a SQLite "unable to open"
+  error or an index whose only row has an empty path (#137).
+
 ## [0.12.0] - 2026-10-11
 
 Existing indexes are rebuilt on the first run of this version
