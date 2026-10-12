@@ -29,6 +29,52 @@ pub fn looks_generated(content: &str) -> bool {
     content.chars().count() / lines > MAX_AVERAGE_LINE_CHARS
 }
 
+/// What a line starting with `#` is in a language, so text search skips
+/// comments and only comments: `#[derive]`, `#include`, `#region` and `#!`
+/// are code, and the text strategy is the only way to find them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashLine {
+    /// `#` starts a comment (Python, Ruby, Bash, Elixir, YAML, TOML); a
+    /// shebang (`#!`) is still code.
+    Comment,
+    /// `#` starts a comment, except `#[`: a PHP 8 attribute.
+    CommentUnlessAttribute,
+    /// `#` starts an attribute, a preprocessor directive, a region or a
+    /// shebang: the line is code.
+    Code,
+}
+
+impl HashLine {
+    /// The rule of a language (`files.language`); unknown languages keep
+    /// their `#` lines.
+    pub fn for_language(language: Option<&str>) -> Self {
+        match language {
+            Some("python" | "ruby" | "bash" | "elixir" | "yaml" | "toml" | "perl" | "r") => {
+                HashLine::Comment
+            }
+            Some("php") => HashLine::CommentUnlessAttribute,
+            _ => HashLine::Code,
+        }
+    }
+
+    /// Whether a trimmed line is a comment under this rule. A shebang
+    /// (`#!/usr/bin/env python`) is code under every rule: the languages
+    /// where `#` is a comment are the ones with shebangs.
+    fn is_comment(self, line: &str) -> bool {
+        if line.starts_with("//") {
+            return true;
+        }
+        if !line.starts_with('#') || line.starts_with("#!") {
+            return false;
+        }
+        match self {
+            HashLine::Comment => true,
+            HashLine::CommentUnlessAttribute => !line.starts_with("#["),
+            HashLine::Code => false,
+        }
+    }
+}
+
 /// A text match result from ripgrep-based search
 #[derive(Debug, Clone)]
 pub struct TextMatch {
@@ -51,6 +97,13 @@ pub struct CompiledMatcher {
     pattern: String,
 }
 
+impl CompiledMatcher {
+    /// The literal text this matcher looks for.
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
 impl TextSearcher {
     pub fn new(case_insensitive: bool) -> Self {
         Self { case_insensitive }
@@ -60,7 +113,7 @@ impl TextSearcher {
     /// Returns matches with line numbers and scores
     pub fn search(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
         let compiled = self.compile(pattern)?;
-        self.search_compiled(content, &compiled)
+        self.search_compiled(content, &compiled, HashLine::Comment)
     }
 
     /// Pre-compile a literal pattern into a reusable matcher.
@@ -106,11 +159,13 @@ impl TextSearcher {
         })
     }
 
-    /// Search `content` using an already-compiled matcher.
+    /// Search `content` using an already-compiled matcher. `hash_line` says
+    /// whether the lines starting with `#` are comments (skipped) or code.
     pub fn search_compiled(
         &self,
         content: &str,
         compiled: &CompiledMatcher,
+        hash_line: HashLine,
     ) -> Result<Vec<TextMatch>> {
         let mut matches = Vec::new();
         let mut sink = MatchSink::new(
@@ -118,6 +173,7 @@ impl TextSearcher {
             &compiled.matcher,
             &compiled.pattern,
             self.case_insensitive,
+            hash_line,
         );
         Searcher::new().search_slice(&compiled.matcher, content.as_bytes(), &mut sink)?;
         Ok(matches)
@@ -126,7 +182,7 @@ impl TextSearcher {
     /// Search with word boundary matching for better precision
     pub fn search_word(&self, content: &str, pattern: &str) -> Result<Vec<TextMatch>> {
         let compiled = self.compile_word(pattern)?;
-        self.search_compiled(content, &compiled)
+        self.search_compiled(content, &compiled, HashLine::Comment)
     }
 
     /// Search with a raw regex pattern.
@@ -147,7 +203,13 @@ impl TextSearcher {
             .build(pattern)?;
 
         let mut matches = Vec::new();
-        let mut sink = MatchSink::new(&mut matches, &matcher, pattern, self.case_insensitive);
+        let mut sink = MatchSink::new(
+            &mut matches,
+            &matcher,
+            pattern,
+            self.case_insensitive,
+            HashLine::Comment,
+        );
 
         Searcher::new().search_slice(&matcher, content.as_bytes(), &mut sink)?;
 
@@ -172,6 +234,8 @@ struct MatchSink<'a> {
     /// Whether the matcher ignored case: the exact-line check follows the
     /// same rule.
     case_insensitive: bool,
+    /// Whether `#` lines are comments in the searched language.
+    hash_line: HashLine,
 }
 
 impl<'a> MatchSink<'a> {
@@ -180,12 +244,14 @@ impl<'a> MatchSink<'a> {
         matcher: &'a RegexMatcher,
         pattern: &'a str,
         case_insensitive: bool,
+        hash_line: HashLine,
     ) -> Self {
         Self {
             matches,
             matcher,
             pattern,
             case_insensitive,
+            hash_line,
         }
     }
 
@@ -245,10 +311,7 @@ impl Sink for MatchSink<'_> {
         let line_content = String::from_utf8_lossy(line_bytes).trim().to_string();
 
         // Skip empty lines and comments
-        if line_content.is_empty()
-            || line_content.starts_with("//")
-            || line_content.starts_with('#')
-        {
+        if line_content.is_empty() || self.hash_line.is_comment(&line_content) {
             return Ok(true);
         }
 
@@ -368,7 +431,7 @@ mod tests {
 
         let compiled = searcher.compile_word("id").unwrap();
         let lines: Vec<usize> = searcher
-            .search_compiled(content, &compiled)
+            .search_compiled(content, &compiled, HashLine::Comment)
             .unwrap()
             .iter()
             .map(|m| m.line_number)
@@ -383,7 +446,7 @@ mod tests {
         let searcher = TextSearcher::new(false);
         let compiled = searcher.compile_word("id").unwrap();
         let m = &searcher
-            .search_compiled("let uuid = id;", &compiled)
+            .search_compiled("let uuid = id;", &compiled, HashLine::Comment)
             .unwrap()[0];
         assert_eq!((m.match_start, m.match_end), (11, 13));
         assert_eq!(&m.line_content[m.match_start..m.match_end], "id");
@@ -413,7 +476,7 @@ mod tests {
         let content = "$state = 1;\n$states = 2;\nstate\n";
         let compiled = searcher.compile_word("$state").unwrap();
         let lines: Vec<usize> = searcher
-            .search_compiled(content, &compiled)
+            .search_compiled(content, &compiled, HashLine::Comment)
             .unwrap()
             .iter()
             .map(|m| m.line_number)
@@ -497,6 +560,39 @@ mod tests {
         // Should skip the comment line
         assert_eq!(matches.len(), 1);
         assert!(!matches[0].line_content.starts_with("//"));
+    }
+
+    #[test]
+    fn test_hash_lines_are_code_outside_hash_comment_languages() {
+        // Regression for #94: every `#` line was dropped, so `#[derive]`,
+        // `#define`, `#region` and shebangs were invisible to text search.
+        let searcher = TextSearcher::new(true);
+        let compiled = searcher.compile("needle").unwrap();
+        let content = "#[derive(needle)]\n#define NEEDLE 1\n#region needle\n#!/usr/bin/needle\n# needle comment\n// needle comment\nlet needle = 1;\n";
+        let lines = |rule: HashLine| -> Vec<usize> {
+            searcher
+                .search_compiled(content, &compiled, rule)
+                .unwrap()
+                .iter()
+                .map(|m| m.line_number)
+                .collect()
+        };
+        assert_eq!(lines(HashLine::Code), vec![1, 2, 3, 4, 5, 7]);
+        // The shebang is code in every language, comment languages included.
+        assert_eq!(lines(HashLine::Comment), vec![4, 7]);
+        assert_eq!(lines(HashLine::CommentUnlessAttribute), vec![1, 4, 7]);
+
+        assert_eq!(HashLine::for_language(Some("rust")), HashLine::Code);
+        assert_eq!(HashLine::for_language(Some("c")), HashLine::Code);
+        assert_eq!(HashLine::for_language(Some("csharp")), HashLine::Code);
+        assert_eq!(HashLine::for_language(Some("python")), HashLine::Comment);
+        assert_eq!(HashLine::for_language(Some("bash")), HashLine::Comment);
+        assert_eq!(HashLine::for_language(Some("toml")), HashLine::Comment);
+        assert_eq!(
+            HashLine::for_language(Some("php")),
+            HashLine::CommentUnlessAttribute
+        );
+        assert_eq!(HashLine::for_language(None), HashLine::Code);
     }
 
     #[test]

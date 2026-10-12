@@ -1,3 +1,4 @@
+use semantiq_index::ExtensionFilter;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,9 +60,14 @@ impl QueryExpander {
             expanded.extend(self.case_variations(term));
         }
 
-        // Remove duplicates while preserving order
+        // Remove duplicates while preserving order. A variant without any
+        // letter or digit (`-` → `_`, `_` → ``) is dropped: an empty term is
+        // a regex matching every line of the project (#92).
         let mut seen = std::collections::HashSet::new();
         expanded.retain(|x| {
+            if !x.chars().any(char::is_alphanumeric) {
+                return false;
+            }
             let normalized = x.to_lowercase();
             if seen.contains(&normalized) || normalized == text.to_lowercase() {
                 false
@@ -279,6 +285,20 @@ impl SearchOptions {
     /// Get the effective minimum score (uses default if not set)
     pub fn effective_min_score(&self) -> f32 {
         self.min_score.unwrap_or(Self::DEFAULT_MIN_SCORE)
+    }
+
+    /// The extension filter of these options for the store: the `file_types`
+    /// when set, else everything but [`Self::EXCLUDED_EXTENSIONS`].
+    pub fn extension_filter(&self) -> ExtensionFilter {
+        match &self.file_types {
+            Some(file_types) => ExtensionFilter::Only(file_types.clone()),
+            None => ExtensionFilter::Except(
+                Self::EXCLUDED_EXTENSIONS
+                    .iter()
+                    .map(|ext| ext.to_string())
+                    .collect(),
+            ),
+        }
     }
 
     /// Check if a file extension is accepted by these options
@@ -607,5 +627,46 @@ mod tests {
         assert!(!options.accepts_extension("ts"));
         assert!(options.accepts_symbol_kind("function"));
         assert!(!options.accepts_symbol_kind("class"));
+    }
+
+    #[test]
+    fn test_expand_drops_variants_without_letters_or_digits() {
+        // Regression for #92: `-` expanded to `_` and ``, and `_` to ``;
+        // the empty term matched every line of the project.
+        let expander = QueryExpander::new();
+        for query in ["auth - login", "a -", "foo -- bar", "_", "-", "__ --"] {
+            let expanded = expander.expand(query);
+            assert!(
+                expanded
+                    .iter()
+                    .all(|t| t.chars().any(char::is_alphanumeric)),
+                "{query:?} -> {expanded:?}"
+            );
+        }
+        assert!(expander.expand("_").is_empty());
+        // Real variants are kept.
+        assert_eq!(
+            expander.expand("auth - login"),
+            Vec::<String>::new(),
+            "no case variants for plain lowercase words"
+        );
+        assert_eq!(expander.expand("get-user"), vec!["get_user", "getUser"]);
+    }
+
+    #[test]
+    fn test_extension_filter() {
+        assert_eq!(
+            SearchOptions::new()
+                .with_file_types(vec!["rs".into(), "ts".into()])
+                .extension_filter(),
+            ExtensionFilter::Only(vec!["rs".into(), "ts".into()])
+        );
+        match SearchOptions::new().extension_filter() {
+            ExtensionFilter::Except(excluded) => {
+                assert_eq!(excluded.len(), SearchOptions::EXCLUDED_EXTENSIONS.len());
+                assert!(excluded.contains(&"json".to_string()));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

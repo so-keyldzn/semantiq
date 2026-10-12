@@ -45,6 +45,18 @@ project root and use `/` on every platform (Windows included); a path argument
   the match (`…` on the cut sides); minified or generated files (lines
   averaging more than 500 characters, or binary) are not searched.
 - `truncated`: more results exist beyond `--limit` (default 10).
+- `--symbol-kind` (CSV) applies to every strategy before its limit: symbol
+  hits of those kinds, semantic hits whose chunk defines a symbol of one of
+  them, and no text hits (a line has no kind). Import statements are
+  symbols of kind `import` but never symbol hits unless `--symbol-kind
+  import` asks for them. `--file-type` (CSV of extensions) applies before
+  the limit too.
+- Text hits come from the index, not from a read of the project files:
+  only indexed files (the 19 languages) are searched, as they were last
+  indexed. A line starting with `#` is skipped as a comment only in the
+  languages where `#` starts one (Python, Ruby, Bash, Elixir, YAML, TOML;
+  PHP except `#[` attributes): `#[derive]`, `#include`, `#region` and
+  shebang lines are found.
 
 ## `semantiq refs <symbol> --json`
 
@@ -67,7 +79,9 @@ project root and use `/` on every platform (Windows included); a path argument
   to the syntax index, e.g. a key of a data file: lines holding the whole
   identifier, case-sensitive, an approximation that includes comments and
   strings). Definition `kind`: the symbol kind (`function`, `struct`…), or
-  `definition` when unknown.
+  `definition` when unknown. An import statement is never a definition: it
+  is listed once, under `usages` with `kind: import`. At most `--limit`
+  definitions are listed, by file path.
 - `content`: one line, trimmed and cut to 120 characters (for a definition,
   the line declaring the name).
 - `truncated`: the limit (`--limit`, default 30) was reached.

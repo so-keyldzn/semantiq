@@ -194,6 +194,26 @@ fn search_prints_a_preview_line_unless_snippets() {
 }
 
 #[test]
+fn search_says_on_stderr_when_semantic_search_is_unavailable() {
+    // Regression for #106: the stub build (macOS Intel) searched in
+    // silence, so an agent could not tell that rephrasing would not help.
+    let project = indexed_project();
+    let output = command(project.path(), &["search", "compute", "--json"])
+        .env("SEMANTIQ_EMBEDDINGS", "stub")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("semantic search unavailable")
+            && err.contains("only symbol and text matches are returned"),
+        "{err}"
+    );
+    let json: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(!json["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn queries_refresh_changed_files_unless_disabled() {
     let project = indexed_project();
     let dir = project.path();

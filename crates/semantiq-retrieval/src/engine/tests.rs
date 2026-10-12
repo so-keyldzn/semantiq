@@ -2,6 +2,7 @@
 
 use super::search::{WEIGHT_SEMANTIC, WEIGHT_SYMBOL, WEIGHT_TEXT, weight_strategy};
 use super::*;
+use crate::query::SearchOptions;
 use crate::results::{SearchResult, SearchResultKind};
 
 fn mk_result(score: f32) -> SearchResult {
@@ -307,7 +308,8 @@ fn test_min_score_does_not_drop_weakest_hit_of_a_strategy() {
     );
 }
 
-/// Index `files` (path, Rust source) under a temp root with symbols and AST references.
+/// Index `files` (path, Rust source) under a temp root with symbols, chunks
+/// and AST references.
 fn index_rust_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
     index_rust_project_with(files, RetrievalEngine::new)
 }
@@ -316,22 +318,47 @@ fn index_rust_project_with(
     files: &[(&str, &str)],
     build: fn(Arc<IndexStore>, &str) -> RetrievalEngine,
 ) -> (RetrievalEngine, tempfile::TempDir) {
-    use semantiq_parser::{Language, LanguageSupport, ReferenceExtractor, SymbolExtractor};
+    index_project_with(files, build)
+}
 
-    // Text search skips hidden paths, so avoid the default `.tmpXXXX` name.
+/// Index `files` (path, source) of any supported language, chosen by the
+/// extension of each path, under a temp root with symbols, chunks and AST
+/// references.
+fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
+    index_project_with(files, RetrievalEngine::new)
+}
+
+fn index_project_with(
+    files: &[(&str, &str)],
+    build: fn(Arc<IndexStore>, &str) -> RetrievalEngine,
+) -> (RetrievalEngine, tempfile::TempDir) {
+    use semantiq_parser::{
+        ChunkExtractor, Language, LanguageSupport, ReferenceExtractor, SymbolExtractor,
+    };
+
     let root = tempfile::Builder::new()
         .prefix("semantiq-refs")
         .tempdir()
         .unwrap();
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
     let mut support = LanguageSupport::new().unwrap();
+    let chunker = ChunkExtractor::new();
     for (path, source) in files {
-        std::fs::write(root.path().join(path), source).unwrap();
-        let file_id = store.insert_file(path, Some("rust"), source, 0).unwrap();
-        let tree = support.parse(Language::Rust, source).unwrap();
-        let symbols = SymbolExtractor::extract(&tree, source, Language::Rust).unwrap();
+        let full = root.path().join(path);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&full, source).unwrap();
+        let language = Language::from_path(std::path::Path::new(path)).unwrap();
+        let file_id = store
+            .insert_file(path, Some(language.name()), source, 0)
+            .unwrap();
+        let tree = support.parse(language, source).unwrap();
+        let symbols = SymbolExtractor::extract(&tree, source, language).unwrap();
         store.insert_symbols(file_id, &symbols).unwrap();
-        let refs = ReferenceExtractor::extract(&tree, source, Language::Rust);
+        let chunks = chunker.extract(&tree, source, language).unwrap();
+        store.insert_chunks(file_id, &chunks).unwrap();
+        let refs = ReferenceExtractor::extract(&tree, source, language);
         store.insert_references(file_id, &refs).unwrap();
     }
     let engine = build(store, root.path().to_str().unwrap());
@@ -453,12 +480,20 @@ fn test_text_search_skips_symlinks_and_credential_files() {
     std::fs::write(root.join("secrets.env"), "NEEDLE_TOKEN=needle_secret\n").unwrap();
     symlink(outside.join("private.js"), root.join("linked.js")).unwrap();
     symlink("app.js", root.join("alias.js")).unwrap();
+    // Text search answers from the index, so what the indexer's walker
+    // leaves out (symlinks, credential files) is never text-searched.
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    semantiq_index::AutoIndexer::without_watcher(store.clone(), root.clone())
+        .unwrap()
+        .initial_index()
+        .unwrap();
     let engine = RetrievalEngine::new(store, root.to_str().unwrap());
 
     let results = engine.search("needle", 10, None).unwrap().results;
-    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
-    assert_eq!(files, ["app.js"], "{files:?}");
+    let mut files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    files.sort();
+    files.dedup();
+    assert_eq!(files, ["app.js"], "{results:?}");
 
     let options = SearchOptions::new().with_file_types(vec!["env".to_string()]);
     let results = engine.search("needle", 10, Some(options)).unwrap().results;
@@ -469,17 +504,7 @@ fn test_text_search_skips_symlinks_and_credential_files() {
 fn test_text_search_skips_minified_files_and_cuts_long_lines() {
     // Regression for #44: a minified bundle returned its whole line as the
     // hit's content.
-    let root = tempfile::Builder::new()
-        .prefix("semantiq-text")
-        .tempdir()
-        .unwrap();
     let minified = format!("!function(){{var needle=1;{}}}();\n", "a=1;".repeat(2000));
-    std::fs::write(root.path().join("vendor.min.js"), minified).unwrap();
-    std::fs::write(
-        root.path().join("app.js"),
-        "function run() {\n  return needle();\n}\n",
-    )
-    .unwrap();
     // A normal file with one long generated line: the hit is cut, not dropped.
     let long_line = format!(
         "const TABLE = [{}needle{}];",
@@ -487,22 +512,280 @@ fn test_text_search_skips_minified_files_and_cuts_long_lines() {
         ",0".repeat(1000)
     );
     let filler = "function helper_number_x(value) { return value + 1; }\n".repeat(20);
-    std::fs::write(
-        root.path().join("table.js"),
-        format!("{filler}{long_line}\n{filler}"),
-    )
-    .unwrap();
-    let store = Arc::new(IndexStore::open_in_memory().unwrap());
-    let engine = RetrievalEngine::new(store, root.path().to_str().unwrap());
+    let table = format!("{filler}{long_line}\n{filler}");
+    let (engine, _root) = index_project(&[
+        ("vendor.min.js", minified.as_str()),
+        ("app.js", "function run() {\n  return needle();\n}\n"),
+        ("table.js", table.as_str()),
+    ]);
 
     let results = engine.search("needle", 10, None).unwrap().results;
-    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    // `var needle` is a symbol of the bundle; the text strategy skips it.
+    let files: Vec<&str> = text_hits(&results).into_iter().map(|h| h.0).collect();
     assert!(files.contains(&"app.js"), "{files:?}");
     assert!(files.contains(&"table.js"), "{files:?}");
     assert!(!files.contains(&"vendor.min.js"), "{files:?}");
-    let cut = results.iter().find(|r| r.file_path == "table.js").unwrap();
+    let cut = results
+        .iter()
+        .find(|r| r.file_path == "table.js" && r.kind == SearchResultKind::TextMatch)
+        .unwrap();
     assert!(cut.content.chars().count() <= crate::text_searcher::MAX_LINE_CHARS + 2);
     assert!(cut.content.contains("needle"));
+}
+
+/// Lines of the text hits, `(file, line, content)`.
+fn text_hits(results: &[SearchResult]) -> Vec<(&str, usize, &str)> {
+    results
+        .iter()
+        .filter(|r| r.kind == SearchResultKind::TextMatch)
+        .map(|r| (r.file_path.as_str(), r.start_line, r.content.as_str()))
+        .collect()
+}
+
+#[test]
+fn test_text_search_answers_from_the_index_with_file_lines() {
+    // Regression for #160: the text strategy read every file of the
+    // project. It now comes from the chunks, with the line numbers of the
+    // file (a chunk starts anywhere) and the long-file windows deduplicated.
+    let body = (0..120)
+        .map(|i| format!("fn filler_{i}() {{\n    let v = {i};\n}}\n"))
+        .collect::<String>();
+    let source = format!("{body}fn target() {{\n    needle_here();\n}}\n");
+    let (engine, _root) =
+        index_project(&[("big.rs", source.as_str()), ("other.rs", "fn x() {}\n")]);
+    let chunks = engine.store.get_chunks_by_file(1).unwrap();
+    assert!(chunks.len() > 1, "the file must span several chunks");
+
+    let results = engine.search("needle_here", 10, None).unwrap().results;
+    let needle_line = source
+        .lines()
+        .position(|l| l.contains("needle_here"))
+        .unwrap()
+        + 1;
+    assert_eq!(
+        text_hits(&results),
+        vec![("big.rs", needle_line, "needle_here();")]
+    );
+
+    // The project files are not read: a file edited on disk but not
+    // reindexed keeps answering from the index.
+    std::fs::write(_root.path().join("other.rs"), "fn x() { needle_here(); }\n").unwrap();
+    let results = engine.search("needle_here", 10, None).unwrap().results;
+    assert_eq!(text_hits(&results).len(), 1);
+}
+
+#[test]
+fn test_text_search_keeps_attributes_and_directives() {
+    // Regression for #94: every line starting with `#` was skipped as a
+    // comment, so `#[derive(Serialize)]` and `#define` were invisible.
+    let (engine, _root) = index_project(&[
+        (
+            "model.rs",
+            "use serde::Serialize;\n\n#[derive(Serialize)]\npub struct Model {\n    id: u32,\n}\n",
+        ),
+        ("buf.c", "#define MAX_BUF 10\nint buf[MAX_BUF];\n"),
+        ("conf.py", "# MAX_BUF is the limit\nMAX_BUF = 10\n"),
+    ]);
+
+    let results = engine
+        .search("derive(Serialize)", 10, None)
+        .unwrap()
+        .results;
+    assert_eq!(
+        text_hits(&results),
+        vec![("model.rs", 3, "#[derive(Serialize)]")]
+    );
+
+    let results = engine.search("MAX_BUF", 10, None).unwrap().results;
+    let mut hits = text_hits(&results);
+    hits.sort();
+    assert_eq!(
+        hits,
+        vec![
+            ("buf.c", 1, "#define MAX_BUF 10"),
+            ("buf.c", 2, "int buf[MAX_BUF];"),
+        ],
+        "the C directive is code, the Python comment is not"
+    );
+}
+
+#[test]
+fn test_punctuation_only_query_terms_do_not_match_every_line() {
+    // Regression for #92: `-` expanded to `_` and ``, and the empty regex
+    // matched every line of the first file walked.
+    let (engine, _root) = index_project(&[(
+        "main.rs",
+        "use std::fmt;\n\nfn main() {\n    let answer = 42;\n    println!(\"{answer}\");\n}\n",
+    )]);
+
+    for query in ["zzqq - yyxx", "zzqq -", "_"] {
+        let results = engine.search(query, 10, None).unwrap().results;
+        assert!(
+            results.is_empty(),
+            "{query:?} matched {:?}",
+            text_hits(&results)
+        );
+    }
+}
+
+#[test]
+fn test_symbol_kind_filter_applies_to_every_strategy() {
+    // Regression for #93: text hits (no kind) came back for `--symbol-kind
+    // struct`, and for #134: the filter ran after the FTS `LIMIT`, so a
+    // small limit returned nothing although a matching struct exists.
+    let mut files: Vec<(String, String)> = (0..20)
+        .map(|i| (format!("a/m{i:02}.rs"), "fn config() {}\n".to_string()))
+        .collect();
+    files.push((
+        "z_types.rs".to_string(),
+        "pub struct Config<T: Clone + Send + Sync + 'static> {\n    inner: T,\n}\n".to_string(),
+    ));
+    files.push((
+        "web/z.ts".to_string(),
+        "export function config(options: Options): Config {\n  return options;\n}\n".to_string(),
+    ));
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
+    let (engine, _root) = index_project(&borrowed);
+    let hits = |results: Vec<SearchResult>| -> Vec<(String, String, String)> {
+        results
+            .into_iter()
+            .map(|r| {
+                (
+                    r.metadata.symbol_name.unwrap_or_default(),
+                    r.metadata.symbol_kind.unwrap_or_default(),
+                    r.file_path,
+                )
+            })
+            .collect()
+    };
+
+    let structs = SearchOptions::new().with_symbol_kinds(vec!["struct".into()]);
+    let results = engine.search("config", 5, Some(structs)).unwrap().results;
+    assert_eq!(
+        hits(results),
+        vec![(
+            "Config".to_string(),
+            "struct".to_string(),
+            "z_types.rs".to_string()
+        )]
+    );
+
+    let helpers = SearchOptions::new().with_symbol_kinds(vec!["struct".into()]);
+    let results = engine.search("inner", 5, Some(helpers)).unwrap().results;
+    assert!(
+        results.is_empty(),
+        "no text hits under a kind filter: {:?}",
+        hits(results)
+    );
+
+    let ts = SearchOptions::new().with_file_types(vec!["ts".into()]);
+    let results = engine.search("config", 5, Some(ts)).unwrap().results;
+    let found = hits(results);
+    assert!(
+        found.contains(&(
+            "config".to_string(),
+            "function".to_string(),
+            "web/z.ts".to_string()
+        )),
+        "{found:?}"
+    );
+    assert!(found.iter().all(|(_, _, p)| p == "web/z.ts"), "{found:?}");
+}
+
+#[test]
+fn test_imports_are_usages_not_definitions() {
+    // Regression for #77: import statements (symbols of kind `import`) were
+    // listed as definitions by `refs` and scored as symbol hits by `search`.
+    let (engine, _root) = index_project(&[
+        (
+            "lib/secrets.ts",
+            "export function useTypedSecrets() {\n  return 1;\n}\n",
+        ),
+        (
+            "a.ts",
+            "import { useTypedSecrets } from './lib/secrets';\nuseTypedSecrets();\n",
+        ),
+        ("b.ts", "import { useTypedSecrets } from './lib/secrets';\n"),
+    ]);
+    assert_eq!(
+        engine
+            .store
+            .find_symbol_by_name("useTypedSecrets")
+            .unwrap()
+            .len(),
+        3,
+        "the import rows are still symbols (explain counts them)"
+    );
+
+    let results = engine.find_references("useTypedSecrets", 50).unwrap();
+    let hits: Vec<(&str, usize, &str)> = results
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.file_path.as_str(),
+                r.start_line,
+                r.metadata.match_type.as_deref().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        hits,
+        vec![
+            ("lib/secrets.ts", 1, "definition"),
+            ("a.ts", 1, "import"),
+            ("a.ts", 2, "call"),
+            ("b.ts", 1, "import"),
+        ],
+        "{hits:?}"
+    );
+
+    let results = engine.search("useTypedSecrets", 10, None).unwrap().results;
+    let symbol_hits: Vec<(&str, &str)> = results
+        .iter()
+        .filter(|r| r.kind == SearchResultKind::Symbol)
+        .map(|r| {
+            (
+                r.file_path.as_str(),
+                r.metadata.symbol_kind.as_deref().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(symbol_hits, vec![("lib/secrets.ts", "function")]);
+
+    // An explicit `import` kind filter opts back in.
+    let imports = SearchOptions::new().with_symbol_kinds(vec!["import".into()]);
+    let results = engine
+        .search("useTypedSecrets", 10, Some(imports))
+        .unwrap()
+        .results;
+    let mut files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    files.sort();
+    assert_eq!(files, vec!["a.ts", "b.ts"]);
+}
+
+#[test]
+fn test_find_references_reads_each_file_once_and_bounds_definitions() {
+    // Regression for #159: every definition of a common name was read from
+    // disk before `limit` applied. The definitions are bounded in SQL.
+    let source = (0..30)
+        .map(|i| format!("impl T{i} {{\n    pub fn new() -> Self {{ Self }}\n}}\n"))
+        .collect::<String>();
+    let (engine, _root) = index_project(&[("many.rs", source.as_str())]);
+
+    let results = engine.find_references("new", 5).unwrap().results;
+    assert_eq!(results.len(), 5);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.metadata.match_type.as_deref() == Some("definition")),
+        "{results:?}"
+    );
+    assert_eq!(results[0].content, "    pub fn new() -> Self { Self }");
+    assert_eq!(results[0].start_line, 2);
 }
 
 #[test]

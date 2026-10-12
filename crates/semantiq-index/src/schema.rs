@@ -291,6 +291,72 @@ fn reset_embedding_space(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Create `chunks_fts`, the trigram FTS5 index over `chunks.content` behind
+/// the text strategy of search (substring, case-insensitive, answered from
+/// the index instead of a read of every project file), and the triggers that
+/// keep it in sync with `chunks`. An external-content table: it holds no copy
+/// of the text, only the trigram postings. On a database that predates it
+/// the index is built from the existing chunks, in one transaction with the
+/// table, so a crash leaves either both or neither. No schema version bump:
+/// an older binary ignores the table and its own chunk writes keep it in sync
+/// through the triggers.
+///
+/// Two processes may open an older database together (`serve` and a CLI
+/// command): the decision to create is taken under the write lock, so the
+/// second one waits for the first (`busy_timeout`) and then finds the table.
+/// Called outside a transaction, like `migrate_schema`.
+fn ensure_chunks_fts(conn: &Connection) -> SqliteResult<()> {
+    // Fast path, no lock: the table is there on every open but the first.
+    if !table_exists(conn, "chunks_fts")? {
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        let result = create_chunks_fts(conn);
+        match &result {
+            Ok(()) => {
+                conn.execute("COMMIT", [])?;
+            }
+            Err(_) => {
+                let _ = conn.execute("ROLLBACK", []);
+            }
+        }
+        result?;
+    }
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+             INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+         END;
+         CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+             INSERT INTO chunks_fts(chunks_fts, rowid, content)
+             VALUES ('delete', old.id, old.content);
+         END;
+         CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF content ON chunks BEGIN
+             INSERT INTO chunks_fts(chunks_fts, rowid, content)
+             VALUES ('delete', old.id, old.content);
+             INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+         END;",
+    )
+}
+
+/// Create and fill `chunks_fts` unless another connection did so since the
+/// caller's check; runs inside the caller's write transaction.
+fn create_chunks_fts(conn: &Connection) -> SqliteResult<()> {
+    if table_exists(conn, "chunks_fts")? {
+        return Ok(());
+    }
+    let chunks: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
+    if chunks > 0 {
+        tracing::info!("Building the text index over {} chunks", chunks);
+    }
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE chunks_fts USING fts5(
+             content,
+             content='chunks',
+             content_rowid='id',
+             tokenize='trigram'
+         );
+         INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild');",
+    )
+}
+
 fn table_exists(conn: &Connection, table: &str) -> SqliteResult<bool> {
     conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -550,6 +616,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         );
         "#
     ))?;
+
+    ensure_chunks_fts(conn)?;
 
     // Set schema version and record which embedding model fills chunks_vec
     conn.execute(
@@ -1122,5 +1190,113 @@ mod tests {
         let deps = store.get_dependencies(file_id).unwrap();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].resolved_path.as_deref(), Some("src/utils.rs"));
+    }
+
+    #[test]
+    fn test_chunks_fts_is_built_from_existing_chunks() {
+        // A database from before the text index: `init_schema` creates the
+        // table, indexes the chunks already stored and installs the
+        // triggers that keep it in sync.
+        crate::store::init_sqlite_vec();
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au;
+             DROP TABLE chunks_fts;
+             INSERT INTO files (id, path, language, hash, last_modified, indexed_at)
+             VALUES (1, 'a.rs', 'rust', 'h', 0, 0);
+             INSERT INTO chunks (id, file_id, content, start_line, end_line, symbols_json)
+             VALUES (7, 1, 'fn needle() {}', 1, 1, '[]');",
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        let rowid: i64 = conn
+            .query_row(
+                "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH '\"needle\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rowid, 7);
+
+        conn.execute_batch(
+            "DELETE FROM chunks WHERE id = 7;
+             INSERT INTO chunks (id, file_id, content, start_line, end_line, symbols_json)
+             VALUES (8, 1, 'fn other() {}', 1, 1, '[]');",
+        )
+        .unwrap();
+        let count = |needle: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?1",
+                [format!("\"{needle}\"")],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!((count("needle"), count("other")), (0, 1));
+        // A second open leaves the index alone.
+        init_schema(&conn).unwrap();
+        assert_eq!((count("needle"), count("other")), (0, 1));
+    }
+
+    /// Two processes open a pre-text-index database together: the first is
+    /// building `chunks_fts` under the write lock while the second checks
+    /// for it. The second must wait and keep the table it then finds, not
+    /// fail on `table chunks_fts already exists`.
+    #[test]
+    fn test_chunks_fts_creation_waits_for_a_concurrent_creator() {
+        crate::store::init_sqlite_vec();
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join(".semantiq.db");
+        let open = |path: &std::path::Path| {
+            let conn = Connection::open(path).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+                .unwrap();
+            conn
+        };
+        let creator = open(&db_path);
+        init_schema(&creator).unwrap();
+        creator
+            .execute_batch(
+                "DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au;
+                 DROP TABLE chunks_fts;
+                 INSERT INTO files (id, path, language, hash, last_modified, indexed_at)
+                 VALUES (1, 'a.rs', 'rust', 'h', 0, 0);
+                 INSERT INTO chunks (id, file_id, content, start_line, end_line, symbols_json)
+                 VALUES (7, 1, 'fn needle() {}', 1, 1, '[]');",
+            )
+            .unwrap();
+
+        // The first process holds the write lock before the second looks.
+        creator.execute("BEGIN IMMEDIATE", []).unwrap();
+        let second_path = db_path.clone();
+        let second = std::thread::spawn(move || {
+            let conn = open(&second_path);
+            init_schema(&conn).map(|()| conn)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        creator
+            .execute_batch(
+                "CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                     content, content='chunks', content_rowid='id', tokenize='trigram'
+                 );
+                 INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild');
+                 COMMIT;",
+            )
+            .unwrap();
+
+        let conn = second.join().unwrap().unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH '\"needle\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert!(table_exists(&conn, "chunks_fts").unwrap());
+        assert!(conn.is_autocommit(), "no transaction left open");
     }
 }

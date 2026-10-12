@@ -53,46 +53,44 @@ impl RetrievalEngine {
         let start = Instant::now();
         let mut results = Vec::new();
 
-        // Find symbol definitions
-        let symbols = self.store.find_symbol_by_name(symbol_name)?;
+        // Find symbol definitions: at most `limit`, import rows left out (an
+        // import is a usage, reported from `refs` below), with their file
+        // path in the same query (#159, #77). Snippets come from a per-file
+        // line cache shared with the usages: one read per file.
+        let symbols = self.store.find_definitions_by_name(symbol_name, limit)?;
         // (path, start_line, end_line) of each definition, to drop the
         // definition-site occurrences already covered by the symbol table.
         let mut definition_spans = Vec::new();
+        let mut file_lines: HashMap<String, Vec<String>> = HashMap::new();
 
-        for symbol in &symbols {
-            if let Some(file) = self
-                .store
-                .get_file_by_path(&self.get_file_path(symbol.file_id)?)?
-            {
-                // A definition whose file is gone (renamed before the watcher
-                // caught up, `--no-refresh`) keeps its index data; only its
-                // snippet is missing.
-                let content = self
-                    .read_file_lines(
-                        &file.path,
-                        symbol.start_line as usize,
-                        symbol.end_line as usize,
-                    )
-                    .unwrap_or_default();
+        for (symbol, path) in &symbols {
+            // A definition whose file is gone (renamed before the watcher
+            // caught up, `--no-refresh`) keeps its index data; only its
+            // snippet is missing.
+            let content = self.lines_of(
+                &mut file_lines,
+                path,
+                symbol.start_line as usize,
+                symbol.end_line as usize,
+            );
 
-                definition_spans.push((file.path.clone(), symbol.start_line, symbol.end_line));
-                results.push(
-                    SearchResult::new(
-                        SearchResultKind::Symbol,
-                        file.path.clone(),
-                        symbol.start_line as usize,
-                        symbol.end_line as usize,
-                        content,
-                        1.0,
-                    )
-                    .with_metadata(SearchResultMetadata {
-                        symbol_name: Some(symbol.name.clone()),
-                        symbol_kind: Some(symbol.kind.clone()),
-                        match_type: Some("definition".to_string()),
-                        context: symbol.signature.clone(),
-                    }),
-                );
-            }
+            definition_spans.push((path.clone(), symbol.start_line, symbol.end_line));
+            results.push(
+                SearchResult::new(
+                    SearchResultKind::Symbol,
+                    path.clone(),
+                    symbol.start_line as usize,
+                    symbol.end_line as usize,
+                    content,
+                    1.0,
+                )
+                .with_metadata(SearchResultMetadata {
+                    symbol_name: Some(symbol.name.clone()),
+                    symbol_kind: Some(symbol.kind.clone()),
+                    match_type: Some("definition".to_string()),
+                    context: symbol.signature.clone(),
+                }),
+            );
         }
 
         let references = self
@@ -114,7 +112,6 @@ impl RetrievalEngine {
                 }
             }
         } else {
-            let mut file_lines: HashMap<String, Vec<String>> = HashMap::new();
             for reference in references {
                 let covered = reference.kind == "definition"
                     && definition_spans.iter().any(|(path, start, end)| {
@@ -160,15 +157,42 @@ impl RetrievalEngine {
         file_path: &str,
         line: usize,
     ) -> String {
-        let lines = cache.entry(file_path.to_string()).or_insert_with(|| {
-            self.read_file_lines(file_path, 1, usize::MAX)
-                .map(|content| content.lines().map(str::to_string).collect())
-                .unwrap_or_default()
-        });
-        lines
+        self.file_lines(cache, file_path)
             .get(line.saturating_sub(1))
             .map(|l| l.trim().to_string())
             .unwrap_or_default()
+    }
+
+    /// Lines `start..=end` (1-based) of a file joined with `\n`, from the
+    /// same per-file cache as [`Self::line_of`]; empty when the file cannot
+    /// be read or the range is past its end.
+    fn lines_of(
+        &self,
+        cache: &mut HashMap<String, Vec<String>>,
+        file_path: &str,
+        start: usize,
+        end: usize,
+    ) -> String {
+        let lines = self.file_lines(cache, file_path);
+        let start = start.saturating_sub(1).min(lines.len());
+        let end = end.min(lines.len());
+        if start >= end {
+            return String::new();
+        }
+        lines[start..end].join("\n")
+    }
+
+    /// The lines of a file, read once per call through `cache`.
+    fn file_lines<'c>(
+        &self,
+        cache: &'c mut HashMap<String, Vec<String>>,
+        file_path: &str,
+    ) -> &'c Vec<String> {
+        cache.entry(file_path.to_string()).or_insert_with(|| {
+            self.read_file_lines(file_path, 1, usize::MAX)
+                .map(|content| content.lines().map(str::to_string).collect())
+                .unwrap_or_default()
+        })
     }
 
     /// Get dependencies for a file (what it imports).

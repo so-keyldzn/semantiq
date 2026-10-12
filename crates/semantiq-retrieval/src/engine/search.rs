@@ -3,17 +3,23 @@
 use super::RetrievalEngine;
 use crate::query::{Query, SearchOptions};
 use crate::results::{SearchResult, SearchResultKind, SearchResultMetadata, SearchResults};
-use crate::text_searcher::{TextSearcher, looks_generated};
+use crate::text_searcher::{CompiledMatcher, HashLine, TextSearcher, looks_generated};
 use anyhow::Result;
-use semantiq_index::project_walker;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
 /// Maximum limit for search results to prevent excessive memory usage.
 const MAX_SEARCH_LIMIT: usize = 1000;
+
+/// Largest KNN candidate pool the semantic strategy grows to when a
+/// `file_type` / `symbol_kind` filter leaves it short of `limit` hits.
+const MAX_SEMANTIC_CANDIDATES: usize = 2048;
+
+/// Chunks fetched per page of the text strategy.
+const TEXT_PAGE: usize = 64;
 
 /// Per-strategy weights applied to each strategy's raw score before the
 /// global merge.
@@ -102,8 +108,10 @@ impl RetrievalEngine {
         weight_strategy(&mut symbol_results, WEIGHT_SYMBOL);
         all_results.extend(symbol_results);
 
-        // 3. Text search (grep-like) - only if we need more results
-        if all_results.len() < safe_limit {
+        // 3. Text search (grep-like) - only if we need more results. A text
+        // hit is a line, not a symbol: when the caller asked for symbol kinds
+        // it cannot satisfy the filter (#93).
+        if all_results.len() < safe_limit && opts.symbol_kinds.is_none() {
             let mut text_results =
                 self.search_text(&query, safe_limit - all_results.len(), &opts)?;
             above_floor(&mut text_results);
@@ -160,10 +168,77 @@ impl RetrievalEngine {
         // Generate query embedding (query-side encoding, see EmbeddingModel::embed_query)
         let query_embedding = model.embed_query(query_text)?;
 
-        // Use sqlite-vec's efficient vector search
-        let similar_chunks = self
-            .store
-            .search_similar_chunks(&query_embedding, limit * 2)?;
+        // Does `hit` pass the file-type and symbol-kind filters? A chunk
+        // satisfies a kind filter when one of its symbols has that kind.
+        let kind_filtered = options.symbol_kinds.is_some();
+        let accepts = |hit: &semantiq_index::ChunkHit,
+                       kinds_by_file: &HashMap<i64, HashMap<String, String>>|
+         -> bool {
+            if let Some(ext) = Path::new(&hit.file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                && !options.accepts_extension(ext)
+            {
+                return false;
+            }
+            if !kind_filtered {
+                return true;
+            }
+            let kinds = kinds_by_file.get(&hit.file_id);
+            hit.symbols.iter().any(|name| {
+                kinds
+                    .and_then(|m| m.get(name))
+                    .is_some_and(|kind| options.accepts_symbol_kind(kind))
+            })
+        };
+
+        // Use sqlite-vec's efficient vector search. With a filter set, the
+        // candidate pool grows until `limit` candidates pass it or the index
+        // runs out (#134): the top 2 × limit of a mostly-Rust index may hold
+        // no Python chunk at all.
+        let filtered = kind_filtered || options.file_types.is_some();
+        let mut fetch = limit * 2;
+        let (similar_chunks, hits, kinds_by_file) = loop {
+            let similar_chunks = self.store.search_similar_chunks(&query_embedding, fetch)?;
+
+            // Every candidate with its file's path and language, in one
+            // query: the language feeds calibration and the dominant-language
+            // thresholds, the path the results. One lookup per chunk here
+            // (then per file, then per file's symbols) made a `limit 100`
+            // search ~500 round-trips on the shared connection.
+            let chunk_ids: Vec<i64> = similar_chunks.iter().map(|(id, _)| *id).collect();
+            let hits = self.store.get_chunk_hits(&chunk_ids)?;
+
+            // Symbol kinds of every file touched, in one query, to label each
+            // result with the kind of its first symbol and apply the kind
+            // filter.
+            let mut file_ids: Vec<i64> = hits.iter().map(|hit| hit.file_id).collect();
+            file_ids.sort_unstable();
+            file_ids.dedup();
+            let kinds_by_file = match self.store.get_symbol_kinds_by_files(&file_ids) {
+                Ok(kinds) => kinds,
+                Err(e) => {
+                    // Non-fatal: results just lose their `symbol_kind` label.
+                    // But surface it: a recurring DB error here usually means
+                    // the connection is wedged.
+                    warn!(error = %e, "failed to fetch symbols for kind lookup");
+                    Default::default()
+                }
+            };
+
+            let exhausted = similar_chunks.len() < fetch || fetch >= MAX_SEMANTIC_CANDIDATES;
+            if !filtered
+                || exhausted
+                || hits
+                    .iter()
+                    .filter(|hit| accepts(hit, &kinds_by_file))
+                    .count()
+                    >= limit
+            {
+                break (similar_chunks, hits, kinds_by_file);
+            }
+            fetch = (fetch * 4).min(MAX_SEMANTIC_CANDIDATES);
+        };
 
         if similar_chunks.is_empty() {
             debug!("No similar chunks found via vector search");
@@ -175,20 +250,15 @@ impl RetrievalEngine {
             similar_chunks.len()
         );
 
-        // Every candidate with its file's path and language, in one query:
-        // the language feeds calibration and the dominant-language
-        // thresholds, the path the results. One lookup per chunk here (then
-        // per file, then per file's symbols) made a `limit 100` search ~500
-        // round-trips on the shared connection.
-        let chunk_ids: Vec<i64> = similar_chunks.iter().map(|(id, _)| *id).collect();
-        let hits = self.store.get_chunk_hits(&chunk_ids)?;
-        let language_by_chunk: std::collections::HashMap<i64, Option<String>> = hits
+        let language_by_chunk: HashMap<i64, Option<String>> = hits
             .iter()
             .map(|hit| (hit.id, hit.language.clone()))
             .collect();
 
-        // Collect distance observations for ML calibration
-        self.collect_distance_observations(query_text, &similar_chunks, &language_by_chunk);
+        // Collect distance observations for ML calibration, from the same
+        // 2 × limit nearest candidates whatever the pool grew to.
+        let observed = &similar_chunks[..similar_chunks.len().min(limit * 2)];
+        self.collect_distance_observations(query_text, observed, &language_by_chunk);
 
         // Detect dominant language from results for adaptive thresholds
         let dominant_language = self.detect_dominant_language(&similar_chunks, &language_by_chunk);
@@ -204,7 +274,7 @@ impl RetrievalEngine {
         );
 
         // Filter by distance threshold
-        let distance_map: std::collections::HashMap<i64, f32> = similar_chunks
+        let distance_map: HashMap<i64, f32> = similar_chunks
             .into_iter()
             .filter(|(_, distance)| *distance < max_distance)
             .collect();
@@ -218,22 +288,6 @@ impl RetrievalEngine {
             return Ok(Vec::new());
         }
 
-        // Symbol kinds of every file touched, in one query, to label each
-        // result with the kind of its first symbol.
-        let mut file_ids: Vec<i64> = hits.iter().map(|hit| hit.file_id).collect();
-        file_ids.sort_unstable();
-        file_ids.dedup();
-        let kinds_by_file = match self.store.get_symbol_kinds_by_files(&file_ids) {
-            Ok(kinds) => kinds,
-            Err(e) => {
-                // Non-fatal: results just lose their `symbol_kind` label. But
-                // surface it: a recurring DB error here usually means the
-                // connection is wedged.
-                warn!(error = %e, "failed to fetch symbols for kind lookup");
-                Default::default()
-            }
-        };
-
         // Convert to SearchResults
         let results: Vec<SearchResult> = hits
             .into_iter()
@@ -241,15 +295,7 @@ impl RetrievalEngine {
                 let distance = *distance_map.get(&chunk.id)?;
                 let score = 1.0 / (1.0 + distance);
 
-                if score < min_similarity {
-                    return None;
-                }
-
-                if let Some(ext) = Path::new(&chunk.file_path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    && !options.accepts_extension(ext)
-                {
+                if score < min_similarity || !accepts(&chunk, &kinds_by_file) {
                     return None;
                 }
 
@@ -369,58 +415,37 @@ impl RetrievalEngine {
         // the same symbol matched by multiple variants is only scored/emitted
         // once, keyed by "file:start:end". Without this, an N-variant query
         // amplified results N-fold before the outer search() dedup ran.
-        let mut seen_symbols = std::collections::HashSet::new();
-
-        // Memoize file-path lookups: many symbols share a file, and previously
-        // every symbol triggered its own `get_file_path` query (N+1). One
-        // lookup per distinct file_id now.
-        let mut file_path_cache: std::collections::HashMap<i64, Option<String>> =
-            std::collections::HashMap::new();
+        let mut seen_symbols = HashSet::new();
 
         // The first entry of `all_terms()` is the original query text; the rest
         // are expanded case variants. Track which terms we've already queried so
         // we never re-run FTS5 for a duplicate variant string.
-        let mut queried_terms = std::collections::HashSet::new();
+        let mut queried_terms = HashSet::new();
         let terms = query.all_terms();
         let original_term = terms.first().copied();
 
+        // Kind and extension filters apply in SQL, before the FTS `LIMIT`
+        // (#134); `import` rows are left out unless asked for (#77).
+        let kinds = options.symbol_kinds.as_deref();
+        let files = options.extension_filter();
+
         for term in &terms {
-            if !queried_terms.insert(term.to_lowercase()) {
-                // Identical variant (case-insensitively) already queried.
+            if term.trim().is_empty() || !queried_terms.insert(term.to_lowercase()) {
+                // Empty, or an identical variant (case-insensitively) already queried.
                 continue;
             }
 
             let is_original = Some(*term) == original_term;
-            let symbols = self.store.search_symbols(term, limit)?;
+            let symbols = self
+                .store
+                .search_symbols_filtered(term, kinds, &files, limit)?;
 
-            for symbol in symbols {
-                if !options.accepts_symbol_kind(&symbol.kind) {
-                    continue;
-                }
-
+            for (symbol, file_path) in symbols {
                 let dedup_key = format!(
                     "{}:{}:{}",
                     symbol.file_id, symbol.start_line, symbol.end_line
                 );
                 if !seen_symbols.insert(dedup_key) {
-                    continue;
-                }
-
-                let file_path = match file_path_cache.entry(symbol.file_id) {
-                    std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        let resolved = self.store.get_file_path_by_id(symbol.file_id)?;
-                        e.insert(resolved).clone()
-                    }
-                };
-                let file_path = match file_path {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                if let Some(ext) = Path::new(&file_path).extension().and_then(|e| e.to_str())
-                    && !options.accepts_extension(ext)
-                {
                     continue;
                 }
 
@@ -492,10 +517,10 @@ impl RetrievalEngine {
         Ok(results)
     }
 
-    /// Search text content using grep-like matching.
-    ///
-    /// Uses a cached file list (with TTL) to avoid re-walking the directory
-    /// tree on every call within the same session.
+    /// Search text content using grep-like matching, answered from the
+    /// index: the trigram FTS index over the chunks selects the chunks
+    /// holding a term (ranked, paged), and each term's regex locates the
+    /// lines in them. No file of the project is read (#160).
     pub(crate) fn search_text(
         &self,
         query: &Query,
@@ -503,178 +528,109 @@ impl RetrievalEngine {
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
         // Compile the matchers for every (deduplicated) query term exactly
-        // once for the whole request instead of recompiling them per file.
+        // once for the whole request instead of recompiling them per chunk.
         let searcher = TextSearcher::new(true);
         let mut compiled = Vec::new();
-        let mut seen_terms = std::collections::HashSet::new();
+        let mut seen_terms = HashSet::new();
         for term in query.all_terms() {
-            if seen_terms.insert(term.to_lowercase())
+            if !term.trim().is_empty()
+                && seen_terms.insert(term.to_lowercase())
                 && let Ok(m) = searcher.compile(term)
             {
                 compiled.push(m);
             }
         }
-        self.search_text_with(&searcher, &compiled, limit, options)
+        self.search_chunks_with(&searcher, &compiled, limit, &options.extension_filter())
     }
 
     /// Lines where `name` occurs as a whole identifier, case-sensitive: the
     /// text approximation of the `refs` table for names it does not know
     /// (keys of data files). No case variants, no substrings: `id` does not
-    /// match `uuid`, `width` or `ID`.
+    /// match `uuid`, `width` or `ID`. By file path and line.
     pub(crate) fn search_identifier_text(
         &self,
         name: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        if name.trim().is_empty() {
+            return Ok(Vec::new());
+        }
         let searcher = TextSearcher::new(false);
         let compiled = [searcher.compile_word(name)?];
-        self.search_text_with(&searcher, &compiled, limit, &SearchOptions::default())
+        let mut results = self.search_chunks_with(
+            &searcher,
+            &compiled,
+            limit,
+            &SearchOptions::default().extension_filter(),
+        )?;
+        results.sort_by(|a, b| {
+            a.file_path
+                .cmp(&b.file_path)
+                .then(a.start_line.cmp(&b.start_line))
+        });
+        Ok(results)
     }
 
-    /// Walk the project files and collect the lines matched by `compiled`.
-    fn search_text_with(
+    /// Collect up to `limit` lines matched by `compiled` in the indexed
+    /// chunks of the files accepted by `files`. Each matcher's literal text
+    /// selects its candidate chunks through the trigram index (a
+    /// case-insensitive superset of the regex matches), pages of
+    /// [`TEXT_PAGE`] chunks, best FTS rank first, until `limit` lines are
+    /// found or the candidates run out. Lines are deduplicated across
+    /// matchers and across overlapping chunks.
+    fn search_chunks_with(
         &self,
         searcher: &TextSearcher,
-        compiled: &[crate::text_searcher::CompiledMatcher],
+        compiled: &[CompiledMatcher],
         limit: usize,
-        options: &SearchOptions,
+        files: &semantiq_index::ExtensionFilter,
     ) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
-        let root = Path::new(&self.root_path);
+        let mut seen_lines: HashSet<(String, usize)> = HashSet::new();
 
-        if !root.exists() {
-            return Ok(results);
-        }
-
-        let file_paths = self.get_cached_file_list(root)?;
-
-        for path in file_paths.iter() {
-            if results.len() >= limit {
-                break;
-            }
-
-            let accepted = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| options.accepts_extension(ext))
-                .unwrap_or(false);
-
-            if !accepted {
-                continue;
-            }
-
-            // Bound memory: skip files larger than MAX_FILE_SIZE rather than
-            // slurping an arbitrarily large file fully into RAM. Indexing
-            // already skips these, so they carry no symbols/chunks anyway.
-            if let Ok(meta) = fs::metadata(path)
-                && meta.len() > semantiq_index::MAX_FILE_SIZE
-            {
-                continue;
-            }
-
-            if let Ok(content) = fs::read_to_string(path) {
-                // Minified / generated files would return their whole
-                // content as one hit.
-                if looks_generated(&content) {
-                    continue;
-                }
-                let matches = Self::find_text_matches_compiled(searcher, &content, compiled);
-                if matches.is_empty() {
-                    continue;
-                }
-                // Hoist out of the per-match loop: the path doesn't change
-                // between matches, but `to_relative_string` is non-trivial
-                // (canonicalize fallback). Saves one call per extra hit.
-                let rel_path = semantiq_index::paths::to_relative_string(path, root);
-
-                for (line_num, line_content, score) in matches {
-                    results.push(SearchResult::new(
-                        SearchResultKind::TextMatch,
-                        rel_path.clone(),
-                        line_num,
-                        line_num,
-                        line_content,
-                        score,
-                    ));
-
-                    if results.len() >= limit {
-                        break;
+        'matchers: for matcher in compiled {
+            let mut offset = 0;
+            loop {
+                let hits =
+                    self.store
+                        .search_chunk_text(matcher.pattern(), files, TEXT_PAGE, offset)?;
+                for hit in &hits {
+                    // Minified / generated content would return its whole
+                    // content as one hit.
+                    if looks_generated(&hit.content) {
+                        continue;
+                    }
+                    let rule = HashLine::for_language(hit.language.as_deref());
+                    let Ok(matches) = searcher.search_compiled(&hit.content, matcher, rule) else {
+                        continue;
+                    };
+                    let first_line = hit.start_line.max(1) as usize;
+                    for m in matches {
+                        let line = first_line + m.line_number.saturating_sub(1);
+                        if !seen_lines.insert((hit.file_path.clone(), line)) {
+                            continue;
+                        }
+                        results.push(SearchResult::new(
+                            SearchResultKind::TextMatch,
+                            hit.file_path.clone(),
+                            line,
+                            line,
+                            m.line_content,
+                            m.score,
+                        ));
+                        if results.len() >= limit {
+                            break 'matchers;
+                        }
                     }
                 }
+                if hits.len() < TEXT_PAGE {
+                    break;
+                }
+                offset += TEXT_PAGE;
             }
         }
 
         Ok(results)
-    }
-
-    /// Get the cached file list, rebuilding it if the cache has expired.
-    ///
-    /// Returns an `Arc` handle so the caller shares the cached `Vec` instead of
-    /// deep-cloning it on every `search_text()` call.
-    fn get_cached_file_list(&self, root: &Path) -> Result<Arc<Vec<PathBuf>>> {
-        use super::{FILE_LIST_CACHE_TTL_SECS, FileListCache};
-        use std::time::Duration;
-
-        let mut cache = self
-            .file_list_cache
-            .lock()
-            .map_err(|e| anyhow::anyhow!("File list cache lock poisoned: {}", e))?;
-
-        if let Some(ref cached) = *cache
-            && cached.created_at.elapsed() < Duration::from_secs(FILE_LIST_CACHE_TTL_SECS)
-        {
-            return Ok(Arc::clone(&cached.paths));
-        }
-
-        // Rebuild the file list: the same walk as the indexer (hidden
-        // directories such as `.github` included, `.gitignore` honoured).
-        // Dot-files are left out: unlike the index, which only parses known
-        // languages, this search reads files of any extension, and
-        // `.env.production`-style files are where secrets live.
-        let walker = project_walker(root).build();
-
-        let paths: Arc<Vec<PathBuf>> = Arc::new(
-            walker
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-                .map(|e| e.into_path())
-                .collect(),
-        );
-
-        *cache = Some(FileListCache {
-            paths: Arc::clone(&paths),
-            created_at: std::time::Instant::now(),
-        });
-
-        Ok(paths)
-    }
-
-    /// Find text matches in content using pre-compiled matchers.
-    ///
-    /// Dedupes by line number across all matchers and returns matches sorted
-    /// by score (highest first).
-    pub(crate) fn find_text_matches_compiled(
-        searcher: &TextSearcher,
-        content: &str,
-        compiled: &[crate::text_searcher::CompiledMatcher],
-    ) -> Vec<(usize, String, f32)> {
-        let mut matches = Vec::new();
-        let mut seen_lines = std::collections::HashSet::new();
-
-        for matcher in compiled {
-            if let Ok(results) = searcher.search_compiled(content, matcher) {
-                for result in results {
-                    if seen_lines.insert(result.line_number) {
-                        matches.push((result.line_number, result.line_content, result.score));
-                    }
-                }
-            }
-        }
-
-        matches.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-
-        matches
     }
 
     /// Get file path from file ID.

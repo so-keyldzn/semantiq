@@ -272,9 +272,20 @@ const INLINE_EMBEDDING_LIMIT: usize = 64;
 /// `semantiq index --no-embeddings` or during a first `serve`, answer with the
 /// embeddings available and say how much of the semantic index is ready.
 fn complete_embeddings(engine: &RetrievalEngine, store: &IndexStore) -> Result<()> {
-    let Some(model) = engine.embedding_model().filter(|model| !model.is_stub()) else {
+    let Some(model) = engine.embedding_model() else {
         return Ok(());
     };
+    if model.is_stub() {
+        // The MCP server says so in its instructions; the CLI has nowhere
+        // else to say it (#106).
+        let reason = semantiq_embeddings::semantic_search_unavailable_reason()
+            .unwrap_or("stub embedding model");
+        eprintln!(
+            "semantiq: semantic search unavailable ({reason}): only symbol and text matches \
+             are returned"
+        );
+        return Ok(());
+    }
     let counts = store.embedding_counts()?;
     if counts.pending() == 0 {
         return Ok(());
