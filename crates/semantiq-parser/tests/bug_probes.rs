@@ -1015,4 +1015,34 @@ public:
         assert_eq!(kind("C"), "extends");
         assert_eq!(kind("K"), "implements");
     }
+
+    /// #78: the import and chunk extractors walked the tree with one native
+    /// frame per level and overflowed the 2 MiB stack of the `spawn_blocking`
+    /// threads of `serve` on a few thousand nested nodes (a `SIGABRT`, not a
+    /// panic, so the indexer died again at every restart). Both walks are
+    /// iterative now; this runs them on a 2 MiB stack over 10 000 nested JSON
+    /// arrays and a 10 000-term JavaScript expression.
+    #[test]
+    fn b23_deep_ast_does_not_overflow_the_stack() {
+        use semantiq_parser::ChunkExtractor;
+
+        let json = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        let js = format!("var x = {};\n", vec!["1"; 10_000].join(" + "));
+        let sources = vec![(Language::Json, json), (Language::JavaScript, js)];
+
+        let worker = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut support = LanguageSupport::new().unwrap();
+                for (lang, source) in &sources {
+                    let tree = support.parse(*lang, source).unwrap();
+                    let imports = ImportExtractor::extract(&tree, source, *lang).unwrap();
+                    assert!(imports.is_empty(), "{lang:?}: {imports:?}");
+                    let chunks = ChunkExtractor::new().extract(&tree, source, *lang).unwrap();
+                    assert!(!chunks.is_empty(), "{lang:?}");
+                }
+            })
+            .unwrap();
+        worker.join().expect("deep AST extraction must not crash");
+    }
 }

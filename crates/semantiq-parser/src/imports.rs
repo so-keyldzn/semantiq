@@ -100,30 +100,23 @@ impl ImportExtractor {
         context: &ImportContext,
     ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
-        let root = tree.root_node();
 
-        Self::extract_recursive(&root, source, language, context, &mut imports)?;
+        // Pre-order walk with an explicit stack: one native frame per AST
+        // level overflowed the 2 MiB stack of a `spawn_blocking` thread on a
+        // few thousand nested nodes (#78), and the walk runs on every
+        // language, data files included.
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            imports.extend(Self::node_to_import(&node, source, language, context));
+            let first_child = stack.len();
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+            // Children were pushed in source order: reverse them so the next
+            // pop visits the first one (source order in `imports`).
+            stack[first_child..].reverse();
+        }
 
         Ok(imports)
-    }
-
-    fn extract_recursive(
-        node: &Node,
-        source: &str,
-        language: Language,
-        context: &ImportContext,
-        imports: &mut Vec<Import>,
-    ) -> Result<()> {
-        for import in Self::node_to_import(node, source, language, context) {
-            imports.push(import);
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            Self::extract_recursive(&child, source, language, context, imports)?;
-        }
-
-        Ok(())
     }
 
     fn node_to_import(
