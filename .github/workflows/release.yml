@@ -5,8 +5,15 @@ on:
     tags:
       - 'v*'
 
+# Read-only by default; only `release` uploads assets and only `publish-npm`
+# needs an OIDC token (#116).
 permissions:
-  contents: write
+  contents: read
+
+# One release per tag, never cancelled by a later tag (#124).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # The archives and the npm package are named after the tag, while the binary
@@ -16,20 +23,19 @@ jobs:
   check-version:
     name: Check tag matches versions
     runs-on: ubuntu-latest
-    # Only reads the repository; the workflow default is `contents: write`.
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
+        with:
+          toolchain: stable
 
       - name: Compare the tag with Cargo.toml, npm/package.json and the plugin manifests
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          CARGO=$(cargo metadata --no-deps --format-version 1 \
+          CARGO=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "semantiq") | .version')
           NPM=$(jq -r '.version' npm/package.json)
           PLUGIN=$(jq -r '.version' .claude-plugin/plugin.json)
@@ -54,6 +60,18 @@ jobs:
             exit 1
           fi
           echo "All version files match tag ${GITHUB_REF_NAME}."
+
+      # The Release page shows the `## [<version>]` section of CHANGELOG.md
+      # (#120); a tag without one is a release without notes, so fail here.
+      - name: Check CHANGELOG.md has a section for the tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[${TAG}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${TAG}]' section: move the [Unreleased] entries under '## [${TAG}] - $(date -u +%F)' (see CLAUDE.md, Releasing), then re-tag."
+            exit 1
+          fi
+          echo "CHANGELOG.md has a section for ${TAG}."
 
   build:
     name: Build ${{ matrix.target }}
@@ -86,9 +104,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
+
+      # Shares the dependency builds with build.yml on the same target (#124).
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -96,8 +121,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
+      # `--locked`: the shipped binary is built from the Cargo.lock CI tested (#119).
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
@@ -137,6 +163,12 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      # Uploads the release assets.
+      contents: write
+      # Signed build provenance for the archives (#111).
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
@@ -145,18 +177,52 @@ jobs:
         with:
           path: artifacts
 
+      # The `.sha256` sidecar only detects corruption (it is served from the
+      # same origin as the archive); the attestation ties each archive to this
+      # workflow run and commit, verifiable with
+      # `gh attestation verify <archive> --repo so-keyldzn/semantiq` (#111).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/**/*.tar.gz
+
+      # Release notes = the `## [<version>]` section of CHANGELOG.md
+      # (check-version guarantees it exists), followed by the auto-generated
+      # PR list (#120).
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          awk -v tag="${TAG}" '
+            index($0, "## [" tag "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md | sed -e '1{/^$/d;}' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::The '## [${TAG}]' section of CHANGELOG.md is empty."
+            exit 1
+          fi
+          echo "Release notes:"
+          cat release-notes.md
+
       - name: Create Release
         uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         with:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.tar.gz.sha256
+          body_path: release-notes.md
           generate_release_notes: true
 
   publish-npm:
     name: Publish to npm
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `npm publish --provenance` signs the package with the workflow's OIDC
+      # identity (#111).
+      id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
@@ -174,7 +240,6 @@ jobs:
 
       - name: Publish
         working-directory: npm
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
