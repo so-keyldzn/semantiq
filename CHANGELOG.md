@@ -4,6 +4,8 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-12
+
 The text index (`chunks_fts`, below) is built from the existing chunks the
 first time this version opens an index (a few seconds per 100 MB of source);
 it grows the database by about 2.5× the size of the indexed source text.
