@@ -175,31 +175,26 @@ impl ChunkExtractor {
         language: Language,
     ) -> Vec<SemanticBoundary> {
         let mut boundaries = Vec::new();
-        Self::collect_boundaries(node, source, language, &mut boundaries);
+        // Explicit stack, not recursion: a deeply nested tree (10 000 nested
+        // JSON arrays, a 10 000-term expression) overflowed the stack of the
+        // indexing thread and aborted `serve` (#78). The order of the walk
+        // does not matter, the boundaries are sorted below.
+        let mut stack = vec![*node];
+        while let Some(node) = stack.pop() {
+            if Self::is_boundary_node(node.kind(), language)
+                && let Some(name) = Self::get_node_name(&node, source)
+            {
+                boundaries.push(SemanticBoundary {
+                    name,
+                    start_line: node.start_position().row,
+                    end_line: node.end_position().row,
+                });
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+        }
         boundaries.sort_by_key(|b| b.start_line);
         boundaries
-    }
-
-    fn collect_boundaries(
-        node: &tree_sitter::Node,
-        source: &str,
-        language: Language,
-        boundaries: &mut Vec<SemanticBoundary>,
-    ) {
-        if Self::is_boundary_node(node.kind(), language)
-            && let Some(name) = Self::get_node_name(node, source)
-        {
-            boundaries.push(SemanticBoundary {
-                name,
-                start_line: node.start_position().row,
-                end_line: node.end_position().row,
-            });
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            Self::collect_boundaries(&child, source, language, boundaries);
-        }
     }
 
     fn is_boundary_node(kind: &str, language: Language) -> bool {

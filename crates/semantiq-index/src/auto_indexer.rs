@@ -8,7 +8,7 @@ use crate::watcher::{FileEvent, FileWatcher};
 use anyhow::{Result, bail};
 use semantiq_parser::{
     ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
-    ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_local_import,
+    ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_import,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -28,12 +28,65 @@ pub struct AutoIndexer {
     project_root: PathBuf,
     language_support: Mutex<LanguageSupport>,
     chunk_extractor: ChunkExtractor,
-    /// Project facts for import classification (`go.mod` module path).
+    /// Project facts for import classification and resolution: the `go.mod`
+    /// module path and the packages the project's files declare
+    /// (`scan_import_context`).
     import_context: ImportContext,
     /// Relative paths whose parse is made to fail (`simulate_parse_failure`),
     /// tree-sitter never failing on its own in a test.
     #[cfg(any(test, feature = "test-support"))]
     parse_failures: Mutex<HashSet<String>>,
+}
+
+/// How much of a file `scan_import_context` reads: `package` / `namespace`
+/// declarations come before any code.
+const PACKAGE_DECLARATION_HEAD: usize = 8 * 1024;
+
+/// The [`ImportContext`] of `project_root`: its `go.mod` module and, from one
+/// pass over the project walk, the packages its Java / Kotlin / Scala / C# /
+/// PHP files declare and the directories of its Go files (#147). Only the
+/// head of those files is read; the other languages cost a directory walk.
+fn scan_import_context(project_root: &Path) -> ImportContext {
+    let mut context = ImportContext::from_project_root(project_root);
+    for entry in project_walker(project_root).build().flatten() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(language) = Language::from_path(path) else {
+            continue;
+        };
+        if !ImportContext::records_packages(language) {
+            continue;
+        }
+        let rel_path = to_relative_string(path, project_root);
+        if should_exclude_path(Path::new(&rel_path)) {
+            continue;
+        }
+        let head = if language == Language::Go {
+            String::new()
+        } else {
+            match read_head(path, PACKAGE_DECLARATION_HEAD) {
+                Ok(head) => head,
+                Err(e) => {
+                    debug!("Package scan skips {}: {}", rel_path, e);
+                    continue;
+                }
+            }
+        };
+        context.add_source_file(&rel_path, language, &head);
+    }
+    context
+}
+
+/// The first `limit` bytes of `path` as (lossy) text.
+fn read_head(path: &Path, limit: usize) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut buffer = Vec::with_capacity(limit.min(4096));
+    fs::File::open(path)?
+        .take(limit as u64)
+        .read_to_end(&mut buffer)?;
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
 }
 
 /// Whether a read error means the file's row no longer describes anything on
@@ -71,7 +124,7 @@ impl AutoIndexer {
             watcher: watcher.map(Mutex::new),
             language_support: Mutex::new(LanguageSupport::new()?),
             chunk_extractor: ChunkExtractor::new(),
-            import_context: ImportContext::from_project_root(&project_root),
+            import_context: scan_import_context(&project_root),
             project_root,
             #[cfg(any(test, feature = "test-support"))]
             parse_failures: Mutex::new(HashSet::new()),
@@ -786,18 +839,22 @@ impl AutoIndexer {
                     language,
                     &self.import_context,
                 )?;
+                // Every import that is not standard-library is looked up in
+                // the project: one that names a file of it is `local`,
+                // whatever its syntax (`from app.models import User`, #81).
                 let resolved: Vec<Option<String>> = imports
                     .iter()
                     .map(|import| {
-                        if import.kind == ImportKind::Local {
-                            resolve_local_import(
+                        if import.kind == ImportKind::Std {
+                            None
+                        } else {
+                            resolve_import(
                                 &rel_path,
                                 &import.path,
                                 language,
                                 &self.project_root,
+                                &self.import_context,
                             )
-                        } else {
-                            None
                         }
                     })
                     .collect();
@@ -807,7 +864,11 @@ impl AutoIndexer {
                     .map(|(import, resolved)| DependencyInsert {
                         target_path: &import.path,
                         import_name: import.name.as_deref(),
-                        kind: import.kind.as_str(),
+                        kind: if resolved.is_some() {
+                            ImportKind::Local.as_str()
+                        } else {
+                            import.kind.as_str()
+                        },
                         resolved_path: resolved.as_deref(),
                         lines: (import.start_line, import.end_line),
                     })

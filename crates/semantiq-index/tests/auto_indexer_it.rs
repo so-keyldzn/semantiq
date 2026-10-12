@@ -1125,3 +1125,122 @@ fn gitignore_is_honoured_without_a_git_directory() {
     indexer.initial_index().unwrap();
     assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
 }
+
+/// #81 / #147 / #143 / #142: the stored dependencies classify an import of a
+/// file of the project as `local` with its `resolved_path`, whatever the
+/// syntax (Python absolute import, Java package, Rust `mod x;` and
+/// `super::`, C `#include "x.h"`), and the project's own package comes from
+/// the walk done when the indexer is built.
+#[test]
+fn project_imports_are_local_and_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    write_file(&root, "app/__init__.py", "");
+    write_file(&root, "app/models.py", "class User:\n    pass\n");
+    write_file(
+        &root,
+        "app/views.py",
+        "import os\nimport requests\nfrom app.models import User\nfrom .models import User as U\n",
+    );
+    write_file(
+        &root,
+        "src/main/java/com/acme/models/User.java",
+        "package com.acme.models;\npublic class User {}\n",
+    );
+    write_file(
+        &root,
+        "src/main/java/com/acme/api/Server.java",
+        "package com.acme.api;\nimport java.util.List;\nimport com.acme.models.User;\n\
+         import com.google.common.base.Strings;\npublic class Server {}\n",
+    );
+    write_file(
+        &root,
+        "rs/src/lib.rs",
+        "mod util;\npub mod store;\nuse anyhow::Result;\n",
+    );
+    write_file(&root, "rs/src/util.rs", "pub fn helper() {}\n");
+    write_file(
+        &root,
+        "rs/src/store/mod.rs",
+        "use super::util::helper;\n#[cfg(test)]\nmod tests {\n    use super::*;\n}\n",
+    );
+    write_file(
+        &root,
+        "c/src/main.c",
+        "#include <stdio.h>\n#include \"util.h\"\n",
+    );
+    write_file(&root, "c/src/util.h", "int f(void);\n");
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+
+    let deps = |path: &str| -> Vec<(String, String, Option<String>)> {
+        let file = store.get_file_by_path(path).unwrap().unwrap();
+        store
+            .get_dependencies(file.id)
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.target_path, d.kind, d.resolved_path))
+            .collect()
+    };
+    let dep =
+        |t: &str, k: &str, r: Option<&str>| (t.to_string(), k.to_string(), r.map(String::from));
+
+    assert_eq!(
+        deps("app/views.py"),
+        vec![
+            dep("os", "std", None),
+            dep("requests", "external", None),
+            dep("app.models", "local", Some("app/models.py")),
+            dep(".models", "local", Some("app/models.py")),
+        ]
+    );
+    assert_eq!(
+        deps("src/main/java/com/acme/api/Server.java"),
+        vec![
+            dep("java.util.List", "std", None),
+            dep(
+                "com.acme.models.User",
+                "local",
+                Some("src/main/java/com/acme/models/User.java")
+            ),
+            dep("com.google.common.base.Strings", "external", None),
+        ]
+    );
+    assert_eq!(
+        deps("rs/src/lib.rs"),
+        vec![
+            dep("util", "local", Some("rs/src/util.rs")),
+            dep("store", "local", Some("rs/src/store/mod.rs")),
+            dep("anyhow::Result", "external", None),
+        ]
+    );
+    assert_eq!(
+        deps("rs/src/store/mod.rs"),
+        vec![
+            dep("super::util::helper", "local", Some("rs/src/util.rs")),
+            dep("self", "local", None),
+        ]
+    );
+    assert_eq!(
+        deps("c/src/main.c"),
+        vec![
+            dep("stdio.h", "std", None),
+            dep("util.h", "local", Some("c/src/util.h")),
+        ]
+    );
+
+    // `imported_by` of the resolved files.
+    let dependents = |path: &str| -> Vec<String> {
+        store
+            .get_dependents(path)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.target_path)
+            .collect()
+    };
+    assert_eq!(dependents("app/models.py").len(), 2);
+    assert_eq!(dependents("rs/src/util.rs").len(), 2);
+}

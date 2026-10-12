@@ -1,6 +1,7 @@
 use crate::language::Language;
 use crate::python_stdlib::PYTHON_STD_MODULES;
 use anyhow::Result;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tree_sitter::{Node, Tree};
 
@@ -54,20 +55,282 @@ impl std::str::FromStr for ImportKind {
     }
 }
 
-/// Project-level facts that change how imports are classified.
+/// Project-level facts that change how imports are classified and resolved:
+/// the `go.mod` module path and the packages the project's own files declare
+/// (#147). Built once per indexer, from the project walk
+/// (`add_source_file`); a package added to the project afterwards is seen by
+/// the next indexer, like a `go.mod` edit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportContext {
     /// `module` path of the project's `go.mod`: imports under it are `Local`
     /// (without it, `myapp/internal/store` looks like a standard package).
     pub go_module: Option<String>,
+    /// Packages / namespaces declared by the project's files, as written in
+    /// the language (`com.acme.app` for Java, Kotlin, Scala and C#,
+    /// `App\Models` for PHP), to the relative paths of the files declaring
+    /// them, sorted.
+    pub local_packages: BTreeMap<String, Vec<String>>,
+    /// Directories holding Go files (relative, `/`-separated, the root as
+    /// `""`), to their non-test `.go` files, sorted.
+    pub go_packages: BTreeMap<String, Vec<String>>,
 }
 
+/// Standard-library roots that have sub-packages (`net/http`,
+/// `encoding/json`): without a `go.mod`, a project directory `http` must not
+/// claim an `import "net/http"`.
+const GO_STD_ROOTS: &[&str] = &[
+    "archive",
+    "compress",
+    "container",
+    "crypto",
+    "database",
+    "debug",
+    "encoding",
+    "go",
+    "hash",
+    "html",
+    "image",
+    "index",
+    "io",
+    "log",
+    "math",
+    "mime",
+    "net",
+    "os",
+    "path",
+    "regexp",
+    "runtime",
+    "sync",
+    "testing",
+    "text",
+    "unicode",
+];
+
 impl ImportContext {
-    /// Reads the facts from the files at the project root (`go.mod`).
+    /// Reads the facts from the files at the project root (`go.mod`). The
+    /// declared packages come from the project walk (`add_source_file`).
     pub fn from_project_root(project_root: &Path) -> Self {
         Self {
             go_module: go_module_path(project_root),
+            ..Self::default()
         }
+    }
+
+    /// Whether files of `language` declare the packages `add_source_file`
+    /// records: Java, Kotlin, Scala, C# and PHP (a declaration in the file
+    /// head), Go (the file's directory).
+    pub fn records_packages(language: Language) -> bool {
+        matches!(
+            language,
+            Language::Java
+                | Language::Kotlin
+                | Language::Scala
+                | Language::CSharp
+                | Language::Php
+                | Language::Go
+        )
+    }
+
+    /// Records the packages the file `rel_path` (relative to the project
+    /// root, `/`-separated) declares: its directory for a Go file (test files
+    /// are skipped), the `package` / `namespace` declarations found in `head`
+    /// otherwise. `head` is the beginning of the file: declarations come
+    /// before any code, the first few KiB are enough.
+    pub fn add_source_file(&mut self, rel_path: &str, language: Language, head: &str) {
+        if language == Language::Go {
+            if rel_path.ends_with("_test.go") {
+                return;
+            }
+            let dir = rel_path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            Self::record(&mut self.go_packages, dir, rel_path);
+            return;
+        }
+        for package in Self::declared_packages(language, head) {
+            Self::record(&mut self.local_packages, &package, rel_path);
+        }
+    }
+
+    fn record(map: &mut BTreeMap<String, Vec<String>>, key: &str, rel_path: &str) {
+        let files = map.entry(key.to_string()).or_default();
+        if let Err(at) = files.binary_search_by(|f| f.as_str().cmp(rel_path)) {
+            files.insert(at, rel_path.to_string());
+        }
+    }
+
+    /// The `package a.b.c` (Java, Kotlin, Scala: chained Scala clauses give
+    /// `a.b` and `a.b.c`) or `namespace A.B` / `namespace A\B` (C#, PHP)
+    /// declarations in `head`, read as text: a declaration at the start of a
+    /// line, followed by the name.
+    pub fn declared_packages(language: Language, head: &str) -> Vec<String> {
+        let keyword = match language {
+            Language::Java | Language::Kotlin | Language::Scala => "package",
+            Language::CSharp | Language::Php => "namespace",
+            _ => return Vec::new(),
+        };
+        let mut packages: Vec<String> = Vec::new();
+        let mut scala_chain: Option<String> = None;
+        for line in head.lines() {
+            let Some(rest) = line.trim_start().strip_prefix(keyword) else {
+                continue;
+            };
+            if !rest.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let name: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '\\'))
+                .collect();
+            let name = name.trim_matches(['.', '\\']);
+            // `package object x` (Scala) declares no package of its own.
+            if name.is_empty() || name == "object" {
+                continue;
+            }
+            let full = match (&scala_chain, language) {
+                (Some(chain), Language::Scala) => format!("{chain}.{name}"),
+                _ => name.to_string(),
+            };
+            if language == Language::Scala {
+                scala_chain = Some(full.clone());
+            }
+            if !packages.contains(&full) {
+                packages.push(full);
+            }
+        }
+        packages
+    }
+
+    /// The longest package declared by files of the ecosystem of `language`
+    /// that `path` names or lies in, with those files: the path itself
+    /// (`using App.Models;`, a wildcard), a member of it (`a.b.C`) or a member
+    /// of a member whose file is named after the first (`import static
+    /// a.b.C.m`: `C.java`). A longer undeclared prefix (`a.b.models.X` when
+    /// only `a.b` is declared) is another package of the same group: not
+    /// local. A C# namespace and a JVM package may share a name in one
+    /// repository: a `using` only sees `.cs` files, a Java / Kotlin / Scala
+    /// import only JVM files.
+    fn package_of(&self, path: &str, language: Language) -> Option<(usize, Vec<&String>)> {
+        let (sep, extensions) = package_ecosystem(language)?;
+        let segments: Vec<&str> = path.split(sep).collect();
+        let sep = sep.to_string();
+        for k in (1..=segments.len()).rev() {
+            let Some(declaring) = self.local_packages.get(&segments[..k].join(&sep)) else {
+                continue;
+            };
+            let files: Vec<&String> = declaring
+                .iter()
+                .filter(|f| extensions.contains(&file_extension(f)))
+                .collect();
+            if files.is_empty() {
+                continue;
+            }
+            let fits = match segments.len() - k {
+                0 | 1 => true,
+                2 => files.iter().any(|f| file_stem(f) == segments[k]),
+                _ => false,
+            };
+            return fits.then_some((k, files));
+        }
+        None
+    }
+
+    /// Whether `path`, an import written in `language`, names a package of
+    /// the project or a member of one.
+    pub fn is_local_package(&self, path: &str, language: Language) -> bool {
+        self.package_of(path, language).is_some()
+    }
+
+    /// The file of the project defining `path`, an import written in
+    /// `language`: the file of the package named after the imported member
+    /// (`com.acme.models.User` → `User.java`), else, for the package itself
+    /// or a member whose file is named differently (Kotlin / Scala top-level
+    /// declarations, C# namespaces), the single file declaring the package,
+    /// if there is one.
+    pub fn resolve_package_import(&self, path: &str, language: Language) -> Option<String> {
+        let (k, files) = self.package_of(path, language)?;
+        let (sep, _) = package_ecosystem(language)?;
+        let segments: Vec<&str> = path.split(sep).collect();
+        if let Some(member) = segments.get(k)
+            && let Some(file) = files.iter().find(|f| file_stem(f) == *member)
+        {
+            return Some((*file).clone());
+        }
+        (segments.len() - k <= 1 && files.len() == 1).then(|| files[0].clone())
+    }
+
+    /// The directory of the project package a Go import path names: the path
+    /// under the `go.mod` module, or without a `go.mod` (GOPATH layout, the
+    /// import path starts with the project's name) a proper suffix of the
+    /// path. Hosted paths (`github.com/...`) and standard roots are never
+    /// project packages.
+    pub fn go_package_dir(&self, import_path: &str) -> Option<&str> {
+        let key = |dir: &str| self.go_packages.get_key_value(dir).map(|(k, _)| k.as_str());
+        if let Some(module) = &self.go_module {
+            // The module itself (`import "example.com/myapp"`) is the root
+            // package, recorded under `""`.
+            return match import_path.strip_prefix(module.as_str())? {
+                "" => key(""),
+                rest => key(rest.strip_prefix('/')?),
+            };
+        }
+        let (first, mut rest) = import_path.split_once('/')?;
+        if first.contains('.') || GO_STD_ROOTS.contains(&first) {
+            return None;
+        }
+        loop {
+            if let Some(found) = key(rest) {
+                return Some(found);
+            }
+            rest = rest.split_once('/')?.1;
+        }
+    }
+
+    /// The file standing for the Go package `import_path` names:
+    /// `<dir>/<dir name>.go` (for the root package, the last segment of the
+    /// module path), else `doc.go`, else the first non-test file.
+    pub fn resolve_go_import(&self, import_path: &str) -> Option<String> {
+        let dir = self.go_package_dir(import_path)?;
+        let files = self.go_packages.get(dir)?;
+        let name = if dir.is_empty() {
+            self.go_module
+                .as_deref()
+                .map(|module| module.rsplit('/').next().unwrap_or(module))
+                .unwrap_or("")
+        } else {
+            dir.rsplit('/').next().unwrap_or(dir)
+        };
+        files
+            .iter()
+            .find(|f| file_stem(f) == name)
+            .or_else(|| files.iter().find(|f| file_stem(f) == "doc"))
+            .or_else(|| files.first())
+            .cloned()
+    }
+}
+
+/// `a/b/Name.ext` → `Name`.
+fn file_stem(rel_path: &str) -> &str {
+    let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+/// `a/b/Name.ext` → `ext` (`""` without one).
+fn file_extension(rel_path: &str) -> &str {
+    let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    name.rsplit_once('.').map_or("", |(_, ext)| ext)
+}
+
+/// The package separator of `language` and the extensions of the files
+/// whose declarations its imports can name: the JVM languages see each
+/// other's packages, C# and PHP only their own.
+fn package_ecosystem(language: Language) -> Option<(char, &'static [&'static str])> {
+    match language {
+        Language::Java | Language::Kotlin | Language::Scala => {
+            Some(('.', &["java", "kt", "kts", "scala"]))
+        }
+        Language::CSharp => Some(('.', &["cs"])),
+        Language::Php => Some(('\\', &["php"])),
+        _ => None,
     }
 }
 
@@ -100,30 +363,23 @@ impl ImportExtractor {
         context: &ImportContext,
     ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
-        let root = tree.root_node();
 
-        Self::extract_recursive(&root, source, language, context, &mut imports)?;
+        // Pre-order walk with an explicit stack: one native frame per AST
+        // level overflowed the 2 MiB stack of a `spawn_blocking` thread on a
+        // few thousand nested nodes (#78), and the walk runs on every
+        // language, data files included.
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            imports.extend(Self::node_to_import(&node, source, language, context));
+            let first_child = stack.len();
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+            // Children were pushed in source order: reverse them so the next
+            // pop visits the first one (source order in `imports`).
+            stack[first_child..].reverse();
+        }
 
         Ok(imports)
-    }
-
-    fn extract_recursive(
-        node: &Node,
-        source: &str,
-        language: Language,
-        context: &ImportContext,
-        imports: &mut Vec<Import>,
-    ) -> Result<()> {
-        for import in Self::node_to_import(node, source, language, context) {
-            imports.push(import);
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            Self::extract_recursive(&child, source, language, context, imports)?;
-        }
-
-        Ok(())
     }
 
     fn node_to_import(
@@ -141,41 +397,51 @@ impl ImportExtractor {
             Language::Go => Self::extract_go_import(node, source, context)
                 .into_iter()
                 .collect(),
-            Language::Java => Self::extract_java_import(node, source)
+            Language::Java => Self::extract_java_import(node, source, context)
                 .into_iter()
                 .collect(),
             Language::C | Language::Cpp => {
                 Self::extract_c_import(node, source).into_iter().collect()
             }
-            Language::Php => Self::extract_php_import(node, source),
+            Language::Php => Self::extract_php_import(node, source, context),
             Language::Ruby => Self::extract_ruby_import(node, source)
                 .into_iter()
                 .collect(),
-            Language::CSharp => Self::extract_csharp_import(node, source)
+            Language::CSharp => Self::extract_csharp_import(node, source, context)
                 .into_iter()
                 .collect(),
-            Language::Kotlin => Self::extract_kotlin_import(node, source)
+            Language::Kotlin => Self::extract_kotlin_import(node, source, context)
                 .into_iter()
                 .collect(),
-            Language::Scala => Self::extract_scala_import(node, source),
+            Language::Scala => Self::extract_scala_import(node, source, context),
             // Markup/config languages don't have traditional imports
             Language::Html | Language::Json | Language::Yaml | Language::Toml => Vec::new(),
             Language::Bash => Self::extract_bash_import(node, source)
                 .into_iter()
                 .collect(),
-            Language::Elixir => Self::extract_elixir_import(node, source)
-                .into_iter()
-                .collect(),
+            Language::Elixir => Self::extract_elixir_import(node, source),
         }
     }
 
+    /// `use` declarations, one `Import` per leaf of a brace group, and module
+    /// declarations without a body (`mod x;`, `#[path = "a/b.rs"] mod x;`):
+    /// the way a crate declares its file tree, a `Local` import of `x` (or of
+    /// the attribute's file path) named `x` (#143). Inside an inline module
+    /// (`mod outer { mod x; }`), the file lives under `outer/`: the import is
+    /// `self::outer::x`, or `outer/<path>` for a `#[path]` attribute.
     fn extract_rust_import(node: &Node, source: &str) -> Vec<Import> {
+        if node.kind() == "mod_item" {
+            return Self::extract_rust_mod_declaration(node, source)
+                .into_iter()
+                .collect();
+        }
         if node.kind() != "use_declaration" {
             return Vec::new();
         }
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let inline_modules = Self::rust_inline_modules(node, source);
 
         // Get the full use path text, without the comments a brace group may
         // hold (`use foo::{ // keep\n Bar }`), which are not path segments.
@@ -199,6 +465,7 @@ impl ImportExtractor {
         leaves
             .into_iter()
             .map(|(path, name)| {
+                let path = Self::rebase_rust_path(&path, &inline_modules);
                 let kind = Self::classify_rust_import(&path);
                 Import {
                     path,
@@ -209,6 +476,104 @@ impl ImportExtractor {
                 }
             })
             .collect()
+    }
+
+    /// `mod x;`: a `mod_item` without a `body`. The path is the module name,
+    /// or the file path of a preceding `#[path = "..."]` attribute, both
+    /// under the enclosing inline modules.
+    fn extract_rust_mod_declaration(node: &Node, source: &str) -> Option<Import> {
+        if node.child_by_field_name("body").is_some() {
+            return None;
+        }
+        let src = source.as_bytes();
+        let name = node
+            .child_by_field_name("name")?
+            .utf8_text(src)
+            .ok()?
+            .to_string();
+        let mut path: Option<String> = None;
+        let mut previous = node.prev_sibling();
+        while let Some(sibling) = previous {
+            if sibling.kind() != "attribute_item" {
+                break;
+            }
+            if let Some(attribute) = sibling.named_child(0)
+                && attribute.kind() == "attribute"
+                && attribute
+                    .named_child(0)
+                    .and_then(|key| key.utf8_text(src).ok())
+                    == Some("path")
+                && let Some(value) = attribute.child_by_field_name("value")
+                && value.kind() == "string_literal"
+                && let Ok(text) = value.utf8_text(src)
+            {
+                path = Some(text.trim_matches('"').to_string());
+            }
+            previous = sibling.prev_sibling();
+        }
+        let inline_modules = Self::rust_inline_modules(node, source);
+        let path = match path {
+            Some(file) if inline_modules.is_empty() => file,
+            Some(file) => format!("{}/{file}", inline_modules.join("/")),
+            None if inline_modules.is_empty() => name.clone(),
+            None => format!("self::{}::{name}", inline_modules.join("::")),
+        };
+        Some(Import {
+            path,
+            name: Some(name),
+            kind: ImportKind::Local,
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+        })
+    }
+
+    /// Names of the inline modules (`mod tests { ... }`) enclosing `node`,
+    /// outermost first.
+    fn rust_inline_modules(node: &Node, source: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut parent = node.parent();
+        while let Some(ancestor) = parent {
+            if ancestor.kind() == "mod_item"
+                && let Some(name) = ancestor.child_by_field_name("name")
+                && let Ok(text) = name.utf8_text(source.as_bytes())
+            {
+                names.push(text.to_string());
+            }
+            parent = ancestor.parent();
+        }
+        names.reverse();
+        names
+    }
+
+    /// A `self::` / `super::` path written inside inline modules, rebased on
+    /// the module the file holds, which is what the resolver knows: in `mod
+    /// tests { use super::helper; }`, `super` is the file's module, so the
+    /// path becomes `self::helper`; `use super::super::x` there stays one
+    /// `super` up; `use self::x` becomes `self::tests::x`. `crate::` and
+    /// bare paths are unchanged.
+    fn rebase_rust_path(path: &str, inline_modules: &[String]) -> String {
+        if inline_modules.is_empty() {
+            return path.to_string();
+        }
+        let segments: Vec<&str> = path.split("::").collect();
+        let supers = segments.iter().take_while(|s| **s == "super").count();
+        if supers == 0 && segments[0] != "self" {
+            return path.to_string();
+        }
+        let rest = &segments[supers.max(1)..];
+        let mut rebased: Vec<&str> = Vec::new();
+        if supers > inline_modules.len() {
+            rebased.extend(std::iter::repeat_n("super", supers - inline_modules.len()));
+        } else {
+            rebased.push("self");
+            rebased.extend(
+                inline_modules[..inline_modules.len() - supers]
+                    .iter()
+                    .map(String::as_str),
+            );
+        }
+        rebased.extend(rest);
+        rebased.join("::")
     }
 
     /// Remove `// ...` (to end of line) and `/* ... */` comments. `use` paths
@@ -609,7 +974,9 @@ impl ImportExtractor {
                             .strip_prefix(module)
                             .is_some_and(|rest| rest.starts_with('/'))
                 });
-                let kind = if in_module || path.starts_with('.') || path.starts_with('/') {
+                let in_project = in_module
+                    || (context.go_module.is_none() && context.go_package_dir(&path).is_some());
+                let kind = if in_project || path.starts_with('.') || path.starts_with('/') {
                     ImportKind::Local
                 } else if path.split('/').next().unwrap_or(&path).contains('.') {
                     // External packages have a host in their first element
@@ -634,7 +1001,7 @@ impl ImportExtractor {
         None
     }
 
-    fn extract_java_import(node: &Node, source: &str) -> Option<Import> {
+    fn extract_java_import(node: &Node, source: &str, context: &ImportContext) -> Option<Import> {
         if node.kind() != "import_declaration" {
             return None;
         }
@@ -648,7 +1015,9 @@ impl ImportExtractor {
             if child.kind() == "scoped_identifier" {
                 let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
-                let kind = if path.starts_with("java.") || path.starts_with("javax.") {
+                let kind = if context.is_local_package(&path, Language::Java) {
+                    ImportKind::Local
+                } else if path.starts_with("java.") || path.starts_with("javax.") {
                     ImportKind::Std
                 } else {
                     ImportKind::External
@@ -717,7 +1086,7 @@ impl ImportExtractor {
     /// `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use A\B, C\D;` and the group
     /// form `use Foo\{A, B as C};`: one `Import` per leaf, the alias (if any)
     /// as its `name`.
-    fn extract_php_import(node: &Node, source: &str) -> Vec<Import> {
+    fn extract_php_import(node: &Node, source: &str, context: &ImportContext) -> Vec<Import> {
         if node.kind() != "namespace_use_declaration" {
             return Vec::new();
         }
@@ -767,11 +1136,17 @@ impl ImportExtractor {
                     None => leaf,
                 };
                 let name = alias.or_else(|| path.split('\\').next_back().map(String::from));
+                // PHP has no standard library of namespaces: a namespace is
+                // the project's own (#147) or a dependency's.
+                let kind = if context.is_local_package(&path, Language::Php) {
+                    ImportKind::Local
+                } else {
+                    ImportKind::External
+                };
                 Some(Import {
                     path,
                     name,
-                    // PHP doesn't have a standard library in the same sense, most are external
-                    kind: ImportKind::External,
+                    kind,
                     start_line,
                     end_line,
                 })
@@ -779,14 +1154,20 @@ impl ImportExtractor {
             .collect()
     }
 
+    /// `require 'x'` and `require_relative 'x'`: a `call` without receiver
+    /// whose `method` is one of the two (#84: `requirements.push("json")`
+    /// also starts with `require`). A `require_relative` path is stored with
+    /// a leading `./` (`./x`) so the resolver looks for it next to the file
+    /// only, where `require 'x'` goes through the load path.
     fn extract_ruby_import(node: &Node, source: &str) -> Option<Import> {
-        // Ruby uses require and require_relative
-        if node.kind() != "call" {
+        if node.kind() != "call" || node.child_by_field_name("receiver").is_some() {
             return None;
         }
-
-        let text = node.utf8_text(source.as_bytes()).ok()?;
-        if !text.starts_with("require") {
+        let method = node
+            .child_by_field_name("method")?
+            .utf8_text(source.as_bytes())
+            .ok()?;
+        if method != "require" && method != "require_relative" {
             return None;
         }
 
@@ -801,11 +1182,14 @@ impl ImportExtractor {
                 for arg in child.children(&mut inner_cursor) {
                     if arg.kind() == "string" {
                         let path_text = arg.utf8_text(source.as_bytes()).ok()?;
-                        let path = path_text
+                        let mut path = path_text
                             .trim_matches(|c| c == '"' || c == '\'')
                             .to_string();
+                        if method == "require_relative" && !path.starts_with('.') {
+                            path = format!("./{path}");
+                        }
 
-                        let kind = if text.starts_with("require_relative") {
+                        let kind = if method == "require_relative" || path.starts_with('.') {
                             ImportKind::Local
                         } else {
                             ImportKind::External
@@ -828,7 +1212,9 @@ impl ImportExtractor {
         None
     }
 
-    fn extract_csharp_import(node: &Node, source: &str) -> Option<Import> {
+    /// `using A.B;`, `using static A.B.C;` and `using X = A.B.C;` (the alias
+    /// is the `name` field, the namespace the `qualified_name`).
+    fn extract_csharp_import(node: &Node, source: &str, context: &ImportContext) -> Option<Import> {
         if node.kind() != "using_directive" {
             return None;
         }
@@ -836,13 +1222,17 @@ impl ImportExtractor {
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
 
-        // Find the qualified_name child
+        let alias = node.child_by_field_name("name");
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "qualified_name" || child.kind() == "identifier" {
+            if (child.kind() == "qualified_name" || child.kind() == "identifier")
+                && Some(child) != alias
+            {
                 let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
-                let kind = if path.starts_with("System") {
+                let kind = if context.is_local_package(&path, Language::CSharp) {
+                    ImportKind::Local
+                } else if path == "System" || path.starts_with("System.") {
                     ImportKind::Std
                 } else {
                     ImportKind::External
@@ -866,7 +1256,7 @@ impl ImportExtractor {
     /// `import a.b.C`, `import a.b.C as D`, `import a.b.*` (tree-sitter-kotlin-ng:
     /// an `import` node holding a `qualified_identifier`, then an optional alias
     /// `identifier`; the `.*` wildcard is an anonymous token).
-    fn extract_kotlin_import(node: &Node, source: &str) -> Option<Import> {
+    fn extract_kotlin_import(node: &Node, source: &str, context: &ImportContext) -> Option<Import> {
         if node.kind() != "import" {
             return None;
         }
@@ -890,7 +1280,9 @@ impl ImportExtractor {
         let path = path?;
         let wildcard = node.utf8_text(src).ok()?.trim_end().ends_with(".*");
 
-        let kind = if ["kotlin.", "kotlinx.", "java.", "javax."]
+        let kind = if context.is_local_package(&path, Language::Kotlin) {
+            ImportKind::Local
+        } else if ["kotlin.", "kotlinx.", "java.", "javax."]
             .iter()
             .any(|p| path.starts_with(p))
         {
@@ -917,7 +1309,7 @@ impl ImportExtractor {
     /// `import a.b.C`, `import a.b._` and the selector form
     /// `import a.b.{C, D => E, _}`: one `Import` per leaf (alias as `name`,
     /// `None` for a wildcard), like the Rust brace expansion.
-    fn extract_scala_import(node: &Node, source: &str) -> Vec<Import> {
+    fn extract_scala_import(node: &Node, source: &str, context: &ImportContext) -> Vec<Import> {
         if node.kind() != "import_declaration" {
             return Vec::new();
         }
@@ -976,7 +1368,9 @@ impl ImportExtractor {
         leaves
             .into_iter()
             .map(|(path, name)| {
-                let kind = if path.starts_with("scala.") || path.starts_with("java.") {
+                let kind = if context.is_local_package(&path, Language::Scala) {
+                    ImportKind::Local
+                } else if path.starts_with("scala.") || path.starts_with("java.") {
                     ImportKind::Std
                 } else {
                     ImportKind::External
@@ -1026,51 +1420,119 @@ impl ImportExtractor {
         })
     }
 
-    fn extract_elixir_import(node: &Node, source: &str) -> Option<Import> {
-        // Elixir uses import, alias, use, require
+    /// `import`, `alias`, `use` and `require` directives: a `call` whose
+    /// `target` is the directive and whose first argument names the module
+    /// (an `alias` node, an atom for Erlang modules). The brace form `alias
+    /// A.{B, C}` (a `dot` of an alias and a tuple) gives one `Import` per
+    /// leaf (#84); `as: X` is the binding name.
+    fn extract_elixir_import(node: &Node, source: &str) -> Vec<Import> {
         if node.kind() != "call" {
-            return None;
+            return Vec::new();
         }
-
-        let text = node.utf8_text(source.as_bytes()).ok()?;
-        let is_import = text.starts_with("import ")
-            || text.starts_with("alias ")
-            || text.starts_with("use ")
-            || text.starts_with("require ");
-
-        if !is_import {
-            return None;
+        let src = source.as_bytes();
+        let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+        let Some(target) = node.child_by_field_name("target").and_then(text) else {
+            return Vec::new();
+        };
+        if !matches!(target.as_str(), "import" | "alias" | "use" | "require") {
+            return Vec::new();
         }
+        let mut cursor = node.walk();
+        let Some(arguments) = node
+            .named_children(&mut cursor)
+            .find(|c| c.kind() == "arguments")
+        else {
+            return Vec::new();
+        };
+        let mut args_cursor = arguments.walk();
+        let args: Vec<Node> = arguments.named_children(&mut args_cursor).collect();
+        let Some(first) = args.first() else {
+            return Vec::new();
+        };
+
+        let mut paths: Vec<String> = Vec::new();
+        Self::elixir_module_paths(*first, "", src, &mut paths);
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        // `alias Foo.Bar, as: Baz`
+        let alias = args.iter().skip(1).find_map(|arg| {
+            if arg.kind() != "keywords" {
+                return None;
+            }
+            let mut pair_cursor = arg.walk();
+            arg.named_children(&mut pair_cursor).find_map(|pair| {
+                let key = pair.child_by_field_name("key").and_then(text)?;
+                (key.trim().trim_end_matches(':') == "as")
+                    .then(|| pair.child_by_field_name("value").and_then(text))
+                    .flatten()
+            })
+        });
 
         let start_line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let single = paths.len() == 1;
+        paths
+            .into_iter()
+            .map(|path| {
+                let kind = if path.starts_with("Elixir.") || path.starts_with(':') {
+                    ImportKind::Std
+                } else {
+                    ImportKind::External
+                };
+                let name = if single && alias.is_some() {
+                    alias.clone()
+                } else {
+                    path.split('.').next_back().map(String::from)
+                };
+                Import {
+                    path,
+                    name,
+                    kind,
+                    start_line,
+                    end_line,
+                }
+            })
+            .collect()
+    }
 
-        let path = text
-            .split_whitespace()
-            .nth(1)
-            .map(|s| s.trim_end_matches(','))
-            .unwrap_or("")
-            .to_string();
-
-        if path.is_empty() {
-            return None;
-        }
-
-        let kind = if path.starts_with("Elixir.") || path.starts_with(':') {
-            ImportKind::Std
-        } else {
-            ImportKind::External
+    /// Module paths an Elixir directive argument names, under `prefix`:
+    /// `A.B` for an alias or atom, one per leaf of `A.{B, C.{D, E}}`.
+    fn elixir_module_paths(node: Node, prefix: &str, src: &[u8], out: &mut Vec<String>) {
+        let join = |leaf: &str| {
+            if prefix.is_empty() {
+                leaf.to_string()
+            } else {
+                format!("{prefix}.{leaf}")
+            }
         };
-
-        let name = path.split('.').next_back().map(String::from);
-
-        Some(Import {
-            path,
-            name,
-            kind,
-            start_line,
-            end_line,
-        })
+        match node.kind() {
+            "alias" | "atom" => {
+                if let Ok(text) = node.utf8_text(src) {
+                    out.push(join(text.trim()));
+                }
+            }
+            "dot" => {
+                let Some(left) = node
+                    .child_by_field_name("left")
+                    .and_then(|l| l.utf8_text(src).ok())
+                else {
+                    return;
+                };
+                let prefix = join(left.trim());
+                match node.child_by_field_name("right") {
+                    Some(right) if right.kind() == "tuple" => {
+                        let mut cursor = right.walk();
+                        for leaf in right.named_children(&mut cursor) {
+                            Self::elixir_module_paths(leaf, &prefix, src, out);
+                        }
+                    }
+                    Some(right) => Self::elixir_module_paths(right, &prefix, src, out),
+                    None => out.push(prefix),
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1596,6 +2058,7 @@ use super::parent_module;
         };
         let context = ImportContext {
             go_module: Some("myapp".into()),
+            ..ImportContext::default()
         };
         assert_eq!(
             kinds(&context),

@@ -1015,4 +1015,390 @@ public:
         assert_eq!(kind("C"), "extends");
         assert_eq!(kind("K"), "implements");
     }
+
+    /// #78: the import and chunk extractors walked the tree with one native
+    /// frame per level and overflowed the 2 MiB stack of the `spawn_blocking`
+    /// threads of `serve` on a few thousand nested nodes (a `SIGABRT`, not a
+    /// panic, so the indexer died again at every restart). Both walks are
+    /// iterative now; this runs them on a 2 MiB stack over 10 000 nested JSON
+    /// arrays and a 10 000-term JavaScript expression.
+    #[test]
+    fn b23_deep_ast_does_not_overflow_the_stack() {
+        use semantiq_parser::ChunkExtractor;
+
+        let json = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        let js = format!("var x = {};\n", vec!["1"; 10_000].join(" + "));
+        let sources = vec![(Language::Json, json), (Language::JavaScript, js)];
+
+        let worker = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut support = LanguageSupport::new().unwrap();
+                for (lang, source) in &sources {
+                    let tree = support.parse(*lang, source).unwrap();
+                    let imports = ImportExtractor::extract(&tree, source, *lang).unwrap();
+                    assert!(imports.is_empty(), "{lang:?}: {imports:?}");
+                    let chunks = ChunkExtractor::new().extract(&tree, source, *lang).unwrap();
+                    assert!(!chunks.is_empty(), "{lang:?}");
+                }
+            })
+            .unwrap();
+        worker.join().expect("deep AST extraction must not crash");
+    }
+
+    /// #84: a Ruby `call` whose text merely starts with `require`
+    /// (`requirements.push("json")`) is no import, a receiver (`Kernel.require`)
+    /// is not a `require` directive; an Elixir brace alias `alias A.{B, C}`
+    /// gives one import per leaf instead of the fragment `A.{B`.
+    #[test]
+    fn b24_ruby_and_elixir_text_imports() {
+        let ruby = extract_file(
+            "lib/app.rb",
+            "require 'json'\nrequire_relative 'helpers'\nrequirements.push(\"json\")\n\
+             require_all('x')\nrequire './local'\n",
+        );
+        assert_eq!(
+            ruby.imports,
+            vec![
+                (
+                    "json".to_string(),
+                    Some("json".to_string()),
+                    ImportKind::External
+                ),
+                (
+                    "./helpers".to_string(),
+                    Some("helpers".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "./local".to_string(),
+                    Some("local".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+
+        let elixir = extract_file(
+            "lib/app.ex",
+            "defmodule App do\n  alias App.Models.{User, Order}\n  alias App.Repo, as: R\n  \
+             import Enum, only: [map: 2]\n  use GenServer\n  require Logger\n  \
+             alias Deep.{A.{B, C}, D}\nend\n",
+        );
+        let paths: Vec<&str> = elixir.imports.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "App.Models.User",
+                "App.Models.Order",
+                "App.Repo",
+                "Enum",
+                "GenServer",
+                "Logger",
+                "Deep.A.B",
+                "Deep.A.C",
+                "Deep.D",
+            ]
+        );
+        assert_eq!(
+            elixir.imports[2].1.as_deref(),
+            Some("R"),
+            "`as:` alias is the name"
+        );
+        assert_eq!(elixir.imports[0].1.as_deref(), Some("User"));
+    }
+
+    /// #143: `mod x;` is a `Local` import of the module (its file path with
+    /// `#[path]`), an inline module is none; `super::` / `self::` paths
+    /// written inside inline modules are rebased on the file's module so the
+    /// resolver, which only knows the file, finds the right target.
+    #[test]
+    fn b25_rust_mod_declarations_and_inline_super() {
+        let e = extract_file(
+            "src/lib.rs",
+            "mod sub;\npub mod other;\n#[cfg(test)]\n#[path = \"shapes/circle.rs\"]\nmod circle;\n\
+             mod inline { pub fn f() {} }\nuse self::other::Thing;\n\
+             #[cfg(test)]\nmod tests {\n    use super::*;\n    use super::other::Thing;\n    \
+             use super::super::up::X;\n    use self::fixtures::F;\n    use crate::sub::S;\n    \
+             mod nested { use super::super::other::Deep; }\n}\n",
+        );
+        assert_eq!(
+            e.imports,
+            vec![
+                (
+                    "sub".to_string(),
+                    Some("sub".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "other".to_string(),
+                    Some("other".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "shapes/circle.rs".to_string(),
+                    Some("circle".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::other::Thing".to_string(),
+                    Some("Thing".to_string()),
+                    ImportKind::Local
+                ),
+                ("self".to_string(), None, ImportKind::Local),
+                (
+                    "self::other::Thing".to_string(),
+                    Some("Thing".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "super::up::X".to_string(),
+                    Some("X".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::tests::fixtures::F".to_string(),
+                    Some("F".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "crate::sub::S".to_string(),
+                    Some("S".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::other::Deep".to_string(),
+                    Some("Deep".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+    }
+
+    /// #147: imports of a package the project declares are `local` for Java,
+    /// Kotlin, Scala, C#, PHP and Go without `go.mod`; the C# alias form
+    /// `using X = A.B;` imports `A.B`, not `X`.
+    #[test]
+    fn b26_project_packages_are_local() {
+        use semantiq_parser::ImportContext;
+        let mut context = ImportContext::default();
+        context.add_source_file(
+            "src/main/java/com/acme/models/User.java",
+            Language::Java,
+            "package com.acme.models;\n",
+        );
+        context.add_source_file(
+            "src/main/scala/com/acme/svc/Svc.scala",
+            Language::Scala,
+            "package com.acme\npackage svc\n",
+        );
+        context.add_source_file(
+            "Models/User.cs",
+            Language::CSharp,
+            "namespace App.Models;\n",
+        );
+        context.add_source_file(
+            "src/Models/User.php",
+            Language::Php,
+            "<?php\n\nnamespace App\\Models;\n",
+        );
+        context.add_source_file("internal/store/store.go", Language::Go, "");
+        let kinds = |path: &str, source: &str| {
+            let lang = Language::from_path(Path::new(path)).unwrap();
+            let mut support = LanguageSupport::new().unwrap();
+            let tree = support.parse(lang, source).unwrap();
+            ImportExtractor::extract_with_context(&tree, source, lang, &context)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.path, i.kind))
+                .collect::<Vec<_>>()
+        };
+        let local = |p: &str| (p.to_string(), ImportKind::Local);
+        let external = |p: &str| (p.to_string(), ImportKind::External);
+        let std = |p: &str| (p.to_string(), ImportKind::Std);
+
+        assert_eq!(
+            kinds(
+                "src/main/java/com/acme/api/A.java",
+                "import com.acme.models.User;\nimport com.acme.models.*;\n\
+                 import static com.acme.models.User.NAME;\nimport com.acme.other.X;\n\
+                 import java.util.List;\nimport com.google.common.base.Strings;\n"
+            ),
+            vec![
+                local("com.acme.models.User"),
+                local("com.acme.models"),
+                local("com.acme.models.User.NAME"),
+                external("com.acme.other.X"),
+                std("java.util.List"),
+                external("com.google.common.base.Strings"),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "src/main/kotlin/com/acme/K.kt",
+                "import com.acme.models.User\nimport com.acme.svc.Svc\nimport kotlinx.coroutines.flow.Flow\n"
+            ),
+            vec![
+                local("com.acme.models.User"),
+                local("com.acme.svc.Svc"),
+                std("kotlinx.coroutines.flow.Flow"),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "src/main/scala/com/acme/B.scala",
+                "import com.acme.svc.{Svc, Other}\nimport com.acme.Thing\nimport cats.effect.IO\n"
+            ),
+            vec![
+                local("com.acme.svc.Svc"),
+                local("com.acme.svc.Other"),
+                local("com.acme.Thing"),
+                external("cats.effect.IO"),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "Services/Svc.cs",
+                "using System;\nusing System.Linq;\nusing App.Models;\nusing static App.Models.User;\n\
+                 using U = App.Models.User;\nusing Newtonsoft.Json;\nusing SystemX.Y;\n"
+            ),
+            vec![
+                std("System"),
+                std("System.Linq"),
+                local("App.Models"),
+                local("App.Models.User"),
+                local("App.Models.User"),
+                external("Newtonsoft.Json"),
+                external("SystemX.Y"),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "src/Services/Svc.php",
+                "<?php\nnamespace App\\Services;\nuse App\\Models\\User;\nuse App\\Models\\{Order, Item};\n\
+                 use Illuminate\\Support\\Str;\n"
+            ),
+            vec![
+                local("App\\Models\\User"),
+                local("App\\Models\\Order"),
+                local("App\\Models\\Item"),
+                external("Illuminate\\Support\\Str"),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "cmd/app/main.go",
+                "package main\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"myapp/internal/store\"\n\
+                 \t\"github.com/x/y\"\n)\n"
+            ),
+            vec![
+                std("fmt"),
+                std("net/http"),
+                local("myapp/internal/store"),
+                external("github.com/x/y"),
+            ]
+        );
+    }
+
+    /// Review of #172: a `mod child;` written inside an inline module loads
+    /// `outer/child.rs`, so it is stored `self::outer::child` (`outer/x.rs`
+    /// for a `#[path]` attribute); `require_relative 'x'` is stored `./x` so
+    /// the resolver tells it from `require 'x'`; an import of the module path
+    /// of `go.mod` itself is the local root package; a C# namespace and a
+    /// JVM package of the same name are separate ecosystems.
+    #[test]
+    fn b27_inline_mod_declarations_relative_requires_and_ecosystems() {
+        use semantiq_parser::ImportContext;
+        let rust = extract_file(
+            "src/lib.rs",
+            "mod top;\nmod outer {\n    mod child;\n    #[path = \"x.rs\"]\n    mod renamed;\n    \
+             mod deeper { pub mod leaf; }\n}\n",
+        );
+        assert_eq!(
+            rust.imports,
+            vec![
+                (
+                    "top".to_string(),
+                    Some("top".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::outer::child".to_string(),
+                    Some("child".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "outer/x.rs".to_string(),
+                    Some("renamed".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::outer::deeper::leaf".to_string(),
+                    Some("leaf".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+
+        let ruby = extract_file(
+            "lib/app.rb",
+            "require 'helpers'\nrequire_relative 'helpers'\nrequire_relative '../other'\n",
+        );
+        let paths: Vec<&str> = ruby.imports.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(paths, vec!["helpers", "./helpers", "../other"]);
+        assert_eq!(ruby.imports[0].2, ImportKind::External);
+        assert_eq!(ruby.imports[1].2, ImportKind::Local);
+
+        let mut context = ImportContext {
+            go_module: Some("example.com/myapp".to_string()),
+            ..ImportContext::default()
+        };
+        context.add_source_file("myapp.go", Language::Go, "");
+        context.add_source_file("cmd/app/main.go", Language::Go, "");
+        context.add_source_file(
+            "Models/User.cs",
+            Language::CSharp,
+            "namespace App.Models;\n",
+        );
+        context.add_source_file(
+            "jvm/App/Services/Svc.java",
+            Language::Java,
+            "package App.Services;\n",
+        );
+        assert_eq!(context.go_package_dir("example.com/myapp"), Some(""));
+        assert_eq!(
+            context.resolve_go_import("example.com/myapp").as_deref(),
+            Some("myapp.go")
+        );
+        assert_eq!(context.go_package_dir("example.com/myapplication"), None);
+        let kinds = |path: &str, source: &str| {
+            let lang = Language::from_path(Path::new(path)).unwrap();
+            let mut support = LanguageSupport::new().unwrap();
+            let tree = support.parse(lang, source).unwrap();
+            ImportExtractor::extract_with_context(&tree, source, lang, &context)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.path, i.kind))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(
+                "Services/Svc.cs",
+                "using App.Models;\nusing App.Services;\n"
+            ),
+            vec![
+                ("App.Models".to_string(), ImportKind::Local),
+                ("App.Services".to_string(), ImportKind::External),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "jvm/App/A.java",
+                "import App.Models.User;\nimport App.Services.Svc;\n"
+            ),
+            vec![
+                ("App.Models.User".to_string(), ImportKind::External),
+                ("App.Services.Svc".to_string(), ImportKind::Local),
+            ]
+        );
+    }
 }
