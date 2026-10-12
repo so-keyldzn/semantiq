@@ -69,8 +69,79 @@ fn parse_embedding_bytes(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// Replace the chunks of `file_id` inside the caller's transaction,
+/// carrying the embeddings of unchanged content over. Returns how many
+/// embeddings were reused.
+pub(super) fn insert_chunks_in(
+    conn: &Connection,
+    file_id: i64,
+    chunks: &[CodeChunk],
+) -> Result<usize> {
+    // Embeddings of the previous chunks, keyed by content.
+    let mut previous: HashMap<String, Vec<u8>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT content, embedding FROM chunks
+             WHERE file_id = ?1 AND embedding IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([file_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (content, embedding) = row?;
+            if embedding.len() == EMBEDDING_DIMENSION * 4 {
+                previous.insert(content, embedding);
+            }
+        }
+    }
+
+    // Purge sqlite-vec rows for this file's old chunks. The vec0 virtual
+    // table doesn't honor FK / ON DELETE CASCADE, so we have to do it
+    // ourselves — must run BEFORE the chunks DELETE, otherwise the
+    // subquery would see no rows. Doing it as a subquery keeps the IDs
+    // entirely inside SQLite (no Rust round-trip, no IN clause variable
+    // limit to worry about even for very large files).
+    conn.prepare_cached(
+        "DELETE FROM chunks_vec
+         WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id = ?1)",
+    )?
+    .execute([file_id])?;
+
+    // Delete existing chunks for this file
+    conn.prepare_cached("DELETE FROM chunks WHERE file_id = ?1")?
+        .execute([file_id])?;
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO chunks (file_id, content, start_line, end_line, symbols_json, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    let mut vec_stmt =
+        conn.prepare_cached("INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)")?;
+
+    let mut reused = 0;
+    for chunk in chunks {
+        let symbols_json = serde_json::to_string(&chunk.symbols)?;
+        let embedding = previous.get(&chunk.content);
+        stmt.execute(params![
+            file_id,
+            chunk.content,
+            chunk.start_line as i64,
+            chunk.end_line as i64,
+            symbols_json,
+            embedding,
+        ])?;
+        if let Some(embedding) = embedding {
+            vec_stmt.execute(params![conn.last_insert_rowid(), embedding])?;
+            reused += 1;
+        }
+    }
+    Ok(reused)
+}
+
 impl IndexStore {
-    /// Insert chunks for a file (replaces existing chunks for that file).
+    /// Insert chunks for a file (replaces existing chunks for that file), in
+    /// its own transaction. The indexer writes a file's tables together with
+    /// [`IndexStore::store_file_index`](super::IndexStore::store_file_index).
     ///
     /// A new chunk whose content is identical to one of the file's previous
     /// chunks keeps that chunk's embedding (and gets its `chunks_vec` row): an
@@ -86,68 +157,7 @@ impl IndexStore {
         // Use a transaction for atomicity
         conn.execute("BEGIN IMMEDIATE", [])?;
 
-        let result = (|| -> Result<usize> {
-            // Embeddings of the previous chunks, keyed by content.
-            let mut previous: HashMap<String, Vec<u8>> = HashMap::new();
-            {
-                let mut stmt = conn.prepare(
-                    "SELECT content, embedding FROM chunks
-                     WHERE file_id = ?1 AND embedding IS NOT NULL",
-                )?;
-                let rows = stmt.query_map([file_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })?;
-                for row in rows {
-                    let (content, embedding) = row?;
-                    if embedding.len() == EMBEDDING_DIMENSION * 4 {
-                        previous.insert(content, embedding);
-                    }
-                }
-            }
-
-            // Purge sqlite-vec rows for this file's old chunks. The vec0 virtual
-            // table doesn't honor FK / ON DELETE CASCADE, so we have to do it
-            // ourselves — must run BEFORE the chunks DELETE, otherwise the
-            // subquery would see no rows. Doing it as a subquery keeps the IDs
-            // entirely inside SQLite (no Rust round-trip, no IN clause variable
-            // limit to worry about even for very large files).
-            conn.execute(
-                "DELETE FROM chunks_vec
-                 WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id = ?1)",
-                [file_id],
-            )?;
-
-            // Delete existing chunks for this file
-            conn.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;
-
-            let mut stmt = conn.prepare(
-                "INSERT INTO chunks (file_id, content, start_line, end_line, symbols_json, embedding)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
-            let mut vec_stmt =
-                conn.prepare("INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)")?;
-
-            let mut reused = 0;
-            for chunk in chunks {
-                let symbols_json = serde_json::to_string(&chunk.symbols)?;
-                let embedding = previous.get(&chunk.content);
-                stmt.execute(params![
-                    file_id,
-                    chunk.content,
-                    chunk.start_line as i64,
-                    chunk.end_line as i64,
-                    symbols_json,
-                    embedding,
-                ])?;
-                if let Some(embedding) = embedding {
-                    vec_stmt.execute(params![conn.last_insert_rowid(), embedding])?;
-                    reused += 1;
-                }
-            }
-            Ok(reused)
-        })();
-
-        match result {
+        match insert_chunks_in(&conn, file_id, chunks) {
             Ok(reused) => {
                 conn.execute("COMMIT", [])?;
                 debug!(

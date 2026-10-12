@@ -15,7 +15,9 @@ impl IndexStore {
     /// Maximum limit for symbol search results to prevent excessive memory usage.
     const MAX_SYMBOL_SEARCH_LIMIT: usize = 10000;
 
-    /// Insert symbols for a file (replaces existing symbols for that file).
+    /// Insert symbols for a file (replaces existing symbols for that file),
+    /// in its own transaction. The indexer writes a file's tables together
+    /// with [`IndexStore::store_file_index`](super::IndexStore::store_file_index).
     pub fn insert_symbols(&self, file_id: i64, symbols: &[Symbol]) -> Result<()> {
         let conn = self
             .conn
@@ -27,31 +29,7 @@ impl IndexStore {
         // Use a transaction for atomicity
         conn.execute("BEGIN IMMEDIATE", [])?;
 
-        let result = (|| -> Result<()> {
-            // Delete existing symbols for this file
-            conn.execute("DELETE FROM symbols WHERE file_id = ?1", [file_id])?;
-
-            let mut stmt = conn.prepare(
-                "INSERT INTO symbols (file_id, name, kind, start_line, end_line, signature, doc_comment, parent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-
-            for symbol in symbols {
-                stmt.execute(params![
-                    file_id,
-                    symbol.name,
-                    symbol.kind.as_str(),
-                    symbol.start_line as i64,
-                    symbol.end_line as i64,
-                    symbol.signature,
-                    symbol.doc_comment,
-                    symbol.parent,
-                ])?;
-            }
-            Ok(())
-        })();
-
-        match result {
+        match insert_symbols_in(&conn, file_id, symbols) {
             Ok(()) => {
                 conn.execute("COMMIT", [])?;
                 debug!("Inserted {} symbols for file_id {}", symbols.len(), file_id);
@@ -250,6 +228,30 @@ impl IndexStore {
             Ok(results)
         })
     }
+}
+
+/// Replace the symbols of `file_id` inside the caller's transaction.
+pub(super) fn insert_symbols_in(conn: &Connection, file_id: i64, symbols: &[Symbol]) -> Result<()> {
+    conn.prepare_cached("DELETE FROM symbols WHERE file_id = ?1")?
+        .execute([file_id])?;
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO symbols (file_id, name, kind, start_line, end_line, signature, doc_comment, parent)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
+    for symbol in symbols {
+        stmt.execute(params![
+            file_id,
+            symbol.name,
+            symbol.kind.as_str(),
+            symbol.start_line as i64,
+            symbol.end_line as i64,
+            symbol.signature,
+            symbol.doc_comment,
+            symbol.parent,
+        ])?;
+    }
+    Ok(())
 }
 
 impl IndexStore {

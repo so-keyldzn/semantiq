@@ -3,7 +3,7 @@
 use super::IndexStore;
 use crate::schema::{CallEdgeRecord, SymbolRecord, TypeRelationRecord, UnreferencedSymbol};
 use anyhow::Result;
-use rusqlite::{Row, params};
+use rusqlite::{Connection, Row, params};
 use semantiq_parser::FileStructure;
 use tracing::debug;
 
@@ -11,54 +11,64 @@ use tracing::debug;
 const DEAD_CODE_KINDS: &str =
     "'function', 'method', 'class', 'struct', 'enum', 'interface', 'trait', 'type'";
 
+/// Replace the call edges and type relations of `file_id` inside the
+/// caller's transaction.
+pub(super) fn insert_structure_in(
+    conn: &Connection,
+    file_id: i64,
+    structure: &FileStructure,
+) -> Result<()> {
+    conn.prepare_cached("DELETE FROM call_edges WHERE file_id = ?1")?
+        .execute([file_id])?;
+    conn.prepare_cached("DELETE FROM type_relations WHERE file_id = ?1")?
+        .execute([file_id])?;
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO call_edges
+            (file_id, line, callee, caller, caller_line, count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for edge in &structure.calls {
+        stmt.execute(params![
+            file_id,
+            edge.line as i64,
+            edge.callee,
+            edge.caller,
+            edge.caller_line as i64,
+            edge.count.max(1) as i64,
+        ])?;
+    }
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO type_relations
+            (file_id, line, type_name, super_name, kind, end_line)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for relation in &structure.relations {
+        stmt.execute(params![
+            file_id,
+            relation.line as i64,
+            relation.type_name,
+            relation.super_name,
+            relation.kind.as_str(),
+            relation.end_line as i64,
+        ])?;
+    }
+    Ok(())
+}
+
 impl IndexStore {
     /// Maximum number of call edges / relations returned by a single lookup.
     const MAX_STRUCTURE_LIMIT: usize = 10000;
 
-    /// Insert the call edges and type relations of a file (replaces existing ones).
+    /// Insert the call edges and type relations of a file (replaces existing
+    /// ones), in its own transaction. The indexer writes a file's tables
+    /// together with [`IndexStore::store_file_index`](super::IndexStore::store_file_index).
     pub fn insert_structure(&self, file_id: i64, structure: &FileStructure) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute("BEGIN IMMEDIATE", [])?;
 
-            let result = (|| -> Result<()> {
-                conn.execute("DELETE FROM call_edges WHERE file_id = ?1", [file_id])?;
-                conn.execute("DELETE FROM type_relations WHERE file_id = ?1", [file_id])?;
-
-                let mut stmt = conn.prepare(
-                    "INSERT OR IGNORE INTO call_edges
-                        (file_id, line, callee, caller, caller_line, count)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                )?;
-                for edge in &structure.calls {
-                    stmt.execute(params![
-                        file_id,
-                        edge.line as i64,
-                        edge.callee,
-                        edge.caller,
-                        edge.caller_line as i64,
-                        edge.count.max(1) as i64,
-                    ])?;
-                }
-
-                let mut stmt = conn.prepare(
-                    "INSERT OR IGNORE INTO type_relations
-                        (file_id, line, type_name, super_name, kind, end_line)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                )?;
-                for relation in &structure.relations {
-                    stmt.execute(params![
-                        file_id,
-                        relation.line as i64,
-                        relation.type_name,
-                        relation.super_name,
-                        relation.kind.as_str(),
-                        relation.end_line as i64,
-                    ])?;
-                }
-                Ok(())
-            })();
-
-            match result {
+            match insert_structure_in(conn, file_id, structure) {
                 Ok(()) => {
                     conn.execute("COMMIT", [])?;
                     debug!(

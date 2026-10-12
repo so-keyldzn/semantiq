@@ -1,18 +1,129 @@
 //! File operations for IndexStore.
 
+use super::DependencyInsert;
 use super::IndexStore;
 use crate::schema::FileRecord;
 use anyhow::{Context, Result, anyhow};
 use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
-use semantiq_parser::PARSER_VERSION;
+use semantiq_parser::{CodeChunk, FileStructure, PARSER_VERSION, Reference, Symbol};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
+/// Everything phase 1 extracted from one file, for
+/// [`IndexStore::store_file_index`].
+#[derive(Debug, Clone, Copy)]
+pub struct FileIndexWrite<'a> {
+    /// Project-relative path (`/` separators).
+    pub path: &'a str,
+    /// `Language::name()`.
+    pub language: Option<&'a str>,
+    /// The content that was parsed; only its hash is stored.
+    pub content: &'a str,
+    /// The file's mtime (seconds since the epoch) when it was read.
+    pub last_modified: i64,
+    /// When the content was read (seconds since the epoch).
+    pub indexed_at: i64,
+    pub symbols: &'a [Symbol],
+    pub references: &'a [Reference],
+    pub structure: &'a FileStructure,
+    pub chunks: &'a [CodeChunk],
+    pub dependencies: &'a [DependencyInsert<'a>],
+}
+
+/// What the indexer's walk needs of a `files` row to tell whether the file
+/// changed without reading it (see [`IndexStore::load_file_stamps`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStamp {
+    pub id: i64,
+    /// Content hash, the ground truth.
+    pub hash: String,
+    /// The file's mtime (seconds) when its content was last hashed.
+    pub last_modified: i64,
+    /// When the content was last hashed (seconds).
+    pub indexed_at: i64,
+}
+
+impl FileStamp {
+    /// Whether a file with this mtime (seconds) can be trusted unchanged
+    /// without hashing it. Not when the mtime moved, and not when the file
+    /// was modified in the same second its content was hashed (or later,
+    /// by a clock skew): a write landing in that second after the hash
+    /// leaves the mtime where it is, so such a row is hashed again, as
+    /// git's "racy" index entries are.
+    pub fn trusts(&self, last_modified: i64) -> bool {
+        self.last_modified == last_modified && !self.is_racy()
+    }
+
+    /// Whether the mtime of the file was in or after the second its content
+    /// was hashed.
+    pub fn is_racy(&self) -> bool {
+        self.last_modified >= self.indexed_at
+    }
+}
+
+/// A new stamp for a file whose content was hashed and found unchanged
+/// ([`IndexStore::refresh_file_stamps`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStampRefresh {
+    pub path: String,
+    pub last_modified: i64,
+    pub indexed_at: i64,
+}
+
+/// Seconds since the UNIX epoch.
+pub(crate) fn now_secs() -> Result<i64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System time before UNIX epoch")?
+        .as_secs() as i64)
+}
+
+/// UPSERT keyed on the UNIQUE `path` column, returning the row's id in the
+/// same statement.
+///
+/// `ON CONFLICT ... DO UPDATE` (instead of `INSERT OR REPLACE`) keeps the
+/// existing `id` stable across re-indexing: `INSERT OR REPLACE` deletes the
+/// old row and inserts a new one, which both reassigns a fresh rowid AND
+/// fires the FK `ON DELETE CASCADE` on `chunks`/`symbols` (that cascade also
+/// orphans `chunks_vec` rows, sqlite-vec ignoring FK cascades). With a stable
+/// id the in-transaction purge of `insert_chunks` is enough to avoid orphans.
+///
+/// `RETURNING id` makes the upsert and the id lookup one statement:
+/// `last_insert_rowid()` is only meaningful on the INSERT branch, and a
+/// separate `SELECT` could find the row deleted by another process in
+/// between (a concurrent prune or `--force`).
+fn upsert_file(
+    conn: &Connection,
+    path: &str,
+    language: Option<&str>,
+    hash: &str,
+    last_modified: i64,
+    indexed_at: i64,
+) -> Result<i64> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO files (path, language, hash, last_modified, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(path) DO UPDATE SET
+             language = excluded.language,
+             hash = excluded.hash,
+             last_modified = excluded.last_modified,
+             indexed_at = excluded.indexed_at
+         RETURNING id",
+    )?;
+    let id: i64 = stmt.query_row(
+        params![path, language, hash, last_modified, indexed_at],
+        |row| row.get(0),
+    )?;
+    debug!("Upserted file {} with id {}", path, id);
+    Ok(id)
+}
+
 impl IndexStore {
-    /// Insert or update a file record.
+    /// Insert or update a file record, stamped as indexed now.
     pub fn insert_file(
         &self,
         path: &str,
@@ -20,41 +131,133 @@ impl IndexStore {
         content: &str,
         last_modified: i64,
     ) -> Result<i64> {
+        self.insert_file_at(path, language, content, last_modified, now_secs()?)
+    }
+
+    /// Insert or update a file record with an explicit `indexed_at`: the
+    /// indexer passes the time it read the content (see
+    /// [`FileStamp::is_racy`]), which may be well before the write when
+    /// files are parsed in parallel.
+    pub fn insert_file_at(
+        &self,
+        path: &str,
+        language: Option<&str>,
+        content: &str,
+        last_modified: i64,
+        indexed_at: i64,
+    ) -> Result<i64> {
         let hash = Self::hash_content(content);
-        let indexed_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("System time before UNIX epoch")?
-            .as_secs() as i64;
+        self.with_conn(|conn| upsert_file(conn, path, language, &hash, last_modified, indexed_at))
+    }
 
+    /// Store everything phase 1 extracted from a file in one transaction:
+    /// the `files` row (with the content hash) and its symbols, references,
+    /// call edges, type relations, chunks and dependencies. Returns the
+    /// stable `file_id`.
+    ///
+    /// All or nothing: a crash or an error anywhere (a concurrent prune of
+    /// the row, `SQLITE_BUSY`, a constraint) rolls the whole file back, so
+    /// the row never carries a hash that does not describe its children,
+    /// and the previous rows stay in place. `needs_reindex` then sees the
+    /// old hash and the file is indexed again. One commit per file instead
+    /// of six, with the per-file statements kept in the statement cache.
+    pub fn store_file_index(&self, write: &FileIndexWrite<'_>) -> Result<i64> {
+        let hash = Self::hash_content(write.content);
         self.with_conn(|conn| {
-            // UPSERT keyed on the UNIQUE `path` column. Using ON CONFLICT ... DO
-            // UPDATE (instead of INSERT OR REPLACE) keeps the existing `id` stable
-            // across re-indexing: INSERT OR REPLACE deletes the old row and inserts
-            // a new one, which both reassigns a fresh rowid AND fires the FK
-            // ON DELETE CASCADE on `chunks`/`symbols` — that cascade also orphans
-            // `chunks_vec` rows (sqlite-vec ignores FK cascade). With a stable id,
-            // the file_id no longer changes on re-index, so the in-transaction
-            // purge in `insert_chunks(file_id)` is sufficient to avoid orphans.
-            conn.execute(
-                "INSERT INTO files (path, language, hash, last_modified, indexed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(path) DO UPDATE SET
-                     language = excluded.language,
-                     hash = excluded.hash,
-                     last_modified = excluded.last_modified,
-                     indexed_at = excluded.indexed_at",
-                params![path, language, hash, last_modified, indexed_at],
-            )?;
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<i64> {
+                let file_id = upsert_file(
+                    conn,
+                    write.path,
+                    write.language,
+                    &hash,
+                    write.last_modified,
+                    write.indexed_at,
+                )?;
+                super::symbols::insert_symbols_in(conn, file_id, write.symbols)?;
+                super::references::insert_references_in(conn, file_id, write.references)?;
+                super::structure::insert_structure_in(conn, file_id, write.structure)?;
+                super::chunks::insert_chunks_in(conn, file_id, write.chunks)?;
+                super::dependencies::replace_dependencies_in(conn, file_id, write.dependencies)?;
+                Ok(file_id)
+            })();
+            match result {
+                Ok(file_id) => {
+                    conn.execute("COMMIT", [])?;
+                    debug!(
+                        "Stored {}: {} symbols, {} refs, {} chunks, {} deps",
+                        write.path,
+                        write.symbols.len(),
+                        write.references.len(),
+                        write.chunks.len(),
+                        write.dependencies.len()
+                    );
+                    Ok(file_id)
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
+        })
+    }
 
-            // last_insert_rowid() is only meaningful for the INSERT branch; on the
-            // UPDATE branch it is not set to the conflicting row's id. Always read
-            // the stable id back by path.
-            let id: i64 =
-                conn.query_row("SELECT id FROM files WHERE path = ?1", [path], |row| {
-                    row.get(0)
-                })?;
-            debug!("Upserted file {} with id {}", path, id);
-            Ok(id)
+    /// The change-detection stamp of every indexed file, keyed by path, in
+    /// one query: the indexer's walk looks files up here instead of running
+    /// one `SELECT` per file.
+    pub fn load_file_stamps(&self) -> Result<HashMap<String, FileStamp>> {
+        self.with_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id, path, hash, last_modified, indexed_at FROM files")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    FileStamp {
+                        id: row.get(0)?,
+                        hash: row.get(2)?,
+                        last_modified: row.get(3)?,
+                        indexed_at: row.get(4)?,
+                    },
+                ))
+            })?;
+            let mut stamps = HashMap::new();
+            for row in rows {
+                let (path, stamp) = row?;
+                stamps.insert(path, stamp);
+            }
+            Ok(stamps)
+        })
+    }
+
+    /// Re-stamp files whose content was hashed and found unchanged although
+    /// their stamp could not tell (`last_modified` moved, or the row was
+    /// racy): the next walk trusts their mtime again. One transaction for
+    /// the whole batch; a path that is gone meanwhile is left alone.
+    pub fn refresh_file_stamps(&self, stamps: &[FileStampRefresh]) -> Result<()> {
+        if stamps.is_empty() {
+            return Ok(());
+        }
+        self.with_conn(|conn| {
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<()> {
+                let mut stmt = conn.prepare_cached(
+                    "UPDATE files SET last_modified = ?2, indexed_at = ?3 WHERE path = ?1",
+                )?;
+                for stamp in stamps {
+                    stmt.execute(params![stamp.path, stamp.last_modified, stamp.indexed_at])?;
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", [])?;
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
         })
     }
 
