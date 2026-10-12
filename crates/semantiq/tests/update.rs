@@ -323,4 +323,7 @@ fn update_is_a_no_op_when_already_latest() {
         stdout(&output)
     );
     assert_eq!(fs::read(&exe).unwrap(), before);
+    // The answer came from the local server, not from GitHub.
+    let hits = server.hits.lock().unwrap().clone();
+    assert_eq!(hits, vec!["/releases/latest".to_string()]);
 }
