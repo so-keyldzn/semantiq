@@ -372,6 +372,45 @@ fn test_members_listed_after_their_parent_fill_the_budget() {
 }
 
 #[test]
+fn test_many_parents_listed_with_their_members_fill_the_budget() {
+    // Codex review of #156: the estimate charges a `⋮ Parent` line per
+    // (file, parent) pair that the render skips when the parent is listed;
+    // with many small types the slack exceeded the fixed adjustment window
+    // and a share of the budget stayed unused.
+    let mut files = sample_project();
+    let types: String = (0..120)
+        .map(|i| {
+            format!(
+                "pub struct VeryDescriptiveTypeName{i:03};\nimpl VeryDescriptiveTypeName{i:03} {{\n    pub fn get(&self) -> u32 {{ {i} }}\n}}\n"
+            )
+        })
+        .collect();
+    files.push(("src/types.rs".to_string(), types));
+    let store = index_project(&files);
+    let max_tokens = 2000;
+    let map = build_repo_map(
+        &store,
+        &RepoMapOptions {
+            path_prefix: Some("src/types.rs".to_string()),
+            ..options(max_tokens)
+        },
+    )
+    .unwrap();
+    assert!(map.estimated_tokens <= max_tokens, "{}", map.text);
+    assert!(!map.text.contains("⋮"), "{}", map.text);
+    // Not everything fits, and what is left out would not: the budget is
+    // filled to within one entry (~40 chars).
+    assert!(map.shown_symbols < map.total_symbols, "{}", map.text);
+    assert!(
+        max_tokens - map.estimated_tokens <= 12,
+        "{} of {} tokens used, {} symbols shown",
+        map.estimated_tokens,
+        max_tokens,
+        map.shown_symbols
+    );
+}
+
+#[test]
 fn test_clean_signature_and_doc() {
     assert_eq!(
         clean_signature(

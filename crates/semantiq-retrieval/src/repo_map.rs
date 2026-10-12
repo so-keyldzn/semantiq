@@ -66,9 +66,10 @@ const FOCUS_NAME_BOOST: f64 = 10.0;
 const MAX_SIGNATURE_CHARS: usize = 120;
 const MAX_DOC_CHARS: usize = 80;
 /// The size estimate counts one `⋮ parent` line per (file, parent) pair,
-/// which the rendering may need more or fewer of: the render adjusts the
-/// selection by at most this many symbols in each direction.
-const RENDER_ADJUST_STEPS: usize = 32;
+/// which the rendering may need more or fewer of: the render then moves the
+/// cut symbol by symbol until the budget is filled, fetching the texts of
+/// the symbols it tries this many at a time.
+const TEXT_FETCH_BATCH: usize = 32;
 /// Smallest entry a symbol can take (indent, one-character signature,
 /// newline): bounds how many symbols a map can hold.
 const MIN_SYMBOL_LINE_CHARS: usize = 6;
@@ -1078,7 +1079,7 @@ fn render_repo_map(
             .then_with(|| graph.names[a.name as usize].cmp(&graph.names[b.name as usize]))
     };
     let total_symbols = eligible.len();
-    let most = MAX_REPO_MAP_TOKENS * 4 / MIN_SYMBOL_LINE_CHARS + RENDER_ADJUST_STEPS;
+    let most = MAX_REPO_MAP_TOKENS * 4 / MIN_SYMBOL_LINE_CHARS + 1;
     if eligible.len() > most {
         eligible.select_nth_unstable_by(most, by_rank);
         eligible.truncate(most);
@@ -1118,15 +1119,26 @@ fn render_repo_map(
                 hi = mid - 1;
             }
         }
-        // The estimate is approximate around the `⋮ parent` lines: check
-        // the real rendering and move the cut by a few symbols if needed.
-        let reach = (lo + RENDER_ADJUST_STEPS).min(eligible.len());
-        let ids: Vec<i64> = eligible[..reach]
-            .iter()
-            .map(|&(index, _)| graph.symbols[index as usize].id)
-            .collect();
-        let texts = store.symbol_texts(&ids)?;
-        let render = |k: usize| {
+        // The estimate is approximate around the `⋮ parent` lines (it
+        // charges one per pair, which the rendering skips when the parent
+        // was just listed): check the real rendering and move the cut down
+        // until it fits, then up as long as the next symbol fits.
+        let mut texts: HashMap<i64, (Option<String>, Option<String>)> = HashMap::new();
+        let mut fetched = 0;
+        let mut fetch_texts = |upto: usize, texts: &mut HashMap<_, _>| -> Result<()> {
+            let upto = upto.min(eligible.len());
+            if upto > fetched {
+                let ids: Vec<i64> = eligible[fetched..upto]
+                    .iter()
+                    .map(|&(index, _)| graph.symbols[index as usize].id)
+                    .collect();
+                texts.extend(store.symbol_texts(&ids)?);
+                fetched = upto;
+            }
+            Ok(())
+        };
+        fetch_texts(lo + TEXT_FETCH_BATCH, &mut texts)?;
+        let render = |k: usize, texts: &HashMap<_, _>| {
             render_selection(
                 ranked,
                 &eligible,
@@ -1134,21 +1146,22 @@ fn render_repo_map(
                 total_files,
                 total_symbols,
                 &header_extra,
-                &texts,
+                texts,
             )
         };
         let mut k = lo;
-        let mut rendered = render(k);
+        let mut rendered = render(k, &texts);
         while k > 0 && estimate_tokens(&rendered.0) > max_tokens {
             k -= 1;
-            rendered = render(k);
+            rendered = render(k, &texts);
         }
-        for next in k + 1..=reach {
-            let candidate = render(next);
+        while k < eligible.len() {
+            fetch_texts(k + 1 + TEXT_FETCH_BATCH, &mut texts)?;
+            let candidate = render(k + 1, &texts);
             if estimate_tokens(&candidate.0) > max_tokens {
                 break;
             }
-            k = next;
+            k += 1;
             rendered = candidate;
         }
         let (text, files) = rendered;
