@@ -30,6 +30,10 @@ pub struct AutoIndexer {
     chunk_extractor: ChunkExtractor,
     /// Project facts for import classification (`go.mod` module path).
     import_context: ImportContext,
+    /// Relative paths whose parse is made to fail (`simulate_parse_failure`),
+    /// tree-sitter never failing on its own in a test.
+    #[cfg(any(test, feature = "test-support"))]
+    parse_failures: Mutex<HashSet<String>>,
 }
 
 /// Whether a read error means the file's row no longer describes anything on
@@ -37,7 +41,7 @@ pub struct AutoIndexer {
 /// (permissions, interruption, I/O) is transient from the index's point of
 /// view: dropping the row would throw its embeddings away and recompute them
 /// for nothing once the file is readable again.
-fn read_error_is_final(e: &std::io::Error) -> bool {
+pub fn read_error_is_final(e: &std::io::Error) -> bool {
     matches!(e.kind(), ErrorKind::InvalidData | ErrorKind::NotFound)
 }
 
@@ -69,7 +73,34 @@ impl AutoIndexer {
             chunk_extractor: ChunkExtractor::new(),
             import_context: ImportContext::from_project_root(&project_root),
             project_root,
+            #[cfg(any(test, feature = "test-support"))]
+            parse_failures: Mutex::new(HashSet::new()),
         })
+    }
+
+    /// Make the next parses of `rel_path` fail, as a tree-sitter timeout or
+    /// cancellation would. Test support only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn simulate_parse_failure(&self, rel_path: &str) {
+        self.parse_failures
+            .lock()
+            .expect("parse_failures lock poisoned")
+            .insert(rel_path.to_string());
+    }
+
+    /// Whether `simulate_parse_failure` asked for the parse of `rel_path`
+    /// to fail.
+    #[cfg(any(test, feature = "test-support"))]
+    fn parse_should_fail(&self, rel_path: &str) -> bool {
+        self.parse_failures
+            .lock()
+            .expect("parse_failures lock poisoned")
+            .contains(rel_path)
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn parse_should_fail(&self, _rel_path: &str) -> bool {
+        false
     }
 
     /// Stamp `project_root` in the index metadata (read back by the query
@@ -294,7 +325,9 @@ impl AutoIndexer {
         // (`events`), whether or not they lead to a reindex here.
         let events_on_indexed_files = events.iter().filter(|e| concerns_indexed_file(e)).count();
         let mut result = self.process_file_events(events);
-        result.events = events_on_indexed_files;
+        // A directory event (rename, move-in) or an ignore-file edit carries
+        // no file name but may have indexed files whose chunks are pending.
+        result.events = events_on_indexed_files.max(result.indexed);
         Ok(result)
     }
 
@@ -304,18 +337,27 @@ impl AutoIndexer {
     /// global excludes, `.git/info/exclude`, excluded names): the watcher sees
     /// every write, including those to generated or ignored files, and the
     /// index must stay the one `initial_index` builds.
+    ///
+    /// A directory rename, move or removal is one event on the directory,
+    /// not on its files (FSEvents and inotify alike), and a directory just
+    /// created may already hold files: a vanished path loses every row under
+    /// it, an existing directory has its subtree walked and pruned
+    /// (`index_subtree`). An edited ignore file (`.gitignore`, `.ignore`,
+    /// `.git/info/exclude`) is a change to what the walk reaches below it:
+    /// its directory is walked again, the whole project for the root one.
     pub fn process_file_events(&self, events: Vec<FileEvent>) -> ProcessResult {
         let mut result = ProcessResult::default();
-        let remove = |path: &Path, result: &mut ProcessResult| {
-            if let Err(e) = self.remove_file(path) {
+        let remove = |path: &Path, result: &mut ProcessResult| match self.remove_file(path) {
+            Ok(removed) => result.removed += removed,
+            Err(e) => {
                 error!("Failed to remove {:?}: {}", path, e);
                 result.errors += 1;
-            } else {
-                result.removed += 1;
             }
         };
 
         let mut changed: Vec<PathBuf> = Vec::new();
+        // Directories whose subtree is walked again.
+        let mut subtrees: Vec<PathBuf> = Vec::new();
         for event in events {
             match event {
                 FileEvent::Created(path) | FileEvent::Modified(path) => {
@@ -326,10 +368,52 @@ impl AutoIndexer {
                         remove(&path, &mut result);
                         continue;
                     }
+                    if path.is_dir() {
+                        subtrees.push(path);
+                        continue;
+                    }
+                    if let Some(dir) = self.subtree_of_ignore_file(&path) {
+                        subtrees.push(dir);
+                        continue;
+                    }
                     changed.push(path);
                 }
                 FileEvent::Deleted(path) => remove(&path, &mut result),
             }
+        }
+
+        // One walk per subtree, none for a directory under another one.
+        subtrees.sort();
+        subtrees.dedup();
+        let mut walked_dirs: Vec<PathBuf> = Vec::new();
+        for dir in subtrees {
+            if !walked_dirs.iter().any(|walked| dir.starts_with(walked)) {
+                walked_dirs.push(dir);
+            }
+        }
+        if walked_dirs
+            .iter()
+            .any(|dir| to_relative_string(dir, &self.project_root).is_empty())
+        {
+            // The project root itself: the full walk, which covers every
+            // other event as well.
+            match self.initial_index() {
+                Ok(walk) => {
+                    result.indexed += walk.indexed;
+                    result.removed += walk.removed;
+                    result.errors += walk.errors;
+                }
+                Err(e) => {
+                    error!("Failed to walk the project again: {}", e);
+                    result.errors += 1;
+                }
+            }
+            changed.clear();
+        } else {
+            for dir in &walked_dirs {
+                self.index_subtree(dir, &mut result);
+            }
+            changed.retain(|path| !walked_dirs.iter().any(|dir| path.starts_with(dir)));
         }
 
         // The watcher reports several events per save (and per file on a
@@ -377,6 +461,93 @@ impl AutoIndexer {
         }
 
         result
+    }
+
+    /// The directory whose walk an edit of the ignore file `path` changes:
+    /// the directory of a `.gitignore` or `.ignore`, the project root for
+    /// `.git/info/exclude`. `None` for any other file.
+    fn subtree_of_ignore_file(&self, path: &Path) -> Option<PathBuf> {
+        let name = path.file_name()?.to_str()?;
+        if name == ".gitignore" || name == ".ignore" {
+            return Some(path.parent().unwrap_or(&self.project_root).to_path_buf());
+        }
+        if to_relative_string(path, &self.project_root) == ".git/info/exclude" {
+            return Some(self.project_root.clone());
+        }
+        None
+    }
+
+    /// Walk the subtree under `dir` (a directory of the project) with the
+    /// project walk, index the files it reaches that are new or changed, and
+    /// prune the rows under `dir` of files it did not reach: gone, or ignored
+    /// since. Not when the walk failed somewhere, since a file not reached
+    /// may simply have been missed. The ignore files above `dir` are read
+    /// on the way down, as in `initial_index`.
+    fn index_subtree(&self, dir: &Path, result: &mut ProcessResult) {
+        let root = self.project_root.clone();
+        let rel_dir = to_relative_string(dir, &root);
+        let keep_root = root.clone();
+        let keep_dir = PathBuf::from(&rel_dir);
+        let walker = project_walker_with(&root, move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let rel = PathBuf::from(to_relative_string(entry.path(), &keep_root));
+            // The ancestors of `dir`, `dir` itself and everything below.
+            keep_dir.starts_with(&rel) || rel.starts_with(&keep_dir)
+        })
+        .build();
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut complete = true;
+        for entry in walker {
+            match entry {
+                Ok(entry) => {
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        continue;
+                    }
+                    let path = entry.path();
+                    let rel_path = to_relative_string(path, &root);
+                    if !Path::new(&rel_path).starts_with(&rel_dir) {
+                        continue;
+                    }
+                    seen.insert(rel_path);
+                    match self.index_file(path, false) {
+                        Ok(true) => result.indexed += 1,
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Failed to index {:?}: {}", path, e);
+                            result.errors += 1;
+                        }
+                    }
+                }
+                Err(e) if e.is_partial() => warn!("Ignore rules partially applied: {}", e),
+                Err(e) => {
+                    warn!("Walk error under {}, its rows are kept: {}", rel_dir, e);
+                    complete = false;
+                }
+            }
+        }
+        if !complete {
+            return;
+        }
+        let stale = match self.store.list_file_paths_under(&rel_dir) {
+            Ok(paths) => paths,
+            Err(e) => {
+                error!("Failed to list the files under {}: {}", rel_dir, e);
+                result.errors += 1;
+                return;
+            }
+        };
+        for path in stale.into_iter().filter(|path| !seen.contains(path)) {
+            match self.store.delete_file(&path) {
+                Ok(()) => result.removed += 1,
+                Err(e) => {
+                    error!("Failed to remove stale {}: {}", path, e);
+                    result.errors += 1;
+                }
+            }
+        }
     }
 
     /// The project-relative paths among `candidates` that the project walk
@@ -542,7 +713,13 @@ impl AutoIndexer {
             .language_support
             .lock()
             .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
-        match language_support.parse_path(language, path, &content) {
+        let parsed = if self.parse_should_fail(&rel_path) {
+            Err(anyhow::anyhow!("simulated parse failure"))
+        } else {
+            language_support.parse_path(language, path, &content)
+        };
+        let mut parse_error = None;
+        match parsed {
             Ok(tree) => {
                 // Extract symbols
                 let symbols = SymbolExtractor::extract(&tree, &content, language)?;
@@ -608,7 +785,18 @@ impl AutoIndexer {
                 );
             }
             Err(e) => {
-                warn!("Failed to parse {}: {}", rel_path, e);
+                // Nothing of this content could be extracted: the rows of the
+                // previous version would be served as if they described it
+                // (symbols and refs at old lines, stale chunks). Clear them;
+                // the hash is stamped below all the same, so that a file
+                // tree-sitter cannot parse is not parsed again on every
+                // cycle, and the error is reported to the caller.
+                self.store.insert_symbols(file_id, &[])?;
+                self.store.insert_references(file_id, &[])?;
+                self.store.insert_structure(file_id, &Default::default())?;
+                self.store.insert_chunks(file_id, &[])?;
+                self.store.replace_dependencies(file_id, &[])?;
+                parse_error = Some(e);
             }
         }
 
@@ -623,23 +811,30 @@ impl AutoIndexer {
         // `needs_reindex` returns true next time and the file is reindexed
         // rather than silently treated as up-to-date with partial data.
         //
-        // This runs on the parse-failure path too: stamping the current hash
-        // there is intentional and matches the prior behaviour, preventing an
-        // unparseable file from being re-parsed on every cycle.
+        // This runs on the parse-failure path too, after the children were
+        // cleared: the row then says "this content yields nothing" and the
+        // file is parsed again when it changes.
         self.store
             .insert_file(&rel_path, Some(language.name()), &content, last_modified)?;
 
-        Ok(true)
+        match parse_error {
+            Some(e) => Err(e.context(format!("parsing {}", rel_path))),
+            None => Ok(true),
+        }
     }
 
-    /// Remove a file from the index
-    fn remove_file(&self, path: &Path) -> Result<()> {
+    /// Remove a path from the index: its own row, and the rows under it when
+    /// it was a directory (the watcher reports a directory rename or removal
+    /// as one event on the directory). Returns how many rows went.
+    fn remove_file(&self, path: &Path) -> Result<usize> {
         let rel_path = to_relative_string(path, &self.project_root);
 
-        self.store.delete_file(&rel_path)?;
-        debug!("Removed from index: {}", rel_path);
+        let removed = self.store.delete_files_under(&rel_path)?;
+        if removed > 0 {
+            debug!("Removed from index: {} ({} rows)", rel_path, removed);
+        }
 
-        Ok(())
+        Ok(removed)
     }
 }
 

@@ -703,3 +703,313 @@ fn unreadable_root_keeps_the_index() {
     assert_eq!(result.indexed, 0);
     assert_eq!(store.get_stats().unwrap().file_count, 2);
 }
+
+/// Sorted relative paths of the indexed files.
+fn indexed_paths(store: &IndexStore) -> Vec<String> {
+    let mut paths = store.list_file_paths().unwrap();
+    paths.sort();
+    paths
+}
+
+/// A directory rename, a directory created with files in it and a directory
+/// removal are each one event on the directory (#85): the rows under the old
+/// name go, the files under the new one are indexed.
+#[test]
+fn directory_events_walk_and_prune_the_subtree() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(&root, "src/old/a.rs", "pub fn old_a() -> i32 { 1 }\n");
+    write_file(&root, "src/old/b.rs", "pub fn old_b() -> i32 { 2 }\n");
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert_eq!(
+        indexed_paths(&store),
+        ["src/lib.rs", "src/old/a.rs", "src/old/b.rs", "src/util.rs"]
+    );
+
+    // `mv src/old src/new`, as FSEvents reports it: one Modify(Name) on each
+    // directory path, nothing on the files.
+    fs::rename(root.join("src/old"), root.join("src/new")).unwrap();
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join("src/old")),
+        FileEvent::Modified(root.join("src/new")),
+    ]);
+    assert_eq!(result.removed, 2, "the rows under the old name go");
+    assert_eq!(
+        result.indexed, 2,
+        "the files under the new name are indexed"
+    );
+    assert_eq!(result.errors, 0);
+    assert_eq!(
+        indexed_paths(&store),
+        ["src/lib.rs", "src/new/a.rs", "src/new/b.rs", "src/util.rs"]
+    );
+    let old_a = store.find_symbol_by_name("old_a").unwrap();
+    assert_eq!(old_a.len(), 1, "defined once, under the new path");
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+
+    // A directory that appears with files already in it (`mv` from outside
+    // the project, `git checkout`): one Create on the directory.
+    write_file(&root, "src/extra/c.rs", "pub fn extra_c() -> i32 { 3 }\n");
+    let result = indexer.process_file_events(vec![FileEvent::Created(root.join("src/extra"))]);
+    assert_eq!(result.indexed, 1);
+    assert_eq!(result.removed, 0);
+    assert!(!store.find_symbol_by_name("extra_c").unwrap().is_empty());
+
+    // A file event under a walked directory is covered by the walk, and a
+    // second event on an unchanged subtree is a no-op.
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join("src/new")),
+        FileEvent::Modified(root.join("src/new/a.rs")),
+    ]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+
+    // `rm -rf src/new`: one Remove on the directory.
+    fs::remove_dir_all(root.join("src/new")).unwrap();
+    let result = indexer.process_file_events(vec![FileEvent::Deleted(root.join("src/new"))]);
+    assert_eq!(result.removed, 2);
+    assert_eq!(
+        indexed_paths(&store),
+        ["src/extra/c.rs", "src/lib.rs", "src/util.rs"]
+    );
+    assert!(store.find_symbol_by_name("old_a").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+
+    // A vanished directory whose rows are already gone: nothing removed, no
+    // error (the watcher reports the old path of a rename twice at times).
+    let result = indexer.process_file_events(vec![FileEvent::Deleted(root.join("src/new"))]);
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+}
+
+/// Editing `.gitignore` re-applies the rules (#138): files that became
+/// ignored lose their rows, files that became un-ignored are indexed. A
+/// nested `.gitignore` only touches its own subtree.
+#[test]
+fn ignore_file_edits_reapply_the_rules() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(
+        &root,
+        "generated/schema.ts",
+        "export function generatedSchema(): number { return 1; }\n",
+    );
+    write_file(
+        &root,
+        "packages/gen/index.ts",
+        "export function distIndex(): number { return 2; }\n",
+    );
+    write_file(
+        &root,
+        "packages/src/index.ts",
+        "export function srcIndex(): number { return 3; }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert_eq!(
+        indexed_paths(&store),
+        [
+            "generated/schema.ts",
+            "packages/gen/index.ts",
+            "packages/src/index.ts",
+            "src/lib.rs",
+            "src/util.rs",
+        ]
+    );
+
+    // The root `.gitignore` starts ignoring `generated/`.
+    write_file(&root, ".gitignore", "generated/\n");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join(".gitignore"))]);
+    assert_eq!(result.removed, 1, "{result:?}");
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.errors, 0);
+    assert!(
+        store
+            .get_file_by_path("generated/schema.ts")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+
+    // A nested `.gitignore` ignores `gen/` under `packages/` only.
+    write_file(&root, "packages/.gitignore", "gen/\n");
+    let result =
+        indexer.process_file_events(vec![FileEvent::Created(root.join("packages/.gitignore"))]);
+    assert_eq!(result.removed, 1, "{result:?}");
+    assert_eq!(result.indexed, 0);
+    assert_eq!(
+        indexed_paths(&store),
+        ["packages/src/index.ts", "src/lib.rs", "src/util.rs"]
+    );
+
+    // The rule is lifted: the files are indexed again.
+    write_file(&root, ".gitignore", "");
+    fs::remove_file(root.join("packages/.gitignore")).unwrap();
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join(".gitignore")),
+        FileEvent::Deleted(root.join("packages/.gitignore")),
+    ]);
+    assert_eq!(result.indexed, 2, "{result:?}");
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    assert!(
+        !store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!store.find_symbol_by_name("distIndex").unwrap().is_empty());
+}
+
+/// A parse failure on a modified file (#90) must not leave the symbols,
+/// references, chunks and imports of the previous version in the index:
+/// they are cleared, the error is reported, and the file is not parsed
+/// again until it changes.
+#[test]
+fn parse_failure_clears_the_previous_rows_and_is_an_error() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(
+        &root,
+        "src/lib.rs",
+        "use crate::util;\n\npub fn alpha() -> i32 { util::helper(1) }\n",
+    );
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let file_id = store.get_file_by_path("src/lib.rs").unwrap().unwrap().id;
+    assert!(!store.find_symbol_by_name("alpha").unwrap().is_empty());
+    assert!(!store.get_chunks_by_file(file_id).unwrap().is_empty());
+    assert!(!store.get_dependencies(file_id).unwrap().is_empty());
+    assert!(store.count_usages("helper").unwrap() > 0);
+
+    indexer.simulate_parse_failure("src/lib.rs");
+    let changed = "pub fn gamma() -> i32 { 42 }\n";
+    write_file(&root, "src/lib.rs", changed);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 1, "{result:?}");
+    assert_eq!(result.indexed, 0);
+
+    // Nothing of the old version is served...
+    assert!(store.find_symbol_by_name("alpha").unwrap().is_empty());
+    assert!(store.find_symbol_by_name("gamma").unwrap().is_empty());
+    assert!(store.get_chunks_by_file(file_id).unwrap().is_empty());
+    assert!(store.get_dependencies(file_id).unwrap().is_empty());
+    assert_eq!(store.count_usages("helper").unwrap(), 0);
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+    // ...and the row is stamped: the next walk does not parse it again.
+    assert!(!store.needs_reindex("src/lib.rs", changed).unwrap());
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(result.indexed, 0);
+
+    // A watcher event on the same file reports the error too.
+    write_file(&root, "src/lib.rs", "pub fn delta() -> i32 { 43 }\n");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join("src/lib.rs"))]);
+    assert_eq!(result.errors, 1);
+    assert_eq!(result.indexed, 0);
+    assert!(store.find_symbol_by_name("delta").unwrap().is_empty());
+}
+
+/// Symlinks are not indexed (#109): a link to a file or directory outside
+/// the project is not read through, a link inside it does not index the
+/// same file twice, and a watcher event on a link indexes nothing.
+#[cfg(unix)]
+#[test]
+fn symlinks_are_not_indexed() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().unwrap();
+    let outside = tmp.path().join("outside");
+    write_file(&outside, "private.rs", "pub fn outside_fn_marker() {}\n");
+    write_file(&outside, "dir/leaked.rs", "pub fn leaked_marker() {}\n");
+    write_file(&outside, "private.yaml", "token: SHOULD_NOT_BE_INDEXED\n");
+    let root = tmp.path().join("project");
+    build_toy_project(&root);
+    symlink(outside.join("private.rs"), root.join("src/linked.rs")).unwrap();
+    symlink(outside.join("private.yaml"), root.join("linked.yaml")).unwrap();
+    symlink(outside.join("dir"), root.join("vendored")).unwrap();
+    symlink("util.rs", root.join("src/link.rs")).unwrap();
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 0);
+    assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
+    assert!(
+        store
+            .find_symbol_by_name("outside_fn_marker")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .find_symbol_by_name("leaked_marker")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.find_symbol_by_name("helper").unwrap().len(),
+        1,
+        "an in-project link does not define the symbol twice"
+    );
+
+    // Watcher events on the links (a save through the link, a new link)
+    // index nothing either.
+    let result = indexer.process_file_events(vec![
+        FileEvent::Modified(root.join("src/linked.rs")),
+        FileEvent::Created(root.join("src/link.rs")),
+        FileEvent::Modified(root.join("vendored")),
+    ]);
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.errors, 0);
+    assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
+
+    // A row an older version stored for a link is pruned by the walk.
+    store
+        .insert_file("src/linked.rs", Some("rust"), "stale", 0)
+        .unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.removed, 1);
+    assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
+}
+
+/// `.gitignore` is honoured outside a git repository too (#113): an exported
+/// archive or a build directory has no `.git` and no reason to index what
+/// its `.gitignore` names.
+#[test]
+fn gitignore_is_honoured_without_a_git_directory() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(&root, ".gitignore", "secrets.yaml\ngenerated/\n");
+    write_file(
+        &root,
+        "secrets.yaml",
+        "token: SHOULD_BE_IGNORED_BY_GITIGNORE\n",
+    );
+    write_file(&root, "generated/out.rs", "pub fn generated_out() {}\n");
+    write_file(&root, "config/credentials.json", "{\"key\": \"x\"}\n");
+    assert!(!root.join(".git").exists());
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
+}

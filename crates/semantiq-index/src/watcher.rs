@@ -67,21 +67,22 @@ impl FileWatcher {
         let mut file_events = Vec::new();
 
         for path in event.paths {
-            // Skip non-files
-            if path.is_dir() {
-                continue;
-            }
+            // Directories are reported too: a rename or removal of a
+            // directory is one event on it, not on its files, and the indexer
+            // walks or prunes its subtree (`AutoIndexer::process_file_events`).
 
             // Skip excluded names (.git, node_modules, .semantiq*, etc.) early,
             // before the event reaches the indexer, which then also applies the
             // project's ignore rules. Evaluated on the path relative to the
             // watched root, like `AutoIndexer::index_file`: a project living
             // under e.g. `~/.cache/app` would otherwise have every event dropped.
+            // `.git/info/exclude` is the one path under `.git` the indexer
+            // wants to hear about: it changes which files the walk reaches.
             let rel = watched_roots
                 .iter()
                 .find_map(|root| path.strip_prefix(root).ok())
                 .unwrap_or(&path);
-            if should_exclude_path(rel) {
+            if should_exclude_path(rel) && !is_git_exclude_file(rel) {
                 debug!("Skipping excluded path event: {:?}", path);
                 continue;
             }
@@ -108,6 +109,11 @@ impl FileWatcher {
     }
 }
 
+/// Whether `rel` (relative to the watched root) is `.git/info/exclude`.
+fn is_git_exclude_file(rel: &Path) -> bool {
+    rel == Path::new(".git/info/exclude")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +136,42 @@ mod tests {
         // Exclusions inside the project still apply.
         let event = Event::new(EventKind::Modify(ModifyKind::Any))
             .add_path(root.join("node_modules/x/index.js"));
+        assert!(FileWatcher::convert_event(event, &roots).is_empty());
+    }
+
+    /// Directory events reach the indexer (#85), and so does a change to
+    /// `.git/info/exclude` despite `.git` being excluded (#138).
+    #[test]
+    fn test_convert_event_keeps_directories_and_git_exclude() {
+        use notify::EventKind;
+        use notify::event::{CreateKind, ModifyKind, RemoveKind};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("src/new")).unwrap();
+        let roots = vec![root.clone()];
+
+        let event =
+            Event::new(EventKind::Create(CreateKind::Folder)).add_path(root.join("src/new"));
+        assert!(matches!(
+            FileWatcher::convert_event(event, &roots).as_slice(),
+            [FileEvent::Created(p)] if p == &root.join("src/new")
+        ));
+        let event =
+            Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(root.join("src/old"));
+        assert!(matches!(
+            FileWatcher::convert_event(event, &roots).as_slice(),
+            [FileEvent::Deleted(_)]
+        ));
+
+        let event =
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join(".git/info/exclude"));
+        assert!(matches!(
+            FileWatcher::convert_event(event, &roots).as_slice(),
+            [FileEvent::Modified(_)]
+        ));
+        let event =
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join(".git/index"));
         assert!(FileWatcher::convert_event(event, &roots).is_empty());
     }
 
