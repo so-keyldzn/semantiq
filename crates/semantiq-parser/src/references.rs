@@ -199,6 +199,20 @@ mod flag {
     pub const TYPE_IDENTIFIER: u64 = 1 << 27;
     /// Parent qui fait d'un identifiant un type ([`super::is_type`]).
     pub const TYPE_CONTEXT: u64 = 1 << 28;
+    /// PHP `variable_name` (`$x`) : son enfant `name` est une variable, pas
+    /// un symbole (#141).
+    pub const VARIABLE_NAME: u64 = 1 << 29;
+    /// Le kind `name` (PHP).
+    pub const NAME: u64 = 1 << 30;
+    /// Kotlin `enum_entry` : déclare son premier enfant nommé, sans champ
+    /// `name` (#149).
+    pub const ENUM_ENTRY: u64 = 1 << 31;
+    /// Enveloppe générique d'un appelé, transparente pour `is_callee` : Rust
+    /// `generic_function` (`f::<T>()`), C++ `template_function` /
+    /// `template_method` (`make_unique<T>()`, `obj.get<T>()`) (#80).
+    pub const GENERIC_CALLEE: u64 = 1 << 32;
+    /// PHP `qualified_name` (`\Foo\Bar`) : transparent pour `is_type`.
+    pub const QUALIFIED_NAME: u64 = 1 << 33;
 }
 
 /// Drapeaux d'un nom de kind ; `attribute` est le kind d'attribut du langage.
@@ -256,7 +270,21 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
             || kind.ends_with("_item")
             || kind.ends_with("_spec")
             || kind.ends_with("_specifier")
-            || matches!(kind, "class" | "module" | "method" | "singleton_method"),
+            || matches!(kind, "class" | "module" | "method" | "singleton_method")
+            // Rust `enum_variant`, Java `enum_constant`, PHP `enum_case`, TS
+            // `enum_body` / `enum_assignment` members and interface
+            // signatures: declared names, not usages (#82, #149).
+            || matches!(
+                kind,
+                "enum_variant"
+                    | "enum_constant"
+                    | "enum_case"
+                    | "enum_body"
+                    | "enum_assignment"
+                    | "method_signature"
+                    | "property_signature"
+                    | "abstract_method_signature"
+            ),
         flag::DECLARES,
     );
     set(
@@ -281,9 +309,25 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
         kind.contains("type")
             || matches!(
                 kind,
-                "superclass" | "base_class_clause" | "extends_clause" | "base_list" | "base_clause"
+                "superclass"
+                    | "base_class_clause"
+                    | "extends_clause"
+                    | "base_list"
+                    | "base_clause"
+                    | "class_interface_clause"
             ),
         flag::TYPE_CONTEXT,
+    );
+    set(kind == "variable_name", flag::VARIABLE_NAME);
+    set(kind == "name", flag::NAME);
+    set(kind == "enum_entry", flag::ENUM_ENTRY);
+    set(kind == "qualified_name", flag::QUALIFIED_NAME);
+    set(
+        matches!(
+            kind,
+            "generic_function" | "template_function" | "template_method"
+        ),
+        flag::GENERIC_CALLEE,
     );
     f
 }
@@ -517,8 +561,16 @@ impl<'t> Leaf<'_, 't> {
     /// Feuille identifiant : suffixe `identifier`, `constant` / `name` /
     /// `alias` (Ruby, PHP, Elixir), `variable_name` (Bash `$x`, `x=`) ; un
     /// `word` Bash seulement comme nom de commande ou de fonction.
+    ///
+    /// PHP : le `name` d'un `variable_name` (`$helper`, `$this`) est une
+    /// variable, dans un autre espace de noms que les fonctions, méthodes et
+    /// classes ; il n'est pas indexé (`$this->helper` garde `helper`) (#141).
     fn is_identifier(&self) -> bool {
         let k = self.k;
+        if k.has(self.node, flag::NAME) && self.up(0).is_some_and(|p| k.has(p, flag::VARIABLE_NAME))
+        {
+            return false;
+        }
         if k.has(self.node, flag::IDENTIFIER_LIKE) {
             return true;
         }
@@ -770,7 +822,10 @@ impl<'t> Leaf<'_, 't> {
             return true;
         }
 
-        k.has(parent, flag::DECLARES) && k.is_field(parent, node, k.name)
+        (k.has(parent, flag::DECLARES) && k.is_field(parent, node, k.name))
+            // Kotlin `enum_entry` has no `name` field: the entry's name is its
+            // first named child.
+            || (k.has(parent, flag::ENUM_ENTRY) && parent.named_child(0) == Some(node))
     }
 
     fn in_import(&self) -> bool {
@@ -797,12 +852,20 @@ impl<'t> Leaf<'_, 't> {
         let mut current = self.node;
         let mut depth = 0;
         while let Some(p) = self.up(depth) {
-            if !k.has(p, flag::MEMBER_ACCESS) {
+            if k.has(p, flag::MEMBER_ACCESS) {
+                let is_last =
+                    p.named_child(p.named_child_count().saturating_sub(1)) == Some(current);
+                if !is_last {
+                    return false;
+                }
+            } else if k.has(p, flag::GENERIC_CALLEE)
+                && (k.is_field(p, current, k.callee[0]) || k.is_field(p, current, k.name))
+            {
+                // `f::<T>()`, `s.parse::<T>()`, `std::make_unique<T>()`: the
+                // type arguments wrap the callee, before or after the member
+                // accesses (#80).
+            } else {
                 break;
-            }
-            let is_last = p.named_child(p.named_child_count().saturating_sub(1)) == Some(current);
-            if !is_last {
-                return false;
             }
             current = p;
             depth += 1;
@@ -868,7 +931,19 @@ impl<'t> Leaf<'_, 't> {
         if k.has(self.node, flag::TYPE_IDENTIFIER) {
             return true;
         }
-        self.up(0).is_some_and(|p| k.has(p, flag::TYPE_CONTEXT))
+        // PHP `implements \JsonSerializable`, `extends \Foo\Bar`: the last
+        // segment of a `qualified_name` sits one level below the clause.
+        let depth = match self.up(0) {
+            Some(p)
+                if k.has(p, flag::QUALIFIED_NAME)
+                    && p.named_child(p.named_child_count().saturating_sub(1))
+                        == Some(self.node) =>
+            {
+                1
+            }
+            _ => 0,
+        };
+        self.up(depth).is_some_and(|p| k.has(p, flag::TYPE_CONTEXT))
     }
 }
 
