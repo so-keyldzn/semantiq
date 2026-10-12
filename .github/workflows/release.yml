@@ -67,7 +67,9 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          if ! grep -q "^## \[${TAG}\]" CHANGELOG.md; then
+          # Literal match (no regex: the dots of a version would be wildcards),
+          # the same test the release job's extraction uses.
+          if ! awk -v tag="${TAG}" 'index($0, "## [" tag "]") == 1 { found = 1 } END { exit !found }' CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no '## [${TAG}]' section: move the [Unreleased] entries under '## [${TAG}] - $(date -u +%F)' (see CLAUDE.md, Releasing), then re-tag."
             exit 1
           fi
