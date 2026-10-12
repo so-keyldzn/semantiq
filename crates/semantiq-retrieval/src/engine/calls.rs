@@ -92,7 +92,9 @@ fn visit_key(name: &str, def: &DefLocation) -> (String, i64, i64) {
 impl RetrievalEngine {
     /// Callers and/or callees of `symbol_name`, up to `max_depth` hops.
     ///
-    /// `file_path` restricts the analysis to the definition(s) in that file.
+    /// `file_path` restricts the analysis to the definition(s) in that file;
+    /// when it defines none, the graph is empty rather than a name-only walk
+    /// of the homonyms defined elsewhere.
     pub fn call_graph(
         &self,
         symbol_name: &str,
@@ -130,6 +132,9 @@ impl RetrievalEngine {
             external_callees: Vec::new(),
             truncated: false,
         };
+        if file_path.is_some() && roots.is_empty() {
+            return Ok(graph);
+        }
 
         if direction.callers() {
             graph.truncated |= self.collect_callers(

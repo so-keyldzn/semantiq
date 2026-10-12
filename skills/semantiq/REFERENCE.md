@@ -134,7 +134,8 @@ gives two empty lists.
 
 `definitions` leaves out import statements, listed as `path:line` in
 `imported_in`. `usage_count` counts every non-definition occurrence (a line
-using the name twice counts 2). `related_symbols`: up to 10 other symbols from the files of
+using the name twice counts 2); for a name without AST references (a key in a
+data file) it counts the lines of code holding the whole identifier. `related_symbols`: up to 10 other symbols from the files of
 those definitions, sorted.
 
 ## `semantiq impact <symbol> --json`
@@ -143,11 +144,12 @@ those definitions, sorted.
 {
   "symbol": "should_exclude_path",
   "definitions": [ { "file_path": "crates/semantiq-index/src/exclusions.rs", "line": 40, "kind": "function" } ],
+  "definition_count": 1,              // definitions lists at most 20 of them
   "site_count": 20,
   "files": [
     {
       "file_path": "crates/semantiq-index/src/auto_indexer.rs",
-      "is_test": false,
+      "is_test": true,                // only present when true
       "depth": 1,
       "sites": [
         { "line": 231, "depth": 1, "target": "should_exclude_path", "kind": "call",
@@ -160,14 +162,21 @@ those definitions, sorted.
 }
 ```
 
+- `definitions`: where the symbol is defined, the first 20 when
+  `definition_count` is larger (`new` in a big project). `--file <path>` picks
+  one; a file that defines no such symbol is an error naming the files that do.
 - `depth`: 1 = uses the symbol directly; n = uses an impacted symbol of depth n-1.
-- `enclosing`: the function/type containing the site, impacted at the next depth.
+- `enclosing`: the function/type containing the site, impacted at the next
+  depth (a `const`/`static` binding only when the site is at top level, outside
+  any function). Absent for top-level code.
 - `is_test`: heuristic from the path (`tests/`, `test_*`, `*_test.*`,
   `*.spec.*`, `tests.rs`…) or a site inside a `test_*`/`Test*` function;
-  such files are listed in `test_files`.
-- `confidence`: `same_file` > `imports` > `unique_name` > `name_only`. Only
-  sites above `name_only` propagate to the next depth; beyond depth 1, only
-  `call` sites of functions/methods are followed.
+  present only when true; such files are listed in `test_files`.
+- `confidence`: `same_file` > `imports` > `unique_name` (the project defines
+  this name exactly once) > `name_only` (possibly a homonym; also every site
+  of a name the project does not define, e.g. a library method). Only sites
+  above `name_only` propagate to the next depth; beyond depth 1, only `call`
+  sites of functions/methods are followed.
 - `truncated`: the site limit (`--limit`, default 200, max 1000) was reached,
   or a name had more occurrences than the analysis examines (5 × the limit,
   the ones in the defining files and in files importing them first) and
@@ -220,6 +229,7 @@ those definitions, sorted.
   "symbol": "index_file",
   "direction": "both",                 // callers, callees or both
   "definitions": [ { "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 218, "kind": "method" } ],
+  "definition_count": 1,               // definitions lists at most 20 of them
   "callers": [
     { "depth": 1, "caller": "process_events", "callee": "index_file",
       "file_path": "crates/semantiq-index/src/auto_indexer.rs", "line": 186, "confidence": "same_file" }
@@ -237,6 +247,8 @@ those definitions, sorted.
   omitted for top-level code) calls `callee` at `file_path:line`. `count`
   is present when the line calls it more than once (`f(f(x))` → 2, shown as
   `×2` in the markdown output).
+- `--file <path>` restricts the walk to the definition in that file; a file
+  that defines no such symbol is an error naming the files that do.
 - `depth`: 1 = calls the symbol / made by the symbol; n = one hop further
   (callers of callers, callees of callees), up to `--max-depth` (max 3).
 - `confidence`: how the edge was resolved to the definition, `same_file` >
@@ -255,6 +267,7 @@ those definitions, sorted.
 {
   "symbol": "EmbeddingModel",
   "definitions": [ { "file_path": "crates/semantiq-embeddings/src/model.rs", "line": 281, "kind": "trait" } ],
+  "definition_count": 1,               // definitions lists at most 20 of them
   "supertypes": [
     { "depth": 1, "sub_type": "EmbeddingModel", "super_type": "Send", "kind": "extends",
       "file_path": "crates/semantiq-embeddings/src/model.rs", "line": 281, "resolved": false }
@@ -301,8 +314,10 @@ those definitions, sorted.
   i.e. for `high`) says what lowers the confidence (dynamic language, public
   symbol, attribute / decorator that may register it, possible override of a
   library type).
-- `candidates`: unreferenced definitions examined; `excluded` counts those
-  kept as alive by convention: `entry_points` (`main`, constructors, dunder
+- `candidates`: unreferenced definitions found; `excluded` counts those kept
+  as alive by convention: `entry_points` (`main`, constructors, dunder
   methods), `tests`, `public` (unless `--include-public`), `trait_members`
-  (trait / interface declarations, trait impls, overrides).
+  (trait / interface declarations, trait impls, overrides). Candidates are
+  judged in path order only until `--limit` high-confidence symbols are
+  known, so with `truncated` the counts cover the candidates judged.
 - `truncated`: the limit (`--limit`, default 100, max 1000) was reached.

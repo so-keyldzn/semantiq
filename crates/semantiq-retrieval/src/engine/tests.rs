@@ -862,6 +862,57 @@ fn test_impact_does_not_propagate_through_homonyms() {
 }
 
 #[test]
+fn test_impact_of_a_name_without_definition_is_name_only_and_does_not_propagate() {
+    // #95: 0 definitions used to count as "unique" and propagate.
+    let (engine, _root) = index_rust_project(&[
+        ("lib.rs", "fn load() -> String { 1.to_string() }\n"),
+        ("app.rs", "fn run() { load(); }\n"),
+    ]);
+
+    let analysis = engine.analyze_impact("to_string", None, 3, 100).unwrap();
+    assert!(analysis.definitions.is_empty());
+    assert_eq!(impact_sites(&analysis), vec![(1, "lib.rs", 1, "name_only")]);
+}
+
+#[test]
+fn test_impact_restricted_to_a_file_without_definition_is_empty() {
+    // #136: the homonyms defined elsewhere were analysed as name_only.
+    let (engine, _root) = index_rust_project(&[
+        (
+            "util.rs",
+            "pub fn shared_name() {}\nfn a() { shared_name(); }\n",
+        ),
+        (
+            "other.rs",
+            "pub fn shared_name() {}\nfn b() { shared_name(); }\n",
+        ),
+    ]);
+
+    let analysis = engine
+        .analyze_impact("shared_name", Some("nope.rs"), 2, 100)
+        .unwrap();
+    assert!(analysis.definitions.is_empty());
+    assert!(analysis.sites.is_empty(), "{:?}", impact_sites(&analysis));
+    assert!(!analysis.truncated);
+    assert_eq!(
+        engine.definition_files("shared_name").unwrap(),
+        vec!["other.rs", "util.rs"]
+    );
+
+    let restricted = engine
+        .analyze_impact("shared_name", Some("util.rs"), 2, 100)
+        .unwrap();
+    assert_eq!(restricted.definitions.len(), 1);
+    assert_eq!(
+        impact_sites(&restricted),
+        vec![
+            (1, "util.rs", 2, "same_file"),
+            (1, "other.rs", 2, "name_only")
+        ]
+    );
+}
+
+#[test]
 fn test_impact_mutual_recursion_reports_each_site_once() {
     // Regression for #46: the analysed symbol was never marked visited, so
     // `ping` <-> `pong` re-walked every reference to `ping` at depth 3 and reported

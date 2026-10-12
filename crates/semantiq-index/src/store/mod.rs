@@ -30,7 +30,7 @@ pub use chunks::{ChunkHit, EmbeddingCounts, PendingChunk};
 pub use dependencies::DependencyInsert;
 pub(crate) use files::now_secs;
 pub use files::{FileIndexWrite, FileStamp, FileStampRefresh, RACY_WINDOW_SECS};
-pub use graph::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
+pub use graph::{GraphFile, GraphRefCount, GraphSymbol, MAX_NAME_DEFINERS, RepoGraphData};
 pub use text::{ChunkTextHit, ExtensionFilter};
 
 /// Global initializer for sqlite-vec extension.

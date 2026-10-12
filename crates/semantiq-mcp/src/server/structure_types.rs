@@ -23,7 +23,10 @@ pub struct CallsParams {
 pub struct CallsOutput {
     pub symbol: String,
     pub direction: String,
+    /// Where the symbol is defined (the first 20 when a name has more)
     pub definitions: Vec<ImpactDefinitionOut>,
+    /// Definitions of the name in the index, listed or not
+    pub definition_count: usize,
     /// Call sites of the symbol (and of its callers, beyond depth 1)
     pub callers: Vec<CallEdgeOut>,
     /// Calls made by the symbol (and by its callees, beyond depth 1)
@@ -64,7 +67,10 @@ pub struct HierarchyParams {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct HierarchyOutput {
     pub symbol: String,
+    /// Where the type is defined (the first 20 when a name has more)
     pub definitions: Vec<ImpactDefinitionOut>,
+    /// Definitions of the name in the index, listed or not
+    pub definition_count: usize,
     /// What the type extends / implements, transitively
     pub supertypes: Vec<TypeRelationOut>,
     /// What extends / implements the type, transitively
@@ -103,10 +109,12 @@ pub struct DeadCodeParams {
 pub struct DeadCodeOutput {
     /// Unused symbols, most certain first
     pub symbols: Vec<DeadSymbolOut>,
-    /// Unreferenced definitions examined before filtering
+    /// Unreferenced definitions found before filtering
     pub candidates: usize,
-    /// Candidates left out as alive by convention
+    /// Candidates left out as alive by convention, among those judged
+    /// before `limit` high-confidence symbols were known
     pub excluded: DeadCodeExcludedOut,
+    /// The limit was reached: candidates were left unjudged or dropped
     pub truncated: bool,
 }
 
@@ -152,7 +160,7 @@ impl CallsOutput {
             output.push_str(" (limit reached: incomplete, raise limit)");
         }
         output.push('\n');
-        render_definitions(&mut output, &self.definitions);
+        render_definitions(&mut output, &self.definitions, self.definition_count);
 
         if self.direction != "callees" {
             self.render_edges(&mut output, "Callers", &self.callers, true);
@@ -213,7 +221,7 @@ impl HierarchyOutput {
             output.push_str(" (limit reached: incomplete, raise limit)");
         }
         output.push('\n');
-        render_definitions(&mut output, &self.definitions);
+        render_definitions(&mut output, &self.definitions, self.definition_count);
 
         let sections = [
             ("Supertypes", &self.supertypes),

@@ -1513,15 +1513,19 @@ fn test_repo_graph_leaves_out_names_defined_almost_everywhere() {
         .insert_references(user, &[r("everywhere", 1), r("twice", 2)])
         .unwrap();
 
-    let graph = store.load_repo_graph().unwrap();
-    let names: Vec<&str> = graph.ref_counts.iter().map(|c| c.name.as_str()).collect();
+    let graph = store.load_repo_graph(|_, _, _, _| ()).unwrap();
+    let names: Vec<&str> = graph
+        .ref_counts
+        .iter()
+        .map(|c| graph.name(c.name))
+        .collect();
     assert_eq!(names, vec!["twice"]);
     // The symbols themselves stay in the graph (listed by file rank).
     assert_eq!(
         graph
             .symbols
             .iter()
-            .filter(|s| s.name == "everywhere")
+            .filter(|s| graph.name(s.name) == "everywhere")
             .count(),
         MAX_NAME_DEFINERS + 1
     );

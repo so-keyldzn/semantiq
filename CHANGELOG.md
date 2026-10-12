@@ -99,6 +99,23 @@ shape. Phase 1 only: embeddings are kept.
   (#120).
 - Cargo workspace: `rust-version = "1.88"` (let-chains), `strip = true` for
   release builds, `publish = false` on the library crates (#125).
+- `impact`, `calls`, `hierarchy`: `definitions` lists at most 20 definitions
+  and a `definition_count` field gives their number; `impact new` on a large
+  index listed thousands (820 KB of JSON). An impacted file's `is_test` is
+  present only when true (#163).
+- `dead-code` judges the candidates in path order only until `limit`
+  high-confidence symbols are known (the report is the same: that order is
+  the final one), instead of reading every candidate's file for its
+  attributes first; the `excluded` counts cover the candidates judged (#163).
+- Repo map: the loaded graph is cached by the index fingerprint and reused by
+  focused maps, which only re-run PageRank; names and kinds are interned,
+  signatures and docs are loaded for the listed symbols only, the reference
+  counts are summed by SQLite without a sorter, and the budget is chosen from
+  the symbols' sizes rather than by rendering. The map itself is unchanged.
+  On a 23k-file index (1.7M symbols, 16M references, debug build) one
+  `semantiq map` goes from 82 s of CPU and 3.3 GB to 35 s and 1.3 GB, and in
+  a running server a focused map after the first call takes the ranking
+  alone (8 s instead of a 37 s rebuild, in that build) (#156).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -388,6 +405,23 @@ shape. Phase 1 only: embeddings are kept.
   `expected`; `scoring.score` raises on it too; the README documents every
   `run.py` option, and `test_bench.py` covers the validation and the scoring
   (#127).
+- `impact`: a name the project does not define (a library method such as
+  `to_string`) was labelled `unique_name` at every site and followed to
+  `max_depth`; 0 definitions no longer counts as one, such sites stay
+  `name_only` and nothing propagates (#95).
+- `impact`: the enclosing symbol of a site is the innermost function, method
+  or type; a local binding indexed as a one-line `variable` (TS/JS `const`,
+  Go `var`, Scala `val`, Bash) no longer stands in for the function around
+  it, so the local homonyms of other functions are not reported as depth-2
+  sites. A `const`/`static` is the enclosing symbol only at top level (#91).
+- `impact` / `calls` with `--file <path>`: a file that defines no symbol of
+  that name yields an error naming the files that do, instead of a silent
+  `name_only` analysis of every homonym (#136).
+- `explain`: the usage count of a name without AST references (a key in a
+  data file) only discounts the text hits that land on a definition line;
+  it subtracted every definition although the text search skips data files,
+  under-estimating the count and clamping it at 0 (#96).
+
 
 ### Added
 - Tests for the surfaces that had none: the `semantiq update` flow against a

@@ -1,15 +1,15 @@
 //! Output builders of the structural tools (call graph, type hierarchy, dead
 //! code), shared by the MCP server and the CLI like those in `outputs.rs`.
 
-use super::outputs::validate_input;
+use super::outputs::{no_definition_in_file, validate_input};
 use super::{
     CallEdgeOut, CallsOutput, CallsParams, DeadCodeExcludedOut, DeadCodeOutput, DeadCodeParams,
-    DeadSymbolOut, HierarchyOutput, HierarchyParams, ImpactDefinitionOut, TypeRelationOut,
+    DeadSymbolOut, HierarchyOutput, HierarchyParams, TypeRelationOut, listed_definitions,
 };
 use semantiq_retrieval::{
     CallDirection, CallSite, DEFAULT_CALL_DEPTH, DEFAULT_CALL_EDGES, DEFAULT_DEAD_CODE_LIMIT,
-    DEFAULT_HIERARCHY_DEPTH, DEFAULT_HIERARCHY_EDGES, DeadCodeOptions, ImpactDefinition,
-    RetrievalEngine, TypeEdge, normalize_input_path,
+    DEFAULT_HIERARCHY_DEPTH, DEFAULT_HIERARCHY_EDGES, DeadCodeOptions, RetrievalEngine, TypeEdge,
+    normalize_input_path,
 };
 use tracing::{debug, error};
 
@@ -28,17 +28,6 @@ fn validate_path(value: Option<&str>, label: &str) -> Result<Option<String>, Str
         }
         None => Ok(None),
     }
-}
-
-fn definitions_out(definitions: Vec<ImpactDefinition>) -> Vec<ImpactDefinitionOut> {
-    definitions
-        .into_iter()
-        .map(|d| ImpactDefinitionOut {
-            file_path: d.file_path,
-            line: d.line,
-            kind: d.kind,
-        })
-        .collect()
 }
 
 fn call_edge_out(site: CallSite) -> CallEdgeOut {
@@ -84,7 +73,13 @@ pub fn calls_output(engine: &RetrievalEngine, params: CallsParams) -> Result<Cal
             error!("Call graph failed: {}", e);
             "Call graph failed: an internal error occurred".to_string()
         })?;
+    if let Some(path) = &file_path
+        && graph.definitions.is_empty()
+    {
+        return Err(no_definition_in_file(engine, &symbol, path));
+    }
 
+    let (definitions, definition_count) = listed_definitions(graph.definitions);
     Ok(CallsOutput {
         symbol: graph.symbol,
         direction: match direction {
@@ -93,7 +88,8 @@ pub fn calls_output(engine: &RetrievalEngine, params: CallsParams) -> Result<Cal
             CallDirection::Both => "both",
         }
         .to_string(),
-        definitions: definitions_out(graph.definitions),
+        definitions,
+        definition_count,
         callers: graph.callers.into_iter().map(call_edge_out).collect(),
         callees: graph.callees.into_iter().map(call_edge_out).collect(),
         external_callees: graph.external_callees,
@@ -118,9 +114,11 @@ pub fn hierarchy_output(
             "Type hierarchy failed: an internal error occurred".to_string()
         })?;
 
+    let (definitions, definition_count) = listed_definitions(hierarchy.definitions);
     Ok(HierarchyOutput {
         symbol: hierarchy.symbol,
-        definitions: definitions_out(hierarchy.definitions),
+        definitions,
+        definition_count,
         supertypes: hierarchy
             .supertypes
             .into_iter()

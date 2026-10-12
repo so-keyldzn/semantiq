@@ -11,6 +11,12 @@
 //! most of the codebase. For the same reason, beyond depth 1 a function or
 //! method is only followed through calls: a plain reference to its name there
 //! is usually a local variable or module that happens to share it.
+//!
+//! The enclosing symbol of a site is the innermost function, method or type
+//! containing it. Some grammars index local bindings (`const x = f()`) as
+//! one-line `variable` symbols: those never stand in for the function around
+//! them, so a local homonym in another function is not reported as impacted.
+//! A binding is the enclosing symbol only at top level, outside any scope.
 
 use super::{RetrievalEngine, normalize_input_path};
 use anyhow::Result;
@@ -94,6 +100,24 @@ fn propagates(kind: &str) -> bool {
     !matches!(kind, "module" | "import")
 }
 
+/// Symbol kinds that open a scope: the code they contain belongs to them.
+/// Bindings (`variable`, `constant`) do not: a `const x = f()` inside a
+/// function is a line of that function, not a symbol enclosing the call.
+fn is_scope(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function"
+            | "method"
+            | "class"
+            | "struct"
+            | "enum"
+            | "trait"
+            | "interface"
+            | "type"
+            | "macro"
+    )
+}
+
 /// Heuristic test detection from the path and the enclosing symbol name.
 pub fn is_test_location(file_path: &str, enclosing: Option<&str>) -> bool {
     let path = file_path.replace('\\', "/").to_lowercase();
@@ -145,7 +169,12 @@ impl RetrievalEngine {
     /// Analyse what is impacted by a change to `symbol_name`.
     ///
     /// `file_path` restricts the analysis to the definition(s) in that file,
-    /// for names defined in several places.
+    /// for names defined in several places. When that file defines no such
+    /// symbol the analysis is empty (no definition, no site) rather than a
+    /// name-only analysis of the homonyms defined elsewhere.
+    ///
+    /// A name the project does not define at all (library method) is
+    /// analysed by name: every site is `name_only` and nothing propagates.
     pub fn analyze_impact(
         &self,
         symbol_name: &str,
@@ -180,6 +209,15 @@ impl RetrievalEngine {
             }
         }
 
+        if file_path.is_some() && definitions.is_empty() {
+            return Ok(ImpactAnalysis {
+                symbol: symbol_name.to_string(),
+                definitions,
+                sites: Vec::new(),
+                truncated: false,
+            });
+        }
+
         let mut sites = Vec::new();
         let mut truncated = false;
         // The analysed symbol is visited from the start: through mutual
@@ -198,7 +236,9 @@ impl RetrievalEngine {
         }]);
 
         'bfs: while let Some(node) = queue.pop_front() {
-            let unique_name = self.definition_count(&mut caches, &node.name)? <= 1;
+            // Exactly one: a name with no definition is not the project's,
+            // so its occurrences are not trusted.
+            let unique_name = self.definition_count(&mut caches, &node.name)? == 1;
             // The lookup is capped: occurrences in the defining files and in
             // files importing them come first, so the cap only cuts
             // name-only sites. The cut is a truncation when the first cut
@@ -332,7 +372,8 @@ impl RetrievalEngine {
         })
     }
 
-    /// Innermost propagating symbol whose span contains `line`.
+    /// Innermost scope (function, method, type) whose span contains `line`;
+    /// failing that, the innermost top-level binding (`const`, `static`).
     fn enclosing_symbol(
         &self,
         caches: &mut Caches,
@@ -344,10 +385,17 @@ impl RetrievalEngine {
             Entry::Vacant(e) => e.insert(self.store.get_symbols_by_file(file_id)?),
         };
         let line = line as i64;
-        Ok(symbols
+        let containing = symbols
             .iter()
-            .filter(|s| propagates(&s.kind) && s.start_line <= line && line <= s.end_line)
-            .min_by_key(|s| s.end_line - s.start_line)
+            .filter(|s| propagates(&s.kind) && s.start_line <= line && line <= s.end_line);
+        let narrowest = |scope: bool| {
+            containing
+                .clone()
+                .filter(|s| is_scope(&s.kind) == scope)
+                .min_by_key(|s| s.end_line - s.start_line)
+        };
+        Ok(narrowest(true)
+            .or_else(|| narrowest(false))
             .map(|s| EnclosingSymbol {
                 name: s.name.clone(),
                 kind: s.kind.clone(),

@@ -306,6 +306,111 @@ fn test_engine_cache_is_invalidated_by_reindex() {
 }
 
 #[test]
+fn test_focused_map_reuses_the_cached_graph() {
+    // #156: a focused map reloaded and rebuilt the whole graph on every call.
+    let store = index_project(&sample_project());
+    let engine = RetrievalEngine::with_options(Arc::clone(&store), "/nonexistent", false);
+    let focused = RepoMapOptions {
+        focus: vec!["src/leaf.rs".to_string()],
+        ..options(MIN_REPO_MAP_TOKENS)
+    };
+
+    let first = engine.repo_map(&focused).unwrap();
+    let (graph, has_unfocused) = engine.cached_repo_graph().expect("graph cached");
+    assert!(!has_unfocused);
+    assert_eq!(first.text, build_repo_map(&store, &focused).unwrap().text);
+
+    let plain = engine.repo_map(&options(MIN_REPO_MAP_TOKENS)).unwrap();
+    let (same_graph, has_unfocused) = engine.cached_repo_graph().unwrap();
+    assert!(Arc::ptr_eq(&graph, &same_graph), "the graph was reloaded");
+    assert!(has_unfocused);
+    assert_ne!(plain.text, first.text);
+
+    let again = engine.repo_map(&focused).unwrap();
+    assert_eq!(again.text, first.text);
+    let (same_graph, has_unfocused) = engine.cached_repo_graph().unwrap();
+    assert!(Arc::ptr_eq(&graph, &same_graph), "the graph was reloaded");
+    assert!(
+        has_unfocused,
+        "the unfocused ranking must survive a focused call"
+    );
+}
+
+#[test]
+fn test_members_listed_after_their_parent_fill_the_budget() {
+    // The size estimate counts a `⋮ Parent` line per (file, parent) pair,
+    // which the render does not emit when the parent itself is listed: the
+    // selection is then extended until the real rendering fills the budget.
+    let mut files = sample_project();
+    let methods: String = (0..60)
+        .map(|i| format!("    /// Method {i}.\n    pub fn method_{i}(&self) -> u32 {{ {i} }}\n"))
+        .collect();
+    files.push((
+        "src/widget.rs".to_string(),
+        format!("/// A widget.\npub struct Widget;\n\nimpl Widget {{\n{methods}}}\n"),
+    ));
+    let store = index_project(&files);
+    let map = build_repo_map(
+        &store,
+        &RepoMapOptions {
+            path_prefix: Some("src/widget.rs".to_string()),
+            ..options(600)
+        },
+    )
+    .unwrap();
+    assert!(map.estimated_tokens <= 600, "{}", map.text);
+    assert!(map.text.contains("pub struct Widget"), "{}", map.text);
+    assert!(!map.text.contains("⋮"), "{}", map.text);
+    // Adding one more symbol would not fit: the budget is filled.
+    let line_tokens = "      pub fn method_59(&self) -> u32  — Method 59.\n".len() / 4;
+    assert!(
+        map.estimated_tokens + line_tokens > 600,
+        "{} tokens shown: {}",
+        map.estimated_tokens,
+        map.text
+    );
+}
+
+#[test]
+fn test_many_parents_listed_with_their_members_fill_the_budget() {
+    // Codex review of #156: the estimate charges a `⋮ Parent` line per
+    // (file, parent) pair that the render skips when the parent is listed;
+    // with many small types the slack exceeded the fixed adjustment window
+    // and a share of the budget stayed unused.
+    let mut files = sample_project();
+    let types: String = (0..120)
+        .map(|i| {
+            format!(
+                "pub struct VeryDescriptiveTypeName{i:03};\nimpl VeryDescriptiveTypeName{i:03} {{\n    pub fn get(&self) -> u32 {{ {i} }}\n}}\n"
+            )
+        })
+        .collect();
+    files.push(("src/types.rs".to_string(), types));
+    let store = index_project(&files);
+    let max_tokens = 2000;
+    let map = build_repo_map(
+        &store,
+        &RepoMapOptions {
+            path_prefix: Some("src/types.rs".to_string()),
+            ..options(max_tokens)
+        },
+    )
+    .unwrap();
+    assert!(map.estimated_tokens <= max_tokens, "{}", map.text);
+    assert!(!map.text.contains("⋮"), "{}", map.text);
+    // Not everything fits, and what is left out would not: the budget is
+    // filled to within one entry (~40 chars).
+    assert!(map.shown_symbols < map.total_symbols, "{}", map.text);
+    assert!(
+        max_tokens - map.estimated_tokens <= 12,
+        "{} of {} tokens used, {} symbols shown",
+        map.estimated_tokens,
+        max_tokens,
+        map.shown_symbols
+    );
+}
+
+#[test]
 fn test_clean_signature_and_doc() {
     assert_eq!(
         clean_signature(

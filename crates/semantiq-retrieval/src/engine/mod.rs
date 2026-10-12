@@ -12,7 +12,7 @@ mod resolution;
 mod search;
 mod threshold;
 
-use crate::repo_map::RankedRepo;
+use crate::repo_map::RepoMapCache;
 use crate::threshold::{CollectorConfig, DistanceCollector, ThresholdConfig};
 use semantiq_embeddings::{EmbeddingModel, ModelSlot, RetryPolicy, create_embedding_model};
 use semantiq_index::IndexStore;
@@ -62,7 +62,7 @@ pub struct RetrievalEngine {
     /// Distance collector for ML calibration (optional).
     pub(crate) distance_collector: Option<DistanceCollector>,
     /// Repo map ranking without focus, keyed by the index fingerprint.
-    pub(crate) repo_map_cache: Mutex<Option<(String, Arc<RankedRepo>)>>,
+    pub(crate) repo_map_cache: Mutex<Option<RepoMapCache>>,
 }
 
 impl RetrievalEngine {
