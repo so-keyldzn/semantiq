@@ -440,6 +440,10 @@ impl Shared {
                     panic_message(payload.as_ref())
                 );
                 model = None;
+                // The chunks of the interrupted pass are still pending, but a
+                // commit on this process's own connection does not change
+                // `data_version`: the recovery poll must look at them.
+                seen_version = None;
                 self.progress.set_model_error(Some(
                     "the embedding pass stopped unexpectedly; it is retried in the background"
                         .to_string(),

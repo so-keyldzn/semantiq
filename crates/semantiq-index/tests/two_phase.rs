@@ -778,3 +778,74 @@ fn panicking_model_does_not_leave_running_set() {
     assert!(!embedder.progress().is_running());
     assert_eq!(store.embedding_counts().unwrap().pending(), pending);
 }
+
+/// Codex review of #174: after a panic, the data-version marker of the last
+/// successful pass must not hide the chunks the interrupted pass left
+/// pending. Edits indexed through this process's own connection do not
+/// change `PRAGMA data_version`, so only a reset marker lets the recovery
+/// poll look at them.
+#[test]
+fn panic_recovery_retries_chunks_indexed_on_the_same_connection() {
+    struct FlakyModel {
+        panic_next: std::sync::atomic::AtomicBool,
+        inner: StubEmbeddingModel,
+    }
+    impl EmbeddingModel for FlakyModel {
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            if self.panic_next.swap(false, Ordering::SeqCst) {
+                panic!("ort: unexpected input");
+            }
+            self.inner.embed(text)
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            texts.iter().map(|t| self.embed(t)).collect()
+        }
+        fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+            self.embed(query)
+        }
+        fn dimension(&self) -> usize {
+            EMBEDDING_DIMENSION
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    build_project(tmp.path(), 1, 3);
+    let store = phase1(tmp.path());
+    let model = Arc::new(FlakyModel {
+        panic_next: std::sync::atomic::AtomicBool::new(false),
+        inner: StubEmbeddingModel::new(),
+    });
+    let shared = Arc::clone(&model);
+    let embedder = BackgroundEmbedder::spawn_with(
+        Arc::clone(&store),
+        Box::new(move || Ok(Arc::clone(&shared) as Arc<dyn EmbeddingModel>)),
+        quick_config(),
+    )
+    .unwrap();
+
+    // A first pass succeeds and records the data version.
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(5)));
+    assert_eq!(store.embedding_counts().unwrap().pending(), 0);
+
+    // New chunks through the same connection (the server's own indexer);
+    // the pass for them panics.
+    write_file(tmp.path(), "src/new.rs", "pub fn fresh() -> i32 { 7 }\n");
+    phase1_into(tmp.path(), Arc::clone(&store));
+    let pending = store.embedding_counts().unwrap().pending();
+    assert!(pending > 0);
+    model.panic_next.store(true, Ordering::SeqCst);
+    embedder.notify();
+    assert!(embedder.wait_idle(Duration::from_secs(5)));
+    assert!(embedder.progress().model_error().is_some());
+    assert_eq!(store.embedding_counts().unwrap().pending(), pending);
+
+    // No further notify: the recovery poll must pick the chunks up.
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            store.embedding_counts().unwrap().pending() == 0
+        }),
+        "pending chunks embedded by the poll after the backoff"
+    );
+    assert!(embedder.progress().model_error().is_none());
+}
