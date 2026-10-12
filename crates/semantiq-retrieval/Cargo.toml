@@ -2,7 +2,10 @@
 name = "semantiq-retrieval"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+# Internal workspace crates are not published to crates.io (#125).
+publish = false
 
 [dependencies]
 semantiq-index = { path = "../semantiq-index" }
