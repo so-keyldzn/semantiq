@@ -1,0 +1,25 @@
+# Build context of the Dockerfile: it copies Cargo.*, crates/, skills/ and the
+# top-level Markdown files. Everything else (the 7 GB target/, .git, index
+# DBs, benchmark results, the npm package) stays out of the context.
+**/target
+**/.git
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.probe
+**/models
+**/*.onnx
+**/__pycache__
+**/.DS_Store
+.github
+.claude
+.claude-plugin
+.idea
+.vscode
+bench
+docs
+npm
+railway.toml
+Dockerfile
+.dockerignore
+.mcp.json
