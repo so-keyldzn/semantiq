@@ -904,13 +904,17 @@ public:
 
         let ts = references(
             Language::TypeScript,
-            "interface Runner {\n  run(): void;\n  name: string;\n}\nabstract class C { abstract go(): void }\nenum E { Alpha, Beta = 2 }\n",
+            "interface Runner {\n  run(): void;\n  name: string;\n}\nabstract class C { abstract go(): void }\nenum E { Alpha, Beta = 2, Gamma, Delta }\n",
         );
         assert_eq!(kinds_of(&ts, "run"), vec![(2, ReferenceKind::Definition)]);
         assert_eq!(kinds_of(&ts, "name"), vec![(3, ReferenceKind::Definition)]);
         assert_eq!(kinds_of(&ts, "go"), vec![(5, ReferenceKind::Definition)]);
         assert_eq!(kinds_of(&ts, "Alpha"), vec![(6, ReferenceKind::Definition)]);
         assert_eq!(kinds_of(&ts, "Beta"), vec![(6, ReferenceKind::Definition)]);
+        // Every unassigned member, not only the first: `enum_body` repeats
+        // its `name` field and `child_by_field_id` sees only the first one.
+        assert_eq!(kinds_of(&ts, "Gamma"), vec![(6, ReferenceKind::Definition)]);
+        assert_eq!(kinds_of(&ts, "Delta"), vec![(6, ReferenceKind::Definition)]);
     }
 
     // B32 (#149): PHP `implements` names are type references, like

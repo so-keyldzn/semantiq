@@ -213,6 +213,9 @@ mod flag {
     pub const GENERIC_CALLEE: u64 = 1 << 32;
     /// PHP `qualified_name` (`\Foo\Bar`) : transparent pour `is_type`.
     pub const QUALIFIED_NAME: u64 = 1 << 33;
+    /// TypeScript `enum_body` : chaque membre non assigné est un champ `name`
+    /// répété, que `child_by_field_id` ne voit qu'une fois (#149).
+    pub const ENUM_BODY: u64 = 1 << 34;
 }
 
 /// Drapeaux d'un nom de kind ; `attribute` est le kind d'attribut du langage.
@@ -272,14 +275,14 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
             || kind.ends_with("_specifier")
             || matches!(kind, "class" | "module" | "method" | "singleton_method")
             // Rust `enum_variant`, Java `enum_constant`, PHP `enum_case`, TS
-            // `enum_body` / `enum_assignment` members and interface
-            // signatures: declared names, not usages (#82, #149).
+            // `enum_assignment` members and interface signatures: declared
+            // names, not usages (#82, #149). Unassigned TS members are under
+            // `enum_body` directly (ENUM_BODY).
             || matches!(
                 kind,
                 "enum_variant"
                     | "enum_constant"
                     | "enum_case"
-                    | "enum_body"
                     | "enum_assignment"
                     | "method_signature"
                     | "property_signature"
@@ -321,6 +324,7 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
     set(kind == "variable_name", flag::VARIABLE_NAME);
     set(kind == "name", flag::NAME);
     set(kind == "enum_entry", flag::ENUM_ENTRY);
+    set(kind == "enum_body", flag::ENUM_BODY);
     set(kind == "qualified_name", flag::QUALIFIED_NAME);
     set(
         matches!(
@@ -826,6 +830,13 @@ impl<'t> Leaf<'_, 't> {
             // Kotlin `enum_entry` has no `name` field: the entry's name is its
             // first named child.
             || (k.has(parent, flag::ENUM_ENTRY) && parent.named_child(0) == Some(node))
+            // TypeScript `enum E { A, B, C }`: every unassigned member is a
+            // repeated `name` field of `enum_body`, and `child_by_field_id`
+            // only returns the first. An identifier directly under
+            // `enum_body` can only be a member name (assigned members sit
+            // under `enum_assignment`, computed names under
+            // `computed_property_name`).
+            || k.has(parent, flag::ENUM_BODY)
     }
 
     fn in_import(&self) -> bool {
