@@ -160,13 +160,16 @@ function tunnelThrough(proxyUrl, url, timeoutMs) {
 // up to MAX_REDIRECTS redirects. Every redirect response is drained so its
 // socket is released. `options.get` replaces `https.get` (tests use `http`),
 // `options.timeoutMs` the idle timeout and `options.proxy` the proxy URL
-// (default: `proxyFor(url)`; `false` disables it).
+// (`false` disables it). Without `options.proxy`, the proxy is chosen by
+// `proxyFor` for every hop, since a redirect changes the host (GitHub sends
+// release assets to a CDN) and `no_proxy` may list only one of them;
+// `options.env` replaces the environment `proxyFor` reads (tests).
 function getFollowingRedirects(url, options) {
   const opts = options || {};
   const get = opts.get || https.get;
   const timeoutMs = opts.timeoutMs || REQUEST_TIMEOUT_MS;
   const hops = opts.hops || 0;
-  const proxy = opts.proxy === undefined ? proxyFor(url) : opts.proxy;
+  const proxy = opts.proxy === undefined ? proxyFor(url, opts.env) : opts.proxy;
   const requestOptions = proxy ? { createConnection: tunnelThrough(proxy, url, timeoutMs) } : {};
 
   return new Promise((resolve, reject) => {
@@ -186,7 +189,9 @@ function getFollowingRedirects(url, options) {
           return;
         }
         const next = new URL(location, url).toString();
-        resolve(getFollowingRedirects(next, { get, timeoutMs, proxy, hops: hops + 1 }));
+        resolve(
+          getFollowingRedirects(next, { get, timeoutMs, proxy: opts.proxy, env: opts.env, hops: hops + 1 })
+        );
         return;
       }
 

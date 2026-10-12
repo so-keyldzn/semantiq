@@ -309,7 +309,8 @@ confidence of `impact` / `calls` see.
   (`npm_config_https_proxy` / `npm_config_proxy`, then `HTTPS_PROXY`,
   `https_proxy`, `ALL_PROXY`; `NO_PROXY` / `npm_config_noproxy` exempt hosts),
   tunnelling the GitHub download with HTTP CONNECT (Basic proxy credentials
-  from the URL) (#104).
+  from the URL); the exemptions are checked again at every redirect, since
+  GitHub sends release assets to another host (#104).
 - The npm installer refuses Linux musl (Alpine) with a clear message instead
   of installing a glibc binary that fails at launch; `getPlatform`,
   `install()` and the extraction are covered by `npm test` against a local

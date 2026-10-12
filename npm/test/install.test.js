@@ -33,8 +33,11 @@ const BODY = 'release archive bytes';
 // Routes: /file (200), /redirect-<status> (to /file), /chain (MAX_REDIRECTS
 // hops to /file), /loop (redirects to itself), /no-location, /missing (404),
 // /flaky (503 twice, then 200), /stall (never answers), /slow-body (200 whose
-// body never ends). `files` maps further paths to Buffers served with 200.
-function startServer(files) {
+// body never ends), /elsewhere?to=<url> (302 to another server). `files` maps
+// further paths to Buffers served with 200. The server listens on 127.0.0.1
+// and `base` names it so; `hostname` = 'localhost' listens on every interface
+// and names the server `localhost` (a second host for proxy exemptions).
+function startServer(files, hostname) {
   const requests = [];
   let flakyCalls = 0;
   const server = http.createServer((req, res) => {
@@ -69,6 +72,9 @@ function startServer(files) {
       case '/loop':
         redirect(302, '/loop');
         return;
+      case '/elsewhere':
+        redirect(302, url.searchParams.get('to'));
+        return;
       case '/no-location':
         res.writeHead(302);
         res.end();
@@ -100,8 +106,10 @@ function startServer(files) {
     }
   });
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const base = `http://127.0.0.1:${server.address().port}`;
+    const listen = (callback) =>
+      hostname === 'localhost' ? server.listen(0, callback) : server.listen(0, '127.0.0.1', callback);
+    listen(() => {
+      const base = `http://${hostname || '127.0.0.1'}:${server.address().port}`;
       resolve({
         base,
         requests,
@@ -111,7 +119,11 @@ function startServer(files) {
   });
 }
 
-const opts = (extra) => Object.assign({ get: http.get }, extra);
+// Plain-HTTP options for the local server. `proxy: false` keeps the tests
+// hermetic: without it, an `HTTPS_PROXY` in the environment running `npm
+// test` would tunnel the 127.0.0.1 requests through it. The proxy tests
+// opt in with an explicit `proxy` or `env`.
+const opts = (extra) => Object.assign({ get: http.get, proxy: false }, extra);
 
 test('downloadText follows 301, 302, 303, 307 and 308 redirects', async () => {
   const server = await startServer();
@@ -356,6 +368,35 @@ test('downloads tunnel through the configured proxy with CONNECT', async () => {
   } finally {
     await proxy.close();
     await server.close();
+  }
+});
+
+test('an automatic proxy is chosen again at every redirect hop', async () => {
+  const direct = await startServer();
+  const named = await startServer(undefined, 'localhost');
+  const proxy = await startProxy();
+  // 127.0.0.1 goes through the proxy, localhost is exempt: like GitHub
+  // redirecting a release asset to a CDN host with another routing.
+  const env = { HTTPS_PROXY: `http://127.0.0.1:${proxy.port}`, NO_PROXY: 'localhost' };
+  const options = { get: http.get, env };
+  const elsewhere = (from, to) => `${from.base}/elsewhere?to=${encodeURIComponent(`${to.base}/file`)}`;
+  const directHost = direct.base.replace('http://', '');
+  try {
+    assert.equal(await downloadText(elsewhere(direct, named), options), BODY);
+    assert.deepEqual(proxy.connects.map((c) => c.url), [directHost], 'only the first hop is tunnelled');
+    assert.deepEqual(named.requests, ['/file']);
+
+    assert.equal(await downloadText(elsewhere(named, direct), options), BODY);
+    assert.deepEqual(proxy.connects.map((c) => c.url), [directHost, directHost], 'only the redirect target is tunnelled');
+    assert.deepEqual(direct.requests.slice(1), ['/file']);
+
+    // An explicit proxy stays in force at every hop.
+    await downloadText(elsewhere(direct, named), opts({ proxy: env.HTTPS_PROXY }));
+    assert.deepEqual(proxy.connects.slice(2).map((c) => c.url), [directHost, named.base.replace('http://', '')]);
+  } finally {
+    await proxy.close();
+    await named.close();
+    await direct.close();
   }
 });
 
