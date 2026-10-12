@@ -84,6 +84,42 @@ it grows the database by about 2.5× the size of the indexed source text.
   build without the `onnx` feature, e.g. macOS Intel, or
   `SEMANTIQ_EMBEDDINGS=stub`), as the MCP server already did in its
   instructions: only symbol and text matches are returned (#106).
+- `serve` loads one embedding model instead of two, in the background after
+  the structural index rather than before answering `initialize`, and a load
+  that fails at startup (first run offline, interrupted download) is retried
+  with a backoff by the embedder thread and by the next search: semantic
+  search comes back without a restart. The "restart the server" notice is
+  gone (#76, #97).
+- A panic on the embedder thread (ONNX Runtime or the tokenizer on an
+  unexpected input) no longer kills phase 2 silently with the "Semantic index
+  N% ready" notice stuck forever: it is reported like a failed model load and
+  retried after the backoff (#87).
+- The model download has network timeouts (connect, response, body) instead
+  of blocking forever on a stalled connection (#97), streams into a uniquely
+  named temporary file so two processes downloading at once no longer
+  truncate each other's `.part` (#98), and the reason shown by the
+  `semantiq_search` notice and `GET /stats` when the model cannot be loaded is
+  a short classification (download failed, digest mismatch, files could not
+  be loaded…) with no local path, URL or digest; the detail is logged (#100).
+- The model directory no longer falls back to the current directory, i.e. the
+  indexed project, when no data directory is available: `SEMANTIQ_MODELS_DIR`
+  names it explicitly, and without it or `HOME` the load fails with a hint
+  (#115).
+- `semantiq index --embeddings-only` exits 1 when the embedding model cannot
+  be loaded, instead of reporting success with every chunk left pending; a
+  full `index` still warns and keeps its structure (#103).
+- Threshold calibration can become effective: the collector records one
+  observation per search query and language (the median candidate distance),
+  which is what `distance_observations` stores, and reconciles its count with
+  the rows actually inserted, so the bootstrap no longer ends after ~25
+  searches with 25 rows; auto-calibration runs again every 100 stored
+  observations and only saves calibrations search applies (500 observations
+  per language, confidence medium); `semantiq calibrate` and `semantiq stats`
+  say when a saved calibration is below that floor and not applied; `serve`
+  flushes the collected observations on shutdown (#135).
+- `semantiq calibrate` locates the index like the other commands (`.semantiq.db`
+  in the current directory or a parent, or `--database`) instead of asking for
+  a second, nested index from a subdirectory (#105).
 
 ## [0.12.0] - 2026-10-11
 

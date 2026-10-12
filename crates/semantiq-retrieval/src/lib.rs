@@ -23,7 +23,8 @@ pub use repo_map::{
 pub use results::{SearchResult, SearchResultKind};
 pub use text_searcher::TextSearcher;
 pub use threshold::{
-    CalibrationConfig, CalibrationResult, CollectorConfig, Confidence, DistanceCollector,
-    DistanceObservation, DistanceStats, LanguageThresholds, ThresholdCalibrator, ThresholdConfig,
+    APPLIED_MIN_SAMPLES, BOOTSTRAP_THRESHOLD, CalibrationConfig, CalibrationResult,
+    CollectorConfig, Confidence, DistanceCollector, DistanceObservation, DistanceStats,
+    LanguageThresholds, RECALIBRATE_EVERY, ThresholdCalibrator, ThresholdConfig,
     format_calibration_summary,
 };

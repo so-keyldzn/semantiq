@@ -157,10 +157,7 @@ impl RetrievalEngine {
 
             let collector = DistanceCollector::with_config(CollectorConfig {
                 buffer_size: 50,
-                sample_rate: 0.1,
-                max_age_days: 30,
-                bootstrap_threshold: 500,
-                enable_bootstrap: true,
+                ..CollectorConfig::default()
             })
             .with_existing_count(existing_count);
 

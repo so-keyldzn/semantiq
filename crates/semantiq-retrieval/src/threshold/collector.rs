@@ -1,6 +1,14 @@
 //! Distance observation collection during search.
+//!
+//! One observation per search query and language: the median L2 distance
+//! of that language's KNN candidates. That is also what the database keeps
+//! (`distance_observations` is `UNIQUE(query_hash, language)`), so the
+//! counters here, the bootstrap progress and the calibration sample sizes
+//! all describe the same thing (#135). Recording every candidate used to
+//! count 20 observations per search while the table kept one row.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
@@ -45,6 +53,16 @@ impl DistanceObservation {
     }
 }
 
+/// Stored observations (distinct query × language) collected at 100 %
+/// before sampling drops to `sample_rate`; the first auto-calibration runs
+/// when it is reached.
+pub const BOOTSTRAP_THRESHOLD: usize = 500;
+
+/// After bootstrap, auto-calibration runs again every this many newly
+/// stored observations, so a language crossing the applied floor later is
+/// calibrated without a manual `semantiq calibrate`.
+pub const RECALIBRATE_EVERY: usize = 100;
+
 /// Configuration for the distance collector.
 #[derive(Debug, Clone)]
 pub struct CollectorConfig {
@@ -54,11 +72,14 @@ pub struct CollectorConfig {
     pub sample_rate: f32,
     /// Maximum age of observations in days before cleanup.
     pub max_age_days: i64,
-    /// Number of observations to collect before exiting bootstrap mode.
+    /// Number of stored observations before exiting bootstrap mode.
     /// During bootstrap, sample_rate is 100%.
     pub bootstrap_threshold: usize,
     /// Whether to enable bootstrap mode.
     pub enable_bootstrap: bool,
+    /// Newly stored observations between two auto-calibrations after
+    /// bootstrap (0 = only the one at the end of bootstrap).
+    pub recalibrate_every: usize,
 }
 
 impl Default for CollectorConfig {
@@ -67,8 +88,9 @@ impl Default for CollectorConfig {
             buffer_size: 100,
             sample_rate: 0.1, // 10% sampling in production
             max_age_days: 30,
-            bootstrap_threshold: 500, // Collect 500 observations before switching to production
+            bootstrap_threshold: BOOTSTRAP_THRESHOLD,
             enable_bootstrap: true,
+            recalibrate_every: RECALIBRATE_EVERY,
         }
     }
 }
@@ -86,10 +108,13 @@ pub struct DistanceCollector {
     sample_counter: Mutex<u64>,
     /// Whether we're still in bootstrap mode.
     in_bootstrap: AtomicBool,
-    /// Total observations collected (for bootstrap threshold).
+    /// Observations stored, plus those buffered (reconciled with the
+    /// database at each flush: a repeated query is kept once).
     total_observations: AtomicUsize,
     /// Flag indicating calibration should be triggered.
     needs_calibration: AtomicBool,
+    /// Stored since the last auto-calibration, after bootstrap.
+    stored_since_calibration: AtomicUsize,
 }
 
 impl DistanceCollector {
@@ -108,6 +133,7 @@ impl DistanceCollector {
             in_bootstrap: AtomicBool::new(in_bootstrap),
             total_observations: AtomicUsize::new(0),
             needs_calibration: AtomicBool::new(false),
+            stored_since_calibration: AtomicUsize::new(0),
         }
     }
 
@@ -156,11 +182,14 @@ impl DistanceCollector {
         self
     }
 
-    /// Record distance observations from a search result.
+    /// Record the KNN candidates of one search: one observation per
+    /// language present, with the median distance of that language's
+    /// candidates (robust to `limit` and to one odd neighbour).
     ///
-    /// In bootstrap mode, collects all observations.
-    /// In production mode, samples based on configured rate.
-    /// Returns `true` if observations were actually recorded.
+    /// In bootstrap mode, every query is recorded; in production mode, one
+    /// in `1 / sample_rate`. Returns `true` if the query was sampled.
+    /// Bootstrap ends at the next flush, once the database holds
+    /// `bootstrap_threshold` rows (see [`reconcile`](Self::reconcile)).
     pub fn record(
         &self,
         query: &str,
@@ -173,38 +202,61 @@ impl DistanceCollector {
         }
 
         let query_hash = DistanceObservation::hash_query(query);
-        let mut recorded_count = 0;
+        let mut by_language: BTreeMap<String, Vec<f32>> = BTreeMap::new();
+        for (chunk_id, distance) in results {
+            if let Some(language) = language_lookup(*chunk_id) {
+                by_language.entry(language).or_default().push(*distance);
+            }
+        }
+        let recorded_count = by_language.len();
+        if recorded_count == 0 {
+            return true;
+        }
 
         {
             let mut buffer = self.buffer.lock().unwrap_or_else(|e| {
                 warn!("DistanceCollector mutex was poisoned, recovering");
                 e.into_inner()
             });
-
-            for (chunk_id, distance) in results {
-                if let Some(language) = language_lookup(*chunk_id) {
-                    buffer.push(DistanceObservation::new(language, *distance, query_hash));
-                    recorded_count += 1;
-                }
+            for (language, distances) in by_language {
+                buffer.push(DistanceObservation::new(
+                    language,
+                    median(distances),
+                    query_hash,
+                ));
             }
         }
+        self.total_observations
+            .fetch_add(recorded_count, Ordering::Relaxed);
+        true
+    }
 
-        // Update total count and check bootstrap threshold
-        if recorded_count > 0 {
-            let new_total = self
-                .total_observations
-                .fetch_add(recorded_count, Ordering::Relaxed)
-                + recorded_count;
-
-            // Check if we should exit bootstrap mode
-            if self.in_bootstrap.load(Ordering::Relaxed)
-                && new_total >= self.config.bootstrap_threshold
-            {
+    /// Account for a flush: `flushed` buffered observations were handed to
+    /// the database, which kept `inserted` of them (a query already seen is
+    /// ignored by its `UNIQUE(query_hash, language)`). The running total
+    /// then matches the table; bootstrap ends when it reaches the
+    /// threshold, and later every `recalibrate_every` stored observations
+    /// request a new auto-calibration.
+    pub fn reconcile(&self, flushed: usize, inserted: usize) {
+        self.forget(flushed.saturating_sub(inserted));
+        let total = self.total_observations.load(Ordering::Relaxed);
+        if self.in_bootstrap.load(Ordering::Relaxed) {
+            if total >= self.config.bootstrap_threshold {
                 self.exit_bootstrap();
             }
+            return;
         }
-
-        true
+        if self.config.recalibrate_every == 0 {
+            return;
+        }
+        let since = self
+            .stored_since_calibration
+            .fetch_add(inserted, Ordering::Relaxed)
+            + inserted;
+        if since >= self.config.recalibrate_every {
+            self.stored_since_calibration.store(0, Ordering::Relaxed);
+            self.needs_calibration.store(true, Ordering::Release);
+        }
     }
 
     /// Exit bootstrap mode and switch to production sampling.
@@ -261,13 +313,18 @@ impl DistanceCollector {
         self.total_observations.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Check if the buffer needs to be flushed.
+    /// Check if the buffer needs to be flushed: it is full, or bootstrap is
+    /// about to end (the exit is decided from the stored rows at flush time).
     pub fn needs_flush(&self) -> bool {
         let buffer = self.buffer.lock().unwrap_or_else(|e| {
             warn!("DistanceCollector mutex was poisoned, recovering");
             e.into_inner()
         });
         buffer.len() >= self.config.buffer_size
+            || (!buffer.is_empty()
+                && self.in_bootstrap.load(Ordering::Relaxed)
+                && self.total_observations.load(Ordering::Relaxed)
+                    >= self.config.bootstrap_threshold)
     }
 
     /// Take all buffered observations (clears the buffer).
@@ -326,6 +383,20 @@ impl Default for DistanceCollector {
     }
 }
 
+/// Median of a non-empty list (mean of the two middle values when even).
+fn median(mut values: Vec<f32>) -> f32 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    if n == 0 {
+        return 0.0;
+    }
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +428,7 @@ mod tests {
             max_age_days: 30,
             bootstrap_threshold: 100,
             enable_bootstrap: false, // Disable bootstrap for this test
+            ..Default::default()
         });
 
         collector.record_single(DistanceObservation::new("rust".to_string(), 0.5, 1));
@@ -377,12 +449,13 @@ mod tests {
             max_age_days: 30,
             bootstrap_threshold: 5,
             enable_bootstrap: true,
+            ..Default::default()
         });
 
         assert!(collector.is_bootstrap());
         assert_eq!(collector.bootstrap_progress(), 0);
 
-        // In bootstrap, should collect ALL observations
+        // In bootstrap, should collect ALL queries
         for i in 0..4 {
             collector.record(&format!("query{}", i), &[(1, 0.5)], |_| {
                 Some("rust".to_string())
@@ -392,13 +465,96 @@ mod tests {
         assert!(collector.is_bootstrap());
         assert_eq!(collector.total_observations(), 4);
         assert_eq!(collector.buffer_len(), 4);
+        assert!(!collector.needs_flush());
 
-        // One more should trigger exit from bootstrap
+        // The fifth reaches the threshold: a flush is due, and bootstrap
+        // ends once the database confirms the rows.
         collector.record("query4", &[(1, 0.5)], |_| Some("rust".to_string()));
+        assert!(collector.is_bootstrap(), "decided at flush time");
+        assert!(collector.needs_flush());
+        let flushed = collector.take_buffer().len();
+        collector.reconcile(flushed, flushed);
 
         assert!(!collector.is_bootstrap());
         assert!(collector.should_calibrate()); // Should trigger calibration
         assert!(!collector.should_calibrate()); // Flag should be consumed
+    }
+
+    /// #135: one observation per query and language, the median of that
+    /// language's candidates, so the count matches the stored rows.
+    #[test]
+    fn test_record_aggregates_per_language() {
+        let collector = DistanceCollector::with_config(CollectorConfig {
+            sample_rate: 1.0,
+            enable_bootstrap: false,
+            ..Default::default()
+        });
+        let candidates: Vec<(i64, f32)> = (1..=20).map(|i| (i, 0.5 + i as f32 * 0.01)).collect();
+        // Chunks 1-15 are rust, 16-20 python.
+        collector.record("a query", &candidates, |id| {
+            Some(if id <= 15 { "rust" } else { "python" }.to_string())
+        });
+
+        assert_eq!(collector.total_observations(), 2);
+        let buffer = collector.take_buffer();
+        assert_eq!(buffer.len(), 2);
+        let rust = buffer.iter().find(|o| o.language == "rust").unwrap();
+        let python = buffer.iter().find(|o| o.language == "python").unwrap();
+        assert!((rust.distance - 0.58).abs() < 1e-5, "{}", rust.distance);
+        assert!((python.distance - 0.68).abs() < 1e-5, "{}", python.distance);
+        assert_eq!(rust.query_hash, python.query_hash);
+    }
+
+    /// #135: a repeated query is kept once by the database; the running
+    /// total follows the table, and bootstrap is not left early.
+    #[test]
+    fn test_reconcile_follows_the_stored_rows() {
+        let collector = DistanceCollector::with_config(CollectorConfig {
+            buffer_size: 100,
+            bootstrap_threshold: 4,
+            enable_bootstrap: true,
+            ..Default::default()
+        });
+        for _ in 0..5 {
+            collector.record("same query", &[(1, 0.5)], |_| Some("rust".to_string()));
+        }
+        assert_eq!(collector.total_observations(), 5);
+        assert!(collector.needs_flush(), "threshold apparently reached");
+        let flushed = collector.take_buffer().len();
+        // The database inserted one row: four were duplicates.
+        collector.reconcile(flushed, 1);
+        assert_eq!(collector.total_observations(), 1);
+        assert!(collector.is_bootstrap());
+        assert!(!collector.should_calibrate());
+    }
+
+    /// After bootstrap, auto-calibration is requested again every
+    /// `recalibrate_every` stored observations.
+    #[test]
+    fn test_recalibration_after_bootstrap() {
+        let collector = DistanceCollector::with_config(CollectorConfig {
+            bootstrap_threshold: 10,
+            enable_bootstrap: true,
+            recalibrate_every: 3,
+            ..Default::default()
+        })
+        .with_existing_count(10);
+        assert!(!collector.is_bootstrap());
+        collector.reconcile(2, 2);
+        assert!(!collector.should_calibrate());
+        collector.reconcile(1, 1);
+        assert!(collector.should_calibrate());
+        assert!(!collector.should_calibrate());
+        collector.reconcile(5, 0);
+        assert!(!collector.should_calibrate(), "duplicates do not count");
+    }
+
+    #[test]
+    fn test_median() {
+        assert_eq!(median(vec![3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(vec![4.0, 1.0, 3.0, 2.0]), 2.5);
+        assert_eq!(median(vec![7.0]), 7.0);
+        assert_eq!(median(vec![]), 0.0);
     }
 
     #[test]
@@ -409,6 +565,7 @@ mod tests {
             max_age_days: 30,
             bootstrap_threshold: 0, // Start in production
             enable_bootstrap: false,
+            ..Default::default()
         });
 
         assert!(!collector.is_bootstrap());
@@ -460,6 +617,7 @@ mod tests {
             max_age_days: 30,
             bootstrap_threshold: 100,
             enable_bootstrap: false,
+            ..Default::default()
         });
 
         assert!(!collector.needs_flush());
@@ -480,6 +638,7 @@ mod tests {
             max_age_days: 30,
             bootstrap_threshold: 100,
             enable_bootstrap: false,
+            ..Default::default()
         });
 
         let results = vec![(1, 0.5), (2, 0.6), (3, 0.7)];

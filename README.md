@@ -36,7 +36,13 @@ Semantic search uses [CodeRankEmbed](https://huggingface.co/nomic-ai/CodeRankEmb
   library (`ort`).
 - **Cache**: `~/Library/Application Support/semantiq/models/` (macOS),
   `~/.local/share/semantiq/models/` (Linux), `%APPDATA%\semantiq\models\`
-  (Windows). Delete it to force a re-download.
+  (Windows), or the directory named by `SEMANTIQ_MODELS_DIR`. Delete it to
+  force a re-download. Without any of these (no `HOME`), the model is not
+  loaded and never written into the project.
+- **Startup**: `serve` answers immediately; the model is loaded (and
+  downloaded on the first run) in the background after the structural
+  index, and a failed load is retried with a backoff. Until then
+  `semantiq_search` says so and answers from symbols and text.
 - **Indexing time**: the first full index embeds every chunk; as a reference, this repository (~110 files, ~31k lines, ~450 chunks) takes about 2 minutes on an Apple M1 Max (8 ONNX threads, see `SEMANTIQ_ONNX_THREADS`). Later runs only reindex changed files.
 - **Opting out**: `SEMANTIQ_EMBEDDINGS=stub` skips the model (no download);
   symbol and text search still work, semantic search is disabled. To build

@@ -2,7 +2,8 @@
 
 use super::RetrievalEngine;
 use crate::threshold::{
-    CalibrationConfig, Confidence, LanguageThresholds, ThresholdCalibrator, ThresholdConfig,
+    APPLIED_MIN_SAMPLES, CalibrationConfig, Confidence, LanguageThresholds, ThresholdCalibrator,
+    ThresholdConfig,
 };
 use anyhow::Result;
 use semantiq_index::{CalibrationData, IndexStore};
@@ -95,6 +96,9 @@ impl RetrievalEngine {
 
         let inserted = self.store.insert_distance_observations_batch(&batch)?;
         info!("Flushed {} distance observations to database", inserted);
+        // A repeated query is kept once: the collector's count follows the
+        // table, and bootstrap ends on stored rows, not on buffered ones.
+        collector.reconcile(batch.len(), inserted);
 
         // Keep the table bounded: observations older than the collector's
         // retention window are dropped, but never below the bootstrap
@@ -112,6 +116,11 @@ impl RetrievalEngine {
     }
 
     /// Perform automatic calibration based on collected observations.
+    ///
+    /// Only calibrations search will apply (`APPLIED_MIN_SAMPLES` per
+    /// language, confidence medium or better) are saved: a lower floor
+    /// stored thresholds `ThresholdConfig::get` never used (#135). Returns
+    /// whether any calibration was saved.
     pub fn auto_calibrate(&self) -> Result<bool> {
         let all_observations = self.store.get_all_distance_observations()?;
 
@@ -128,15 +137,17 @@ impl RetrievalEngine {
         );
 
         let calibrator = ThresholdCalibrator::with_config(CalibrationConfig {
-            min_samples: 50,
+            min_samples: APPLIED_MIN_SAMPLES,
             ..Default::default()
         });
 
         let config = calibrator.calibrate_all(&all_observations);
+        let mut saved = 0;
 
         // Save per-language calibrations
         for (language, thresholds) in &config.per_language {
-            if thresholds.sample_count >= 50 {
+            if thresholds.should_use() {
+                saved += 1;
                 let stats = thresholds.stats.as_ref();
                 let data = CalibrationData {
                     language: language.clone(),
@@ -155,7 +166,8 @@ impl RetrievalEngine {
         }
 
         // Save global calibration
-        if config.global.sample_count >= 50 {
+        if config.global.should_use() {
+            saved += 1;
             let stats = config.global.stats.as_ref();
             let data = CalibrationData {
                 language: "_global".to_string(),
@@ -170,6 +182,15 @@ impl RetrievalEngine {
                 std_distance: stats.map(|s| s.std_dev),
             };
             self.store.save_calibration(&data)?;
+        }
+
+        if saved == 0 {
+            info!(
+                total = total,
+                floor = APPLIED_MIN_SAMPLES,
+                "Auto-calibration: no language has enough observations yet, defaults kept"
+            );
+            return Ok(false);
         }
 
         self.reload_thresholds();
