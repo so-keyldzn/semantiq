@@ -6,8 +6,8 @@
 //! embeds the chunks still without a vector, and can be interrupted and
 //! resumed (`--embeddings-only`).
 
-use anyhow::{Result, bail};
-use semantiq_embeddings::create_embedding_model;
+use anyhow::{Context, Result, bail};
+use semantiq_embeddings::{EmbeddingModel, create_embedding_model};
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
 use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
 use std::path::{Path, PathBuf};
@@ -40,6 +40,21 @@ pub(crate) async fn index_with(
     database: Option<PathBuf>,
     force: bool,
     phases: Phases,
+) -> Result<()> {
+    index_with_loader(path, database, force, phases, || {
+        create_embedding_model(None)
+    })
+    .await
+}
+
+/// `index_with` with the function that loads the embedding model (tests
+/// inject a failing one without touching the network).
+async fn index_with_loader(
+    path: &Path,
+    database: Option<PathBuf>,
+    force: bool,
+    phases: Phases,
+    load_model: impl FnOnce() -> Result<Box<dyn EmbeddingModel>>,
 ) -> Result<()> {
     let project_root = resolve_project_root(path)?;
     let db_path = resolve_db_path(database, &project_root);
@@ -79,7 +94,7 @@ pub(crate) async fn index_with(
         }
     } else {
         warn_if_semantic_search_unavailable();
-        index_embeddings(&store)?;
+        index_embeddings(&store, phases, load_model)?;
     }
 
     info!("  Time: {:.2}s", start.elapsed().as_secs_f64());
@@ -115,21 +130,41 @@ fn index_structure(store: &Arc<IndexStore>, project_root: &Path) -> Result<()> {
 
 /// Phase 2: embed every chunk that has no embedding yet. Each batch is
 /// committed on its own, so an interrupted run resumes where it stopped.
-fn index_embeddings(store: &IndexStore) -> Result<()> {
+///
+/// A model that cannot be loaded (offline first run, digest mismatch,
+/// missing runtime) is a warning for a full `index`, whose structure is
+/// usable anyway, but an error for `--embeddings-only`: the one thing asked
+/// for did not happen, so the command exits non-zero (#103).
+fn index_embeddings(
+    store: &IndexStore,
+    phases: Phases,
+    load_model: impl FnOnce() -> Result<Box<dyn EmbeddingModel>>,
+) -> Result<()> {
     let counts = store.embedding_counts()?;
     if counts.pending() == 0 {
         info!("Embeddings: all {} chunks already embedded", counts.total);
         return Ok(());
     }
 
-    let model = match create_embedding_model(None) {
+    let model = match load_model() {
         Ok(model) => {
             info!("Embedding model loaded (dim={})", model.dimension());
             model
         }
+        Err(e) if phases == Phases::EmbeddingsOnly => {
+            return Err(e).with_context(|| {
+                format!(
+                    "The embedding model could not be loaded: {} chunks are left without \
+                     embeddings (`semantiq index --embeddings-only` retries once the model \
+                     is available)",
+                    counts.pending()
+                )
+            });
+        }
         Err(e) => {
             warn!(
-                "Could not load embedding model: {}. {} chunks left without embeddings.",
+                "Could not load embedding model: {:#}. {} chunks left without embeddings \
+                 (`semantiq index --embeddings-only` retries).",
                 e,
                 counts.pending()
             );
@@ -343,6 +378,46 @@ mod tests {
         index(root, Some(db.clone()), true).await.unwrap();
         assert_eq!(store.embedding_counts().unwrap().pending(), 0);
         assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+    }
+
+    /// #103: `--embeddings-only` fails when the model cannot be loaded (the
+    /// chunks stay pending), while a full `index` keeps its structure and
+    /// only warns.
+    #[tokio::test]
+    async fn test_embeddings_only_fails_without_a_model() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_project(root);
+        let db = root.join("index.db");
+        let offline = || -> Result<Box<dyn EmbeddingModel>> { bail!("download failed: offline") };
+
+        index_with_loader(root, Some(db.clone()), false, Phases::All, offline)
+            .await
+            .expect("a full index keeps its structure");
+        let store = IndexStore::open(&db).unwrap();
+        assert_eq!(store.get_stats().unwrap().file_count, 2);
+        let pending = store.embedding_counts().unwrap().pending();
+        assert!(pending > 0);
+
+        let err = index_with_loader(
+            root,
+            Some(db.clone()),
+            false,
+            Phases::EmbeddingsOnly,
+            offline,
+        )
+        .await
+        .expect_err("--embeddings-only did not do what was asked");
+        let text = format!("{err:#}");
+        assert!(text.contains("could not be loaded"), "{text}");
+        assert!(text.contains("offline"), "{text}");
+        assert_eq!(store.embedding_counts().unwrap().pending(), pending);
+
+        // With a model, the same command succeeds.
+        index_with(root, Some(db), false, Phases::EmbeddingsOnly)
+            .await
+            .unwrap();
+        assert_eq!(store.embedding_counts().unwrap().pending(), 0);
     }
 
     /// `--embeddings-only` on an empty index points at a full index run.
