@@ -44,7 +44,7 @@ pub fn resolve_import(
 
     let candidates: Vec<PathBuf> = match language {
         Language::Python => resolve_python_import(source_dir, import_path),
-        Language::Rust => resolve_rust_import(source_rel_path, import_path)?,
+        Language::Rust => resolve_rust_import(source_rel_path, import_path, project_root)?,
         Language::TypeScript | Language::JavaScript => resolve_js_import(source_dir, import_path)?,
         // `#include "x.h"` is looked up next to the including file, then from
         // the project root and its `include/` directory (#142).
@@ -53,19 +53,29 @@ pub fn resolve_import(
             import_path,
             &[Path::new(""), Path::new("include")],
         ),
-        // `require_relative 'x'` is relative to the requiring file; `require
-        // 'x'` goes through the load path, usually `lib/` (#142).
+        // `require_relative 'x'` (stored `./x`) is relative to the requiring
+        // file; `require 'x'` goes through the load path: `lib/`, the root,
+        // the test directories, and as a last resort the file's own
+        // directory (#142).
+        Language::Ruby if import_path.starts_with('.') => vec![source_dir.join(import_path)],
         Language::Ruby => {
-            path_candidates(source_dir, import_path, &[Path::new(""), Path::new("lib")])
+            let mut candidates: Vec<PathBuf> = ["lib", "", "test", "spec"]
+                .iter()
+                .map(|root| Path::new(root).join(import_path))
+                .collect();
+            let own = source_dir.join(import_path);
+            if !candidates.contains(&own) {
+                candidates.push(own);
+            }
+            candidates
         }
         Language::Bash => path_candidates(source_dir, import_path, &[Path::new("")]),
         // Package imports: the files declaring the package, known from the
         // project walk (`ImportContext::add_source_file`, #147).
         Language::Go => return context.resolve_go_import(import_path),
-        Language::Java | Language::Kotlin | Language::Scala | Language::CSharp => {
-            return context.resolve_package_import(import_path, '.');
+        Language::Java | Language::Kotlin | Language::Scala | Language::CSharp | Language::Php => {
+            return context.resolve_package_import(import_path, language);
         }
-        Language::Php => return context.resolve_package_import(import_path, '\\'),
         // Elixir aliases name modules, not files; data files import nothing.
         Language::Elixir | Language::Html | Language::Json | Language::Yaml | Language::Toml => {
             return None;
@@ -248,18 +258,45 @@ impl RustModule {
 }
 
 /// Whether `dir` holds the child modules of a crate root: the crate's `src/`
-/// (`lib.rs` / `main.rs`), a `src/bin/<name>/` or an integration test
-/// directory. `super` from such a module leads nowhere.
-fn rust_dir_is_crate_root(dir: &Path, src_dir: Option<&str>) -> bool {
+/// (`lib.rs` / `main.rs`), a `src/bin/<name>/`, or outside `src/` a
+/// `tests/` / `examples/` / `benches/` directory (each `x.rs` there is a
+/// crate root) or a `tests/<name>/` holding a `main.rs` (`tests/common/`
+/// is a plain module directory). `super` from such a module leads nowhere,
+/// `crate::` starts there.
+fn rust_dir_is_crate_root(dir: &Path, src_dir: Option<&str>, project_root: &Path) -> bool {
     if src_dir.is_some_and(|src| Path::new(src) == dir) {
         return true;
     }
+    let name = dir.file_name().and_then(|n| n.to_str());
     let parent_name = dir
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str());
+    const TARGET_DIRS: &[&str] = &["tests", "examples", "benches"];
     parent_name == Some("bin")
-        || (matches!(parent_name, Some("tests" | "examples" | "benches")) && src_dir.is_none())
+        || (src_dir.is_none()
+            && (name.is_some_and(|n| TARGET_DIRS.contains(&n))
+                || (parent_name.is_some_and(|n| TARGET_DIRS.contains(&n))
+                    && project_root.join(dir).join("main.rs").is_file())))
+}
+
+/// The directory of the crate root module of the file: the file's own
+/// module directory for a crate root, else the nearest ancestor directory
+/// that is one. `src/bin/tool/cli.rs` → `src/bin/tool`, `tests/common/mod.rs`
+/// → `tests`, `crates/x/src/a/b.rs` → `crates/x/src`.
+fn rust_crate_root_dir(
+    module: &RustModule,
+    file_dir: &Path,
+    src_dir: Option<&str>,
+    project_root: &Path,
+) -> Option<PathBuf> {
+    if module.crate_root {
+        return Some(module.dir.clone());
+    }
+    file_dir
+        .ancestors()
+        .find(|dir| rust_dir_is_crate_root(dir, src_dir, project_root))
+        .map(Path::to_path_buf)
 }
 
 /// Files that may hold the module `segments` under `dir` (`dir/a/b.rs`,
@@ -287,26 +324,41 @@ fn rust_module_candidates(dir: &Path, segments: &[&str], crate_root: bool) -> Ve
     candidates
 }
 
-/// `crate::` paths from the crate's `src/`, `self::` paths and bare module
-/// paths (`mod util;`, `use util::f`) from the file's own module directory,
-/// `super::` paths from the parent module's (#143); a file path (`#[path =
-/// "x/y.rs"] mod m;`) from the file's directory. Glob and brace paths are
-/// left to the extractor, which expands them.
-fn resolve_rust_import(source_rel_path: &str, import_path: &str) -> Option<Vec<PathBuf>> {
+/// `crate::` paths from the crate root's directory (`src/`, `src/bin/<name>/`,
+/// `tests/`), `self::` paths and bare module paths (`mod util;`, `use
+/// util::f`) from the file's own module directory, `super::` paths from the
+/// parent module's (#143); a file path (`#[path = "x/y.rs"] mod m;`) from
+/// the file's directory, or from its module directory when the attribute
+/// was written inside an inline module of a non-`mod.rs` file. Glob and
+/// brace paths are left to the extractor, which expands them.
+fn resolve_rust_import(
+    source_rel_path: &str,
+    import_path: &str,
+    project_root: &Path,
+) -> Option<Vec<PathBuf>> {
     if import_path.contains('{') || import_path.contains('*') {
         return None;
     }
     let file_dir = Path::new(source_rel_path).parent().unwrap_or(Path::new(""));
+    let module = RustModule::of(source_rel_path)?;
     if import_path.contains('/') || import_path.ends_with(".rs") {
-        return Some(vec![file_dir.join(import_path)]);
+        let mut candidates = vec![file_dir.join(import_path)];
+        let in_module_dir = module.dir.join(import_path);
+        if !candidates.contains(&in_module_dir) {
+            candidates.push(in_module_dir);
+        }
+        return Some(candidates);
     }
 
     let segments: Vec<&str> = import_path.split("::").collect();
     let src_dir = find_rust_src_dir(source_rel_path);
-    let module = RustModule::of(source_rel_path)?;
 
     let (dir, crate_root, rest): (PathBuf, bool, &[&str]) = match segments[0] {
-        "crate" => (PathBuf::from(src_dir.as_deref()?), true, &segments[1..]),
+        "crate" => (
+            rust_crate_root_dir(&module, file_dir, src_dir.as_deref(), project_root)?,
+            true,
+            &segments[1..],
+        ),
         // `self` alone is the file itself, not a dependency.
         "self" if segments.len() == 1 => return None,
         "self" => (module.dir, module.crate_root, &segments[1..]),
@@ -319,7 +371,7 @@ fn resolve_rust_import(source_rel_path: &str, import_path: &str) -> Option<Vec<P
                     return None;
                 }
                 dir = dir.parent()?.to_path_buf();
-                crate_root = rust_dir_is_crate_root(&dir, src_dir.as_deref());
+                crate_root = rust_dir_is_crate_root(&dir, src_dir.as_deref(), project_root);
                 consumed += 1;
             }
             (dir, crate_root, &segments[consumed..])
@@ -584,8 +636,13 @@ mod tests {
             "src/bin/tool/cli.rs",
             "src/bin/quick.rs",
             "src/bin/flags.rs",
+            "src/outer/child.rs",
+            "src/a.rs",
+            "src/a/outer/x.rs",
             "tests/common/mod.rs",
             "tests/smoke.rs",
+            "tests/integration/main.rs",
+            "tests/integration/helpers.rs",
         ]);
         let resolve =
             |from: &str, path: &str| resolve_local_import(from, path, Language::Rust, dir.path());
@@ -625,6 +682,18 @@ mod tests {
         assert_eq!(
             resolve("src/lib.rs", "shapes/circle.rs").as_deref(),
             Some("src/shapes/circle.rs")
+        );
+        // `mod outer { mod child; }` in `lib.rs` is stored `self::outer::child`
+        // and loads `outer/child.rs`; `mod outer { #[path = "x.rs"] mod c; }`
+        // in the non-`mod.rs` file `a.rs` is stored `outer/x.rs` and loads
+        // `a/outer/x.rs`.
+        assert_eq!(
+            resolve("src/lib.rs", "self::outer::child").as_deref(),
+            Some("src/outer/child.rs")
+        );
+        assert_eq!(
+            resolve("src/a.rs", "outer/x.rs").as_deref(),
+            Some("src/a/outer/x.rs")
         );
         // `self::`: the file's own module directory, the last segment may be an item.
         assert_eq!(
@@ -676,6 +745,35 @@ mod tests {
             resolve("src/sub/leaf.rs", "crate").as_deref(),
             Some("src/lib.rs")
         );
+        // `crate::` is anchored at the crate root of the file, not at the
+        // nearest `src/`: a `src/bin/<name>/` binary, an integration test.
+        assert_eq!(
+            resolve("src/bin/tool/main.rs", "crate::cli").as_deref(),
+            Some("src/bin/tool/cli.rs")
+        );
+        assert_eq!(
+            resolve("src/bin/tool/cli.rs", "crate").as_deref(),
+            Some("src/bin/tool/main.rs")
+        );
+        assert_eq!(
+            resolve("tests/smoke.rs", "crate::common::helper").as_deref(),
+            Some("tests/common/mod.rs")
+        );
+        assert_eq!(
+            resolve("tests/integration/main.rs", "crate::helpers::f").as_deref(),
+            Some("tests/integration/helpers.rs")
+        );
+        assert_eq!(
+            resolve("tests/integration/helpers.rs", "crate").as_deref(),
+            Some("tests/integration/main.rs")
+        );
+        // `tests/common/` holds no `main.rs`: a module of the `tests/` roots,
+        // whose parent is a crate root.
+        assert_eq!(
+            resolve("tests/common/mod.rs", "super::smoke").as_deref(),
+            Some("tests/smoke.rs")
+        );
+        assert_eq!(resolve("tests/common/mod.rs", "super::super::x"), None);
     }
 
     /// #142: C includes and Ruby requires are relative to the including file
@@ -691,7 +789,12 @@ mod tests {
             "lib/app.rb",
             "lib/helpers.rb",
             "lib/app/models.rb",
+            "lib/app/helpers.rb",
             "lib/other.rb",
+            "spec/spec_helper.rb",
+            "spec/models/user_spec.rb",
+            "test/test_helper.rb",
+            "test/app_test.rb",
         ]);
         let c = |from: &str, path: &str| resolve_local_import(from, path, Language::C, dir.path());
         assert_eq!(c("src/main.c", "util.h").as_deref(), Some("src/util.h"));
@@ -721,6 +824,26 @@ mod tests {
             Some("lib/app/models.rb")
         );
         assert_eq!(rb("lib/app.rb", "json"), None);
+        // `require 'helpers'` goes through the load path (`lib/` first), not
+        // the sibling; `require_relative 'helpers'` (stored `./helpers`) only
+        // looks next to the file.
+        assert_eq!(
+            rb("lib/app/models.rb", "helpers").as_deref(),
+            Some("lib/helpers.rb")
+        );
+        assert_eq!(
+            rb("lib/app/models.rb", "./helpers").as_deref(),
+            Some("lib/app/helpers.rb")
+        );
+        assert_eq!(rb("lib/app/models.rb", "./other"), None, "not a sibling");
+        assert_eq!(
+            rb("spec/models/user_spec.rb", "spec_helper").as_deref(),
+            Some("spec/spec_helper.rb")
+        );
+        assert_eq!(
+            rb("test/app_test.rb", "test_helper").as_deref(),
+            Some("test/test_helper.rb")
+        );
     }
 
     #[test]
@@ -852,6 +975,8 @@ mod tests {
             "src/App/Services/Svc.php",
             "Services/Svc.cs",
             "Models/All.cs",
+            "jvm/App/Models/User.java",
+            "myapp.go",
             "internal/store/store.go",
             "internal/store/sqlite.go",
             "internal/store/store_test.go",
@@ -899,7 +1024,13 @@ mod tests {
             "Models/All.cs",
             "namespace App.Models\n{\n}\n",
         );
+        add(
+            &mut context,
+            "jvm/App/Models/User.java",
+            "package App.Models;\n",
+        );
         for go in [
+            "myapp.go",
             "internal/store/store.go",
             "internal/store/sqlite.go",
             "internal/store/store_test.go",
@@ -973,12 +1104,36 @@ mod tests {
             ),
             None
         );
-        // C#: `using App.Models;` names the namespace, one file declares it.
+        // C#: `using App.Models;` names the namespace, one `.cs` file declares
+        // it; the Java package of the same name is another ecosystem, and a
+        // Java import of it never lands on the C# file.
         assert_eq!(
             resolve(&context, "Services/Svc.cs", "App.Models").as_deref(),
             Some("Models/All.cs")
         );
+        assert_eq!(
+            resolve(&context, "Services/Svc.cs", "App.Models.User").as_deref(),
+            Some("Models/All.cs")
+        );
         assert_eq!(resolve(&context, "Services/Svc.cs", "System.Linq"), None);
+        assert_eq!(
+            resolve(
+                &context,
+                "api/src/main/java/com/acme/api/Server.java",
+                "App.Models.User"
+            )
+            .as_deref(),
+            Some("jvm/App/Models/User.java")
+        );
+        assert_eq!(
+            resolve(
+                &context,
+                "api/src/main/java/com/acme/api/Server.java",
+                "App.Services.Svc"
+            ),
+            None,
+            "declared by a C# file only"
+        );
         // Go without go.mod: a suffix of the import path is a package directory;
         // the package file is `<dir>.go`, else `doc.go`, else the first file.
         assert_eq!(
@@ -1008,6 +1163,11 @@ mod tests {
         assert_eq!(
             resolve(&context, "cmd/app/main.go", "myapp/internal/store"),
             None
+        );
+        // The module itself is the root package, `<module name>.go` first.
+        assert_eq!(
+            resolve(&context, "cmd/app/main.go", "example.com/myapp").as_deref(),
+            Some("myapp.go")
         );
     }
 }

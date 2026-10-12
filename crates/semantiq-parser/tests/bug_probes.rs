@@ -1066,7 +1066,7 @@ public:
                     ImportKind::External
                 ),
                 (
-                    "helpers".to_string(),
+                    "./helpers".to_string(),
                     Some("helpers".to_string()),
                     ImportKind::Local
                 ),
@@ -1295,6 +1295,109 @@ public:
                 std("net/http"),
                 local("myapp/internal/store"),
                 external("github.com/x/y"),
+            ]
+        );
+    }
+
+    /// Review of #172: a `mod child;` written inside an inline module loads
+    /// `outer/child.rs`, so it is stored `self::outer::child` (`outer/x.rs`
+    /// for a `#[path]` attribute); `require_relative 'x'` is stored `./x` so
+    /// the resolver tells it from `require 'x'`; an import of the module path
+    /// of `go.mod` itself is the local root package; a C# namespace and a
+    /// JVM package of the same name are separate ecosystems.
+    #[test]
+    fn b27_inline_mod_declarations_relative_requires_and_ecosystems() {
+        use semantiq_parser::ImportContext;
+        let rust = extract_file(
+            "src/lib.rs",
+            "mod top;\nmod outer {\n    mod child;\n    #[path = \"x.rs\"]\n    mod renamed;\n    \
+             mod deeper { pub mod leaf; }\n}\n",
+        );
+        assert_eq!(
+            rust.imports,
+            vec![
+                (
+                    "top".to_string(),
+                    Some("top".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::outer::child".to_string(),
+                    Some("child".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "outer/x.rs".to_string(),
+                    Some("renamed".to_string()),
+                    ImportKind::Local
+                ),
+                (
+                    "self::outer::deeper::leaf".to_string(),
+                    Some("leaf".to_string()),
+                    ImportKind::Local
+                ),
+            ]
+        );
+
+        let ruby = extract_file(
+            "lib/app.rb",
+            "require 'helpers'\nrequire_relative 'helpers'\nrequire_relative '../other'\n",
+        );
+        let paths: Vec<&str> = ruby.imports.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(paths, vec!["helpers", "./helpers", "../other"]);
+        assert_eq!(ruby.imports[0].2, ImportKind::External);
+        assert_eq!(ruby.imports[1].2, ImportKind::Local);
+
+        let mut context = ImportContext {
+            go_module: Some("example.com/myapp".to_string()),
+            ..ImportContext::default()
+        };
+        context.add_source_file("myapp.go", Language::Go, "");
+        context.add_source_file("cmd/app/main.go", Language::Go, "");
+        context.add_source_file(
+            "Models/User.cs",
+            Language::CSharp,
+            "namespace App.Models;\n",
+        );
+        context.add_source_file(
+            "jvm/App/Services/Svc.java",
+            Language::Java,
+            "package App.Services;\n",
+        );
+        assert_eq!(context.go_package_dir("example.com/myapp"), Some(""));
+        assert_eq!(
+            context.resolve_go_import("example.com/myapp").as_deref(),
+            Some("myapp.go")
+        );
+        assert_eq!(context.go_package_dir("example.com/myapplication"), None);
+        let kinds = |path: &str, source: &str| {
+            let lang = Language::from_path(Path::new(path)).unwrap();
+            let mut support = LanguageSupport::new().unwrap();
+            let tree = support.parse(lang, source).unwrap();
+            ImportExtractor::extract_with_context(&tree, source, lang, &context)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.path, i.kind))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(
+                "Services/Svc.cs",
+                "using App.Models;\nusing App.Services;\n"
+            ),
+            vec![
+                ("App.Models".to_string(), ImportKind::Local),
+                ("App.Services".to_string(), ImportKind::External),
+            ]
+        );
+        assert_eq!(
+            kinds(
+                "jvm/App/A.java",
+                "import App.Models.User;\nimport App.Services.Svc;\n"
+            ),
+            vec![
+                ("App.Models.User".to_string(), ImportKind::External),
+                ("App.Services.Svc".to_string(), ImportKind::Local),
             ]
         );
     }

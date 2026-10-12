@@ -161,16 +161,26 @@ confidence of `impact` / `calls` see.
   resolve from the module tree the file layout defines, and a `super::` path
   written inside an inline module (`mod tests { use super::helper; }`) is
   stored rebased on the file's module (`self::helper`), so it points at the
-  right file (#143).
+  right file; a `mod child;` written inside `mod outer { }` is stored
+  `self::outer::child` (`outer/x.rs` with a `#[path]` attribute), which is
+  the file Rust loads; `crate::` paths are anchored at the file's crate root
+  (`src/bin/<name>/main.rs`, `tests/<name>.rs`), not at the nearest `src/`
+  (#143).
 - C/C++ `#include "x.h"` and Ruby `require_relative 'x'` resolve without a
-  leading `./`: next to the including file, then from the project root
-  (`include/` for C, `lib/` for Ruby `require`) (#142).
+  leading `./`: an include is looked up next to the including file, then from
+  the project root and `include/`; a `require_relative` path is stored with
+  the `./` prefix (`deps` shows `./x`) and only resolves next to the
+  requiring file, while `require 'x'` goes through `lib/`, the root, `test/`
+  and `spec/` before the file's own directory (#142).
 - Imports of the project's own packages are `local` and resolved for Java,
   Kotlin, Scala, C#, PHP and Go without a `go.mod`: the indexer records the
   `package` / `namespace` declarations of the project's files (and the
   directories of its Go files) when it starts, and maps an import to the
   file named after the imported member, else to the single file of the
-  package; `using X = A.B;` (C#) imports `A.B` (#147).
+  package; `using X = A.B;` (C#) imports `A.B`. A C# namespace and a JVM
+  package sharing a name are kept apart (a `using` only sees `.cs` files),
+  and an import of the `go.mod` module path itself resolves to the root
+  package (#147).
 - Absolute Python imports of the project's own modules (`from app.models
   import User`) are `local` and resolved, from the importing file's
   directory, the project root and `src/`; in general an import that names a

@@ -200,47 +200,60 @@ impl ImportContext {
         packages
     }
 
-    /// The longest declared package that `path` (segments separated by
-    /// `sep`) names or lies in, with the files declaring it: the path itself
+    /// The longest package declared by files of the ecosystem of `language`
+    /// that `path` names or lies in, with those files: the path itself
     /// (`using App.Models;`, a wildcard), a member of it (`a.b.C`) or a member
     /// of a member whose file is named after the first (`import static
     /// a.b.C.m`: `C.java`). A longer undeclared prefix (`a.b.models.X` when
     /// only `a.b` is declared) is another package of the same group: not
-    /// local.
-    fn package_of<'a>(&'a self, path: &str, sep: char) -> Option<(usize, &'a [String])> {
+    /// local. A C# namespace and a JVM package may share a name in one
+    /// repository: a `using` only sees `.cs` files, a Java / Kotlin / Scala
+    /// import only JVM files.
+    fn package_of(&self, path: &str, language: Language) -> Option<(usize, Vec<&String>)> {
+        let (sep, extensions) = package_ecosystem(language)?;
         let segments: Vec<&str> = path.split(sep).collect();
         let sep = sep.to_string();
         for k in (1..=segments.len()).rev() {
-            let Some(files) = self.local_packages.get(&segments[..k].join(&sep)) else {
+            let Some(declaring) = self.local_packages.get(&segments[..k].join(&sep)) else {
                 continue;
             };
+            let files: Vec<&String> = declaring
+                .iter()
+                .filter(|f| extensions.contains(&file_extension(f)))
+                .collect();
+            if files.is_empty() {
+                continue;
+            }
             let fits = match segments.len() - k {
                 0 | 1 => true,
                 2 => files.iter().any(|f| file_stem(f) == segments[k]),
                 _ => false,
             };
-            return fits.then_some((k, files.as_slice()));
+            return fits.then_some((k, files));
         }
         None
     }
 
-    /// Whether `path` names a package of the project or a member of one.
-    pub fn is_local_package(&self, path: &str, sep: char) -> bool {
-        self.package_of(path, sep).is_some()
+    /// Whether `path`, an import written in `language`, names a package of
+    /// the project or a member of one.
+    pub fn is_local_package(&self, path: &str, language: Language) -> bool {
+        self.package_of(path, language).is_some()
     }
 
-    /// The file of the project defining `path`: the file of the package named
-    /// after the imported member (`com.acme.models.User` → `User.java`),
-    /// else, for the package itself or a member whose file is named
-    /// differently (Kotlin / Scala top-level declarations, C# namespaces),
-    /// the single file declaring the package, if there is one.
-    pub fn resolve_package_import(&self, path: &str, sep: char) -> Option<String> {
-        let (k, files) = self.package_of(path, sep)?;
+    /// The file of the project defining `path`, an import written in
+    /// `language`: the file of the package named after the imported member
+    /// (`com.acme.models.User` → `User.java`), else, for the package itself
+    /// or a member whose file is named differently (Kotlin / Scala top-level
+    /// declarations, C# namespaces), the single file declaring the package,
+    /// if there is one.
+    pub fn resolve_package_import(&self, path: &str, language: Language) -> Option<String> {
+        let (k, files) = self.package_of(path, language)?;
+        let (sep, _) = package_ecosystem(language)?;
         let segments: Vec<&str> = path.split(sep).collect();
         if let Some(member) = segments.get(k)
             && let Some(file) = files.iter().find(|f| file_stem(f) == *member)
         {
-            return Some(file.clone());
+            return Some((*file).clone());
         }
         (segments.len() - k <= 1 && files.len() == 1).then(|| files[0].clone())
     }
@@ -253,9 +266,12 @@ impl ImportContext {
     pub fn go_package_dir(&self, import_path: &str) -> Option<&str> {
         let key = |dir: &str| self.go_packages.get_key_value(dir).map(|(k, _)| k.as_str());
         if let Some(module) = &self.go_module {
-            return key(import_path
-                .strip_prefix(module.as_str())?
-                .strip_prefix('/')?);
+            // The module itself (`import "example.com/myapp"`) is the root
+            // package, recorded under `""`.
+            return match import_path.strip_prefix(module.as_str())? {
+                "" => key(""),
+                rest => key(rest.strip_prefix('/')?),
+            };
         }
         let (first, mut rest) = import_path.split_once('/')?;
         if first.contains('.') || GO_STD_ROOTS.contains(&first) {
@@ -270,11 +286,19 @@ impl ImportContext {
     }
 
     /// The file standing for the Go package `import_path` names:
-    /// `<dir>/<dir name>.go`, else `doc.go`, else the first non-test file.
+    /// `<dir>/<dir name>.go` (for the root package, the last segment of the
+    /// module path), else `doc.go`, else the first non-test file.
     pub fn resolve_go_import(&self, import_path: &str) -> Option<String> {
         let dir = self.go_package_dir(import_path)?;
         let files = self.go_packages.get(dir)?;
-        let name = dir.rsplit('/').next().unwrap_or(dir);
+        let name = if dir.is_empty() {
+            self.go_module
+                .as_deref()
+                .map(|module| module.rsplit('/').next().unwrap_or(module))
+                .unwrap_or("")
+        } else {
+            dir.rsplit('/').next().unwrap_or(dir)
+        };
         files
             .iter()
             .find(|f| file_stem(f) == name)
@@ -288,6 +312,26 @@ impl ImportContext {
 fn file_stem(rel_path: &str) -> &str {
     let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
     name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+/// `a/b/Name.ext` → `ext` (`""` without one).
+fn file_extension(rel_path: &str) -> &str {
+    let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    name.rsplit_once('.').map_or("", |(_, ext)| ext)
+}
+
+/// The package separator of `language` and the extensions of the files
+/// whose declarations its imports can name: the JVM languages see each
+/// other's packages, C# and PHP only their own.
+fn package_ecosystem(language: Language) -> Option<(char, &'static [&'static str])> {
+    match language {
+        Language::Java | Language::Kotlin | Language::Scala => {
+            Some(('.', &["java", "kt", "kts", "scala"]))
+        }
+        Language::CSharp => Some(('.', &["cs"])),
+        Language::Php => Some(('\\', &["php"])),
+        _ => None,
+    }
 }
 
 /// The `module` directive of `<project_root>/go.mod`, if any.
@@ -382,7 +426,9 @@ impl ImportExtractor {
     /// `use` declarations, one `Import` per leaf of a brace group, and module
     /// declarations without a body (`mod x;`, `#[path = "a/b.rs"] mod x;`):
     /// the way a crate declares its file tree, a `Local` import of `x` (or of
-    /// the attribute's file path) named `x` (#143).
+    /// the attribute's file path) named `x` (#143). Inside an inline module
+    /// (`mod outer { mod x; }`), the file lives under `outer/`: the import is
+    /// `self::outer::x`, or `outer/<path>` for a `#[path]` attribute.
     fn extract_rust_import(node: &Node, source: &str) -> Vec<Import> {
         if node.kind() == "mod_item" {
             return Self::extract_rust_mod_declaration(node, source)
@@ -433,7 +479,8 @@ impl ImportExtractor {
     }
 
     /// `mod x;`: a `mod_item` without a `body`. The path is the module name,
-    /// or the file path of a preceding `#[path = "..."]` attribute.
+    /// or the file path of a preceding `#[path = "..."]` attribute, both
+    /// under the enclosing inline modules.
     fn extract_rust_mod_declaration(node: &Node, source: &str) -> Option<Import> {
         if node.child_by_field_name("body").is_some() {
             return None;
@@ -444,7 +491,7 @@ impl ImportExtractor {
             .utf8_text(src)
             .ok()?
             .to_string();
-        let mut path = name.clone();
+        let mut path: Option<String> = None;
         let mut previous = node.prev_sibling();
         while let Some(sibling) = previous {
             if sibling.kind() != "attribute_item" {
@@ -460,10 +507,17 @@ impl ImportExtractor {
                 && value.kind() == "string_literal"
                 && let Ok(text) = value.utf8_text(src)
             {
-                path = text.trim_matches('"').to_string();
+                path = Some(text.trim_matches('"').to_string());
             }
             previous = sibling.prev_sibling();
         }
+        let inline_modules = Self::rust_inline_modules(node, source);
+        let path = match path {
+            Some(file) if inline_modules.is_empty() => file,
+            Some(file) => format!("{}/{file}", inline_modules.join("/")),
+            None if inline_modules.is_empty() => name.clone(),
+            None => format!("self::{}::{name}", inline_modules.join("::")),
+        };
         Some(Import {
             path,
             name: Some(name),
@@ -961,7 +1015,7 @@ impl ImportExtractor {
             if child.kind() == "scoped_identifier" {
                 let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
-                let kind = if context.is_local_package(&path, '.') {
+                let kind = if context.is_local_package(&path, Language::Java) {
                     ImportKind::Local
                 } else if path.starts_with("java.") || path.starts_with("javax.") {
                     ImportKind::Std
@@ -1084,7 +1138,7 @@ impl ImportExtractor {
                 let name = alias.or_else(|| path.split('\\').next_back().map(String::from));
                 // PHP has no standard library of namespaces: a namespace is
                 // the project's own (#147) or a dependency's.
-                let kind = if context.is_local_package(&path, '\\') {
+                let kind = if context.is_local_package(&path, Language::Php) {
                     ImportKind::Local
                 } else {
                     ImportKind::External
@@ -1102,7 +1156,9 @@ impl ImportExtractor {
 
     /// `require 'x'` and `require_relative 'x'`: a `call` without receiver
     /// whose `method` is one of the two (#84: `requirements.push("json")`
-    /// also starts with `require`).
+    /// also starts with `require`). A `require_relative` path is stored with
+    /// a leading `./` (`./x`) so the resolver looks for it next to the file
+    /// only, where `require 'x'` goes through the load path.
     fn extract_ruby_import(node: &Node, source: &str) -> Option<Import> {
         if node.kind() != "call" || node.child_by_field_name("receiver").is_some() {
             return None;
@@ -1126,9 +1182,12 @@ impl ImportExtractor {
                 for arg in child.children(&mut inner_cursor) {
                     if arg.kind() == "string" {
                         let path_text = arg.utf8_text(source.as_bytes()).ok()?;
-                        let path = path_text
+                        let mut path = path_text
                             .trim_matches(|c| c == '"' || c == '\'')
                             .to_string();
+                        if method == "require_relative" && !path.starts_with('.') {
+                            path = format!("./{path}");
+                        }
 
                         let kind = if method == "require_relative" || path.starts_with('.') {
                             ImportKind::Local
@@ -1171,7 +1230,7 @@ impl ImportExtractor {
             {
                 let path = child.utf8_text(source.as_bytes()).ok()?.to_string();
 
-                let kind = if context.is_local_package(&path, '.') {
+                let kind = if context.is_local_package(&path, Language::CSharp) {
                     ImportKind::Local
                 } else if path == "System" || path.starts_with("System.") {
                     ImportKind::Std
@@ -1221,7 +1280,7 @@ impl ImportExtractor {
         let path = path?;
         let wildcard = node.utf8_text(src).ok()?.trim_end().ends_with(".*");
 
-        let kind = if context.is_local_package(&path, '.') {
+        let kind = if context.is_local_package(&path, Language::Kotlin) {
             ImportKind::Local
         } else if ["kotlin.", "kotlinx.", "java.", "javax."]
             .iter()
@@ -1309,7 +1368,7 @@ impl ImportExtractor {
         leaves
             .into_iter()
             .map(|(path, name)| {
-                let kind = if context.is_local_package(&path, '.') {
+                let kind = if context.is_local_package(&path, Language::Scala) {
                     ImportKind::Local
                 } else if path.starts_with("scala.") || path.starts_with("java.") {
                     ImportKind::Std
