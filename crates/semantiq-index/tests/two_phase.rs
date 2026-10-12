@@ -387,11 +387,13 @@ fn background_embedder_polls_for_chunks_pending_without_a_notification() {
         quick_config(),
     )
     .unwrap();
-    // No notify: the startup backlog is picked up by the first poll.
+    // No notify: the startup backlog is picked up by the first poll. The
+    // pass is over once the last batch is stored and the progress cleared,
+    // two steps apart.
     assert!(wait_until(Duration::from_secs(10), || {
         store.embedding_counts().unwrap().pending() == 0
+            && embedder.progress().in_progress().is_none()
     }));
-    assert!(embedder.progress().in_progress().is_none());
 
     // Phase 1 run by another process (the CLI refresh) while the server is
     // up: still no notify, still embedded.
