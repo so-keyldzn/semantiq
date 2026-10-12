@@ -49,3 +49,5 @@ semantiq-embeddings = { path = "../semantiq-embeddings", features = ["test-stub"
 semantiq-index = { path = "../semantiq-index", features = ["test-support"] }
 tempfile.workspace = true
 http-body-util.workspace = true
+# tests/update.rs computes the `.sha256` sidecar of its fake release.
+sha2 = "0.10"

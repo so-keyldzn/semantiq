@@ -5,7 +5,11 @@
 //! checksum, extract the binary, and atomically replace the running executable.
 //!
 //! The integrity check is mandatory — an archive whose checksum cannot be
-//! fetched or does not match is never extracted or installed.
+//! fetched or does not match is never extracted or installed. The `.sha256`
+//! sidecar is served from the same origin as the archive, so it detects a
+//! corrupted or truncated download, not a replaced release: authenticity rests
+//! on TLS and on the build provenance attestations the release workflow
+//! publishes (`gh attestation verify <archive> --repo so-keyldzn/semantiq`).
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
@@ -25,6 +29,55 @@ const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES: u64 = 1024;
 /// Timeout for the fast version/checksum metadata requests.
 const META_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cap on the GitHub "latest release" JSON document fetched through the
+/// [`BASE_URL_ENV`] override.
+const MAX_LATEST_JSON_BYTES: u64 = 64 * 1024;
+
+/// Test hook: when this variable is set, the whole update flow talks to
+/// `<base>/releases/latest` (GitHub's "latest release" JSON, `tag_name`) and
+/// `<base>/releases/download/v<version>/<archive>` instead of GitHub, over
+/// plain HTTP if the base says so. It lets the CLI tests drive
+/// download → checksum → extract → swap against a local server; never set it
+/// in production.
+pub const BASE_URL_ENV: &str = "SEMANTIQ_UPDATE_BASE_URL";
+
+/// Where releases are looked up and downloaded from.
+struct ReleaseSource {
+    /// Prefix of the releases API (`…/releases/latest`).
+    api_base: String,
+    /// Prefix of the asset URLs (`…/releases/download/v<version>/<archive>`).
+    download_base: String,
+    /// Refuse plaintext HTTP; only the test override turns it off.
+    https_only: bool,
+}
+
+fn release_source() -> ReleaseSource {
+    match std::env::var(BASE_URL_ENV) {
+        Ok(base) if !base.trim().is_empty() => {
+            let base = base.trim().trim_end_matches('/').to_string();
+            ReleaseSource {
+                api_base: base.clone(),
+                download_base: base,
+                https_only: false,
+            }
+        }
+        _ => ReleaseSource {
+            api_base: format!("https://api.github.com/repos/{REPO}"),
+            download_base: format!("https://github.com/{REPO}"),
+            https_only: true,
+        },
+    }
+}
+
+/// The latest version published at the overridden source: the `tag_name` of
+/// its `releases/latest` document, without the `v` prefix.
+fn fetch_latest_from(source: &ReleaseSource) -> Result<String> {
+    let url = format!("{}/releases/latest", source.api_base);
+    let body = download_bytes(&url, META_TIMEOUT, MAX_LATEST_JSON_BYTES, source.https_only)?;
+    let body = String::from_utf8(body).context("latest release document is not UTF-8")?;
+    // Same parser as the GitHub path (#110): an empty tag is an error.
+    version_check::parse_release_tag(&body)
+}
 
 /// Options controlling an update run.
 #[derive(Debug, Clone, Copy)]
@@ -70,13 +123,13 @@ fn binary_name() -> &'static str {
 
 /// Build a configured ureq agent. ureq follows redirects by default, which is
 /// required since GitHub release downloads redirect to a CDN.
-fn agent(timeout: Duration) -> ureq::Agent {
+fn agent(timeout: Duration, https_only: bool) -> ureq::Agent {
     ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(timeout))
             // Reject plaintext HTTP and any redirect that downgrades to it:
             // integrity rests entirely on the TLS channel.
-            .https_only(true)
+            .https_only(https_only)
             .build(),
     )
 }
@@ -91,8 +144,13 @@ fn unique_scratch_name(prefix: &str) -> String {
     format!("{prefix}-{}-{}", std::process::id(), nanos)
 }
 
-fn download_bytes(url: &str, timeout: Duration, max_bytes: u64) -> Result<Vec<u8>> {
-    let response = agent(timeout)
+fn download_bytes(
+    url: &str,
+    timeout: Duration,
+    max_bytes: u64,
+    https_only: bool,
+) -> Result<Vec<u8>> {
+    let response = agent(timeout, https_only)
         .get(url)
         .header("User-Agent", "semantiq-self-update")
         .call()
@@ -209,8 +267,13 @@ fn replace_current_exe(new_bin: &Path) -> Result<()> {
 pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> {
     println!("Checking for updates...");
 
-    let latest = version_check::fetch_latest_uncached(META_TIMEOUT)
-        .context("could not determine the latest release on GitHub")?;
+    let source = release_source();
+    let latest = if source.https_only {
+        version_check::fetch_latest_uncached(META_TIMEOUT)
+            .context("could not determine the latest release on GitHub")?
+    } else {
+        fetch_latest_from(&source)?
+    };
 
     let newer = version_check::is_version_newer(&latest, current_version);
     debug!(current = current_version, latest = %latest, newer, "update check");
@@ -256,17 +319,30 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
     check_install_location(&current)?;
 
     let archive_name = format!("semantiq-v{latest}-{target}.tar.gz");
-    let base = format!("https://github.com/{REPO}/releases/download/v{latest}/{archive_name}");
+    let base = format!(
+        "{}/releases/download/v{latest}/{archive_name}",
+        source.download_base
+    );
     let checksum_url = format!("{base}.sha256");
 
     println!("Downloading {archive_name}...");
-    let archive_bytes = download_bytes(&base, DOWNLOAD_TIMEOUT, MAX_ARCHIVE_BYTES)
-        .with_context(|| format!("failed to download {archive_name}"))?;
+    let archive_bytes = download_bytes(
+        &base,
+        DOWNLOAD_TIMEOUT,
+        MAX_ARCHIVE_BYTES,
+        source.https_only,
+    )
+    .with_context(|| format!("failed to download {archive_name}"))?;
 
     // Integrity verification: never install an unverified binary.
-    let checksum_raw = download_bytes(&checksum_url, META_TIMEOUT, MAX_CHECKSUM_BYTES)
-        .map_err(|e| anyhow!("could not verify integrity (missing {archive_name}.sha256): {e}"))
-        .and_then(|b| String::from_utf8(b).context("checksum file is not valid UTF-8"))?;
+    let checksum_raw = download_bytes(
+        &checksum_url,
+        META_TIMEOUT,
+        MAX_CHECKSUM_BYTES,
+        source.https_only,
+    )
+    .map_err(|e| anyhow!("could not verify integrity (missing {archive_name}.sha256): {e}"))
+    .and_then(|b| String::from_utf8(b).context("checksum file is not valid UTF-8"))?;
     let expected = parse_expected_sha256(&checksum_raw)?;
     let actual = sha256_hex(&archive_bytes);
     if actual != expected {
