@@ -1,22 +1,31 @@
 use crate::IndexStore;
 use crate::exclusions::{
-    WalkFailures, is_file_too_large, project_walker, project_walker_with, should_exclude_path,
+    WalkFailures, exceeds_indexed_size, is_file_too_large, project_walker, project_walker_with,
+    should_exclude_path,
 };
 use crate::paths::to_relative_string;
-use crate::store::DependencyInsert;
+use crate::store::now_secs;
+use crate::store::{DependencyInsert, FileIndexWrite, FileStamp, FileStampRefresh};
 use crate::watcher::{FileEvent, FileWatcher};
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use semantiq_parser::{
-    ChunkExtractor, ImportContext, ImportExtractor, ImportKind, Language, LanguageSupport,
-    ReferenceExtractor, StructureExtractor, SymbolExtractor, resolve_import,
+    ChunkExtractor, CodeChunk, FileStructure, Import, ImportContext, ImportExtractor, ImportKind,
+    Language, LanguageSupport, Reference, ReferenceExtractor, StructureExtractor, Symbol,
+    SymbolExtractor, resolve_import,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 use tracing::{debug, error, info, warn};
+
+/// Number of parser threads of `initial_index`; the default is the CPU count,
+/// capped at [`MAX_DEFAULT_INDEX_THREADS`].
+pub const INDEX_THREADS_ENV: &str = "SEMANTIQ_INDEX_THREADS";
+const MAX_DEFAULT_INDEX_THREADS: usize = 8;
 
 /// Phase 1 of indexing: parse files and store their structure (symbols,
 /// references, call edges, type relations, imports) and chunks. Embeddings
@@ -36,6 +45,97 @@ pub struct AutoIndexer {
     /// tree-sitter never failing on its own in a test.
     #[cfg(any(test, feature = "test-support"))]
     parse_failures: Mutex<HashSet<String>>,
+    /// Parser threads of `initial_index` (`SEMANTIQ_INDEX_THREADS`).
+    threads: usize,
+}
+
+/// A file read by the walk of `initial_index`, to be parsed on any thread.
+struct ParseJob {
+    path: PathBuf,
+    rel_path: String,
+    language: Language,
+    content: String,
+    /// The file's mtime (seconds) when it was read.
+    last_modified: i64,
+    /// When the content was read (seconds): the row's `indexed_at`.
+    read_at: i64,
+}
+
+/// What the extractors pull out of a parsed file.
+struct Extraction {
+    symbols: Vec<Symbol>,
+    references: Vec<Reference>,
+    structure: FileStructure,
+    chunks: Vec<CodeChunk>,
+    imports: Vec<Import>,
+    /// `resolve_import` of each import (`None` when it names no project file).
+    resolved: Vec<Option<String>>,
+}
+
+/// Why a file yielded no extraction.
+enum ExtractError {
+    /// tree-sitter could not parse the content: nothing of it can be
+    /// served. The writer clears the file's tables and stamps its hash, so
+    /// that the file is not parsed again until it changes, and the failure
+    /// is counted as an indexing error.
+    Parse(anyhow::Error),
+    /// An extractor failed: counted as an indexing error, nothing written,
+    /// the file is tried again next time.
+    Extractor(anyhow::Error),
+}
+
+/// A parsed file on its way to the writer.
+struct Parsed {
+    job: ParseJob,
+    extraction: Result<Extraction, ExtractError>,
+}
+
+/// What the walk of `initial_index` hands back once every file is read.
+struct WalkOutcome {
+    /// `scanned`, `skipped`, `removed` and the walk's `errors`; the writer
+    /// counts `indexed` and its own errors.
+    result: InitialIndexResult,
+    seen_paths: HashSet<String>,
+    failures: WalkFailures,
+    /// Files hashed and found unchanged: their stamp is refreshed so that the
+    /// next walk trusts their mtime.
+    refreshes: Vec<FileStampRefresh>,
+}
+
+/// The file's mtime in seconds since the epoch (0 when unavailable).
+fn mtime_secs(metadata: &fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `SEMANTIQ_INDEX_THREADS`, or the CPU count capped at
+/// [`MAX_DEFAULT_INDEX_THREADS`].
+fn index_threads() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    index_threads_from(std::env::var(INDEX_THREADS_ENV).ok().as_deref(), cpus)
+}
+
+fn index_threads_from(setting: Option<&str>, cpus: usize) -> usize {
+    let default = cpus.clamp(1, MAX_DEFAULT_INDEX_THREADS);
+    match setting.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(setting) => match setting.parse::<usize>() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                warn!(
+                    "Ignoring {}={:?}: expected a positive integer, using {}",
+                    INDEX_THREADS_ENV, setting, default
+                );
+                default
+            }
+        },
+        None => default,
+    }
 }
 
 /// How much of a file `scan_import_context` reads: `package` / `namespace`
@@ -128,6 +228,7 @@ impl AutoIndexer {
             project_root,
             #[cfg(any(test, feature = "test-support"))]
             parse_failures: Mutex::new(HashSet::new()),
+            threads: index_threads(),
         })
     }
 
@@ -156,6 +257,18 @@ impl AutoIndexer {
         false
     }
 
+    /// Use `threads` parser threads in `initial_index` instead of
+    /// `SEMANTIQ_INDEX_THREADS` / the CPU count (at least one).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads.max(1);
+        self
+    }
+
+    /// Parser threads of `initial_index`.
+    pub fn threads(&self) -> usize {
+        self.threads
+    }
+
     /// Stamp `project_root` in the index metadata (read back by the query
     /// commands when only `--database` is given). Called once a walk from
     /// that root proved consistent with the index, never from the
@@ -166,9 +279,14 @@ impl AutoIndexer {
     /// pruned (none after `--force` or a parser-version clear).
     fn record_project_root(&self, stale: usize) -> Result<()> {
         let canonical = self.canonical_root();
+        let previous = self.store.get_project_root()?;
+        if previous.as_ref() == Some(&canonical) {
+            // Already recorded: a no-op walk (every query command runs one)
+            // writes nothing to the database.
+            return Ok(());
+        }
         if stale > 0
-            && let Some(previous) = self.store.get_project_root()?
-            && previous != canonical
+            && let Some(previous) = previous
         {
             warn!(
                 "Index built from {} now indexed from {}: {} files of the previous root will be removed",
@@ -199,16 +317,18 @@ impl AutoIndexer {
         self.initial_index_with(&mut |_| {})
     }
 
-    /// `initial_index`, calling `on_file` after each indexed file (progress
-    /// display).
-    pub fn initial_index_with(
+    /// The walk of `initial_index`: every file the project walk reaches is
+    /// stat'ed and looked up in `stamps`; new or changed files are read and
+    /// sent to the parser threads through `jobs`. Returns what the prune
+    /// and the stamp refresh need.
+    fn walk_project(
         &self,
-        on_file: &mut dyn FnMut(&InitialIndexResult),
-    ) -> Result<InitialIndexResult> {
-        info!("Starting initial index of {:?}", self.project_root);
-
+        stamps: &HashMap<String, FileStamp>,
+        jobs: SyncSender<ParseJob>,
+    ) -> Result<WalkOutcome> {
         let mut result = InitialIndexResult::default();
         let mut seen_paths = HashSet::new();
+        let mut refreshes = Vec::new();
         // Where the walk failed (unreadable directory, I/O error): the files
         // under a failed directory are absent from `seen_paths` without having
         // vanished, and pruning them would throw their rows (and embeddings)
@@ -242,22 +362,42 @@ impl AutoIndexer {
             result.scanned += 1;
 
             // Skip if not a supported language
-            if Language::from_path(path).is_none() {
+            let Some(language) = Language::from_path(path) else {
                 continue;
-            }
+            };
 
             // Get relative path (warns if `path` falls outside project_root).
             let rel_path = to_relative_string(path, &self.project_root);
 
+            // One stat per file, for the size limit and the change check.
+            // Taken before the read: a write landing after it moves the mtime
+            // past the stored one, or into the second of `read_at` (racy).
+            let read_at = now_secs()?;
+            let metadata = fs::metadata(path).ok();
+            let last_modified = metadata.as_ref().map(mtime_secs).unwrap_or(0);
+
             // Files above their size limit are never indexed. Drop a row left
             // by an older version or by a file that grew past the limit:
             // the hash check below would otherwise keep it forever.
-            if is_file_too_large(path) {
+            if metadata
+                .as_ref()
+                .is_some_and(|m| exceeds_indexed_size(path, m.len()))
+            {
                 if self.store.get_file_by_path(&rel_path)?.is_some() {
                     self.store.delete_file(&rel_path)?;
                     debug!("Removed oversized file from index: {}", rel_path);
                     result.removed += 1;
                 }
+                continue;
+            }
+
+            // Fast path: an indexed file whose mtime is the stored one is
+            // unchanged, without reading it (#157). Not for a racy stamp,
+            // see `FileStamp::trusts`.
+            let stamp = stamps.get(&rel_path);
+            if metadata.is_some() && stamp.is_some_and(|stamp| stamp.trusts(last_modified)) {
+                seen_paths.insert(rel_path);
+                result.skipped += 1;
                 continue;
             }
 
@@ -286,29 +426,124 @@ impl AutoIndexer {
             };
             seen_paths.insert(rel_path.clone());
 
-            // Check if file needs to be reindexed
-            let needs_reindex = self
-                .store
-                .needs_reindex(&rel_path, &content)
-                .unwrap_or_else(|e| {
-                    debug!("Error checking reindex for {}: {}", rel_path, e);
-                    // Try to index anyway
-                    true
-                });
-            if !needs_reindex {
-                // File already indexed and unchanged
+            // Check if file needs to be reindexed: the content hash against
+            // the stored one.
+            if stamp.is_some_and(|stamp| stamp.hash == IndexStore::hash_content(&content)) {
+                // File already indexed and unchanged; its mtime moved (or
+                // the stamp was racy): re-stamp it so the next walk does
+                // not read it.
                 result.skipped += 1;
+                refreshes.push(FileStampRefresh {
+                    path: rel_path,
+                    last_modified,
+                    indexed_at: read_at,
+                });
                 continue;
             }
-            // File is new or changed, index it (already checked: forced)
-            if let Err(e) = self.index_file(path, true) {
-                error!("Failed to index {}: {}", rel_path, e);
-                result.errors += 1;
-            } else {
-                result.indexed += 1;
-                on_file(&result);
+            // File is new or changed: a parser thread extracts it, the
+            // writer stores it.
+            let job = ParseJob {
+                path: path.to_path_buf(),
+                rel_path,
+                language,
+                content,
+                last_modified,
+                read_at,
+            };
+            if jobs.send(job).is_err() {
+                bail!("indexing pipeline stopped before the walk was over");
             }
         }
+
+        Ok(WalkOutcome {
+            result,
+            seen_paths,
+            failures,
+            refreshes,
+        })
+    }
+
+    /// `initial_index`, calling `on_file` after each indexed file (progress
+    /// display).
+    ///
+    /// A pipeline of three stages: the walk (one thread) stats every file
+    /// and reads the new or changed ones; `threads` parser threads, each
+    /// with its own tree-sitter parsers, run the extractors; this thread
+    /// writes each file's tables in one transaction and reports progress.
+    /// Bounded channels keep at most a few files of content and extraction
+    /// in flight per thread.
+    pub fn initial_index_with(
+        &self,
+        on_file: &mut dyn FnMut(&InitialIndexResult),
+    ) -> Result<InitialIndexResult> {
+        info!(
+            "Starting initial index of {:?} ({} parser threads)",
+            self.project_root, self.threads
+        );
+
+        // The change check of every file runs against this map: one query
+        // instead of one per file.
+        let stamps = self.store.load_file_stamps()?;
+        let threads = self.threads.max(1);
+        let supports = (0..threads)
+            .map(|_| LanguageSupport::new())
+            .collect::<Result<Vec<_>>>()?;
+        let (job_tx, job_rx) = sync_channel::<ParseJob>(threads * 2);
+        let (done_tx, done_rx) = sync_channel::<Parsed>(threads * 2);
+        let job_rx = Mutex::new(job_rx);
+
+        let mut written = InitialIndexResult::default();
+        let outcome = std::thread::scope(|scope| -> Result<WalkOutcome> {
+            for mut support in supports {
+                let job_rx = &job_rx;
+                let done_tx = done_tx.clone();
+                scope.spawn(move || {
+                    loop {
+                        // The lock covers the wait for a job only, not its parse.
+                        let job = match job_rx.lock() {
+                            Ok(rx) => rx.recv(),
+                            Err(_) => break,
+                        };
+                        let Ok(job) = job else { break };
+                        let extraction = self.extract(&mut support, &job);
+                        if done_tx.send(Parsed { job, extraction }).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            // The parsers hold the remaining senders: `done_rx` ends once
+            // the walk is over and every job is parsed.
+            drop(done_tx);
+            let walker = scope.spawn(move || self.walk_project(&stamps, job_tx));
+
+            for parsed in done_rx {
+                let rel_path = parsed.job.rel_path.clone();
+                match self.write_parsed(parsed) {
+                    Ok(()) => {
+                        written.indexed += 1;
+                        on_file(&written);
+                    }
+                    Err(e) => {
+                        error!("Failed to index {}: {}", rel_path, e);
+                        written.errors += 1;
+                    }
+                }
+            }
+            walker
+                .join()
+                .map_err(|_| anyhow!("the project walk panicked"))?
+        })?;
+
+        let WalkOutcome {
+            mut result,
+            seen_paths,
+            failures,
+            refreshes,
+        } = outcome;
+        result.indexed = written.indexed;
+        result.errors += written.errors;
+        self.store.refresh_file_stamps(&refreshes)?;
 
         // Prune files that vanished (deleted, renamed, branch switch) while the
         // server was not running: the walk above only ever adds or updates rows.
@@ -733,6 +968,11 @@ impl AutoIndexer {
             }
         };
 
+        // The stamp of the row: the mtime from before the read, and the time
+        // of the read (see `walk_project`).
+        let read_at = now_secs()?;
+        let last_modified = fs::metadata(path).as_ref().map(mtime_secs).unwrap_or(0);
+
         // Read file content. A file that is gone or not UTF-8 any more cannot
         // keep a row that no longer describes it; on any other read error
         // (permissions, interruption) the row stays, see `initial_index_with`.
@@ -762,164 +1002,176 @@ impl AutoIndexer {
             return Ok(false);
         }
 
-        // Get file metadata
-        let last_modified = fs::metadata(path)?
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        // Establish a stable `file_id` for the FK on symbols/chunks/dependencies
-        // WITHOUT yet committing the up-to-date content hash.
-        //
-        // Crash-atomicity: the `files.hash` row is what `needs_reindex` consults.
-        // If we stamped the current hash *before* writing children and the
-        // process died mid-way, the file would look "up to date" while pointing
-        // at partial/missing chunks — and would never be reindexed. So we:
-        //   1. reuse the existing `file_id` when the file is already indexed
-        //      (its stored hash stays at the OLD value), or
-        //   2. for a brand-new file, seed the row with a deliberately
-        //      non-matching sentinel hash so `needs_reindex` keeps returning
-        //      true until the final stamp below.
-        // Only after all children are persisted do we (re)write the row with the
-        // real content hash, acting as the commit point.
-        let file_id = match self.store.get_file_by_path(&rel_path)? {
-            Some(existing) => existing.id,
-            None => {
-                // Sentinel content whose hash will not match `content` (unless
-                // the file genuinely *is* this marker, which carries no chunks).
-                const INDEXING_SENTINEL: &str = "\0__semantiq_indexing_in_progress__\0";
-                self.store.insert_file(
-                    &rel_path,
-                    Some(language.name()),
-                    INDEXING_SENTINEL,
-                    last_modified,
-                )?
-            }
+        let job = ParseJob {
+            path: path.to_path_buf(),
+            rel_path,
+            language,
+            content,
+            last_modified,
+            read_at,
         };
+        let extraction = {
+            let mut language_support = self
+                .language_support
+                .lock()
+                .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
+            self.extract(&mut language_support, &job)
+        };
+        self.write_parsed(Parsed { job, extraction })?;
 
-        // Parse and extract symbols
-        let mut language_support = self
-            .language_support
-            .lock()
-            .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
-        let parsed = if self.parse_should_fail(&rel_path) {
-            Err(anyhow::anyhow!("simulated parse failure"))
+        Ok(true)
+    }
+
+    /// Parse `job` with `support` and run the extractors. Pure CPU work on
+    /// the job's content: runs on the parser threads of `initial_index` and
+    /// under the indexer's own parser lock for watcher events.
+    fn extract(
+        &self,
+        support: &mut LanguageSupport,
+        job: &ParseJob,
+    ) -> Result<Extraction, ExtractError> {
+        let parsed = if self.parse_should_fail(&job.rel_path) {
+            Err(anyhow!("simulated parse failure"))
         } else {
-            language_support.parse_path(language, path, &content)
+            support.parse_path(job.language, &job.path, &job.content)
         };
-        let mut parse_error = None;
-        match parsed {
-            Ok(tree) => {
-                // Extract symbols
-                let symbols = SymbolExtractor::extract(&tree, &content, language)?;
-                self.store.insert_symbols(file_id, &symbols)?;
-
-                // Extract identifier occurrences for AST-based find_refs
-                let references = ReferenceExtractor::extract(&tree, &content, language);
-                self.store.insert_references(file_id, &references)?;
-
-                // Call edges and type relations (semantiq_calls / semantiq_hierarchy)
-                let structure =
-                    StructureExtractor::extract(&tree, &content, language, &symbols, &references);
-                self.store.insert_structure(file_id, &structure)?;
-
-                // Extract chunks. Their embeddings are phase 2: a chunk whose
-                // content did not change keeps its embedding, the others wait
-                // for the embedder (`crate::embedder`).
-                let chunks = self.chunk_extractor.extract(&tree, &content, language)?;
-                self.store.insert_chunks(file_id, &chunks)?;
-
-                // Extract imports and store them as the file's dependencies,
-                // in one transaction (one commit per file, not per import).
-                let imports = ImportExtractor::extract_with_context(
-                    &tree,
-                    &content,
-                    language,
-                    &self.import_context,
-                )?;
-                // Every import that is not standard-library is looked up in
-                // the project: one that names a file of it is `local`,
-                // whatever its syntax (`from app.models import User`, #81).
-                let resolved: Vec<Option<String>> = imports
-                    .iter()
-                    .map(|import| {
-                        if import.kind == ImportKind::Std {
-                            None
-                        } else {
-                            resolve_import(
-                                &rel_path,
-                                &import.path,
-                                language,
-                                &self.project_root,
-                                &self.import_context,
-                            )
-                        }
-                    })
-                    .collect();
-                let dependencies: Vec<DependencyInsert<'_>> = imports
-                    .iter()
-                    .zip(&resolved)
-                    .map(|(import, resolved)| DependencyInsert {
-                        target_path: &import.path,
-                        import_name: import.name.as_deref(),
-                        kind: if resolved.is_some() {
-                            ImportKind::Local.as_str()
-                        } else {
-                            import.kind.as_str()
-                        },
-                        resolved_path: resolved.as_deref(),
-                        lines: (import.start_line, import.end_line),
-                    })
-                    .collect();
-                self.store.replace_dependencies(file_id, &dependencies)?;
-
-                debug!(
-                    "Auto-indexed {}: {} symbols, {} chunks, {} deps",
-                    rel_path,
-                    symbols.len(),
-                    chunks.len(),
-                    imports.len()
-                );
-            }
+        let tree = match parsed {
+            Ok(tree) => tree,
             Err(e) => {
-                // Nothing of this content could be extracted: the rows of the
-                // previous version would be served as if they described it
-                // (symbols and refs at old lines, stale chunks). Clear them;
-                // the hash is stamped below all the same, so that a file
-                // tree-sitter cannot parse is not parsed again on every
-                // cycle, and the error is reported to the caller.
-                self.store.insert_symbols(file_id, &[])?;
-                self.store.insert_references(file_id, &[])?;
-                self.store.insert_structure(file_id, &Default::default())?;
-                self.store.insert_chunks(file_id, &[])?;
-                self.store.replace_dependencies(file_id, &[])?;
-                parse_error = Some(e);
+                warn!("Failed to parse {}: {}", job.rel_path, e);
+                return Err(ExtractError::Parse(e));
             }
-        }
+        };
+        let tree = &tree;
+        let content = &job.content;
+        let language = job.language;
+        let extractors = || -> Result<Extraction> {
+            // Extract symbols
+            let symbols = SymbolExtractor::extract(tree, content, language)?;
 
-        // Release the parser lock before the final hash stamp so we never hold
-        // two locks at once.
-        drop(language_support);
+            // Extract identifier occurrences for AST-based find_refs
+            let references = ReferenceExtractor::extract(tree, content, language);
 
-        // Commit point: stamp the real content hash LAST, only after all
-        // children (symbols/chunks/dependencies) are persisted. Embeddings are
-        // not part of it: a chunk without one is phase 2's pending work. A
-        // crash before this line leaves the OLD/sentinel hash in place, so
-        // `needs_reindex` returns true next time and the file is reindexed
-        // rather than silently treated as up-to-date with partial data.
-        //
-        // This runs on the parse-failure path too, after the children were
-        // cleared: the row then says "this content yields nothing" and the
-        // file is parsed again when it changes.
-        self.store
-            .insert_file(&rel_path, Some(language.name()), &content, last_modified)?;
+            // Call edges and type relations (semantiq_calls / semantiq_hierarchy)
+            let structure =
+                StructureExtractor::extract(tree, content, language, &symbols, &references);
 
-        match parse_error {
-            Some(e) => Err(e.context(format!("parsing {}", rel_path))),
-            None => Ok(true),
-        }
+            // Extract chunks. Their embeddings are phase 2: a chunk whose
+            // content did not change keeps its embedding, the others wait
+            // for the embedder (`crate::embedder`).
+            let chunks = self.chunk_extractor.extract(tree, content, language)?;
+
+            // Extract imports; local ones are resolved to a project file here,
+            // the writer stores them as the file's dependencies.
+            let imports = ImportExtractor::extract_with_context(
+                tree,
+                content,
+                language,
+                &self.import_context,
+            )?;
+            let resolved: Vec<Option<String>> = imports
+                .iter()
+                .map(|import| {
+                    // Every import that is not standard-library is looked up
+                    // in the project: one that names a file of it is `local`,
+                    // whatever its syntax (`from app.models import User`, #81).
+                    if import.kind == ImportKind::Std {
+                        None
+                    } else {
+                        resolve_import(
+                            &job.rel_path,
+                            &import.path,
+                            language,
+                            &self.project_root,
+                            &self.import_context,
+                        )
+                    }
+                })
+                .collect();
+
+            Ok(Extraction {
+                symbols,
+                references,
+                structure,
+                chunks,
+                imports,
+                resolved,
+            })
+        };
+        extractors().map_err(ExtractError::Extractor)
+    }
+
+    /// Store a parsed file: its row and every table in one transaction
+    /// (`IndexStore::store_file_index`), the commit point of phase 1 for the
+    /// file. A crash before it leaves the old hash (or no row) in place, so
+    /// the file is indexed again next time rather than treated as up to
+    /// date with partial data. Embeddings are not part of it: a chunk
+    /// without one is phase 2's pending work.
+    ///
+    /// A file tree-sitter could not parse: the rows of its previous version
+    /// would be served as if they described it (symbols and refs at old
+    /// lines, stale chunks). They are cleared and the hash is stamped in the
+    /// same transaction, so that the row says "this content yields nothing"
+    /// and the file is parsed again when it changes, not on every cycle;
+    /// the failure is returned as an error. An extractor failure writes
+    /// nothing.
+    fn write_parsed(&self, parsed: Parsed) -> Result<()> {
+        let job = &parsed.job;
+        let extraction = match parsed.extraction {
+            Ok(extraction) => extraction,
+            Err(ExtractError::Parse(e)) => {
+                self.store.store_file_index(&FileIndexWrite {
+                    path: &job.rel_path,
+                    language: Some(job.language.name()),
+                    content: &job.content,
+                    last_modified: job.last_modified,
+                    indexed_at: job.read_at,
+                    symbols: &[],
+                    references: &[],
+                    structure: &FileStructure::default(),
+                    chunks: &[],
+                    dependencies: &[],
+                })?;
+                return Err(e.context(format!("parsing {}", job.rel_path)));
+            }
+            Err(ExtractError::Extractor(e)) => return Err(e),
+        };
+        let dependencies: Vec<DependencyInsert<'_>> = extraction
+            .imports
+            .iter()
+            .zip(&extraction.resolved)
+            .map(|(import, resolved)| DependencyInsert {
+                target_path: &import.path,
+                import_name: import.name.as_deref(),
+                kind: if resolved.is_some() {
+                    ImportKind::Local.as_str()
+                } else {
+                    import.kind.as_str()
+                },
+                resolved_path: resolved.as_deref(),
+                lines: (import.start_line, import.end_line),
+            })
+            .collect();
+        self.store.store_file_index(&FileIndexWrite {
+            path: &job.rel_path,
+            language: Some(job.language.name()),
+            content: &job.content,
+            last_modified: job.last_modified,
+            indexed_at: job.read_at,
+            symbols: &extraction.symbols,
+            references: &extraction.references,
+            structure: &extraction.structure,
+            chunks: &extraction.chunks,
+            dependencies: &dependencies,
+        })?;
+        debug!(
+            "Auto-indexed {}: {} symbols, {} chunks, {} deps",
+            job.rel_path,
+            extraction.symbols.len(),
+            extraction.chunks.len(),
+            extraction.imports.len()
+        );
+        Ok(())
     }
 
     /// Remove a path from the index: its own row, and the rows under it when
@@ -982,5 +1234,21 @@ mod tests {
         ];
         let counted = events.iter().filter(|e| concerns_indexed_file(e)).count();
         assert_eq!(counted, 3, "lib.rs, old.ts and config.toml (data language)");
+    }
+
+    #[test]
+    fn index_threads_setting() {
+        assert_eq!(index_threads_from(None, 4), 4);
+        assert_eq!(index_threads_from(None, 32), MAX_DEFAULT_INDEX_THREADS);
+        assert_eq!(index_threads_from(None, 0), 1);
+        assert_eq!(index_threads_from(Some("3"), 32), 3);
+        assert_eq!(
+            index_threads_from(Some(" 12 "), 4),
+            12,
+            "above the default cap"
+        );
+        assert_eq!(index_threads_from(Some("0"), 4), 4, "invalid: default");
+        assert_eq!(index_threads_from(Some("many"), 4), 4);
+        assert_eq!(index_threads_from(Some(""), 4), 4);
     }
 }

@@ -9,23 +9,15 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
-use semantiq_index::exclusions::is_file_too_large;
-use semantiq_index::paths::to_relative_string;
-use semantiq_index::{
-    AutoIndexer, EmbeddingProgress, IndexStore, WalkFailures, embed_pending, project_walker,
-    read_error_is_final, should_exclude_path,
-};
+use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
 use semantiq_mcp::server::{
     CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
     ImpactParams, RepoMapParams, SearchParams, calls_output, dead_code_output, deps_output,
     explain_output, find_refs_output, hierarchy_output, impact_output, repo_map_output,
     search_output,
 };
-use semantiq_parser::Language;
 use semantiq_retrieval::{RetrievalEngine, normalize_input_path};
 use serde::Serialize;
-use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -445,89 +437,26 @@ fn refresh(store: &Arc<IndexStore>, db_path: &Path, root: &Path) -> Result<()> {
     let rebuild = store.check_and_prepare_for_reindex()?;
     if rebuild {
         eprintln!("semantiq: index format changed, rebuilding the index (one time)...");
-    } else if !index_is_stale(store, root)? {
-        return Ok(());
     }
 
+    // One walk: an indexed file whose mtime did not move is not read
+    // (`FileStamp::trusts`), the others are hashed, and only new or changed
+    // ones are parsed. An up-to-date index writes nothing and says nothing.
     let indexer = AutoIndexer::without_watcher(Arc::clone(store), root.to_path_buf())?;
     let result = indexer.initial_index()?;
-    eprintln!(
-        "semantiq: refreshed index ({} files reindexed, {} removed{})",
-        result.indexed,
-        result.removed,
-        if result.errors > 0 {
-            format!(", {} errors", result.errors)
-        } else {
-            String::new()
-        }
-    );
+    if result.indexed > 0 || result.removed > 0 || result.errors > 0 {
+        eprintln!(
+            "semantiq: refreshed index ({} files reindexed, {} removed{})",
+            result.indexed,
+            result.removed,
+            if result.errors > 0 {
+                format!(", {} errors", result.errors)
+            } else {
+                String::new()
+            }
+        );
+    }
     Ok(())
-}
-
-/// Whether `AutoIndexer::initial_index` would change anything: a file it
-/// indexes is new or modified, or an indexed file is gone. Mirrors its walk and
-/// filters, and stops at the first difference. Like the indexer, a walk that
-/// could not cover the whole tree does not count unseen files as gone.
-fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
-    let mut vanished: HashSet<String> = store.list_file_paths()?.into_iter().collect();
-    let mut failures = WalkFailures::default();
-
-    for entry in project_walker(root).build() {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                failures.record(&e, root);
-                tracing::debug!("Walk error while checking the index: {}", e);
-                continue;
-            }
-        };
-        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true) {
-            continue;
-        }
-        let path = entry.path();
-        if Language::from_path(path).is_none() {
-            continue;
-        }
-        let rel_path = to_relative_string(path, root);
-        vanished.remove(&rel_path);
-
-        // The indexer never stores these: they cannot make the index stale,
-        // unless an older version stored one (it must then be removed).
-        if should_exclude_path(Path::new(&rel_path)) || is_file_too_large(path) {
-            if store.get_file_by_path(&rel_path)?.is_some() {
-                tracing::debug!("Index stale: {} is no longer indexable", rel_path);
-                return Ok(true);
-            }
-            continue;
-        }
-        // A file that vanished or is not UTF-8 any more loses its row in the
-        // indexer's walk: an existing row makes the index stale. Any other
-        // read error keeps the row there, so it does not here either.
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(e) if read_error_is_final(&e) => {
-                if store.get_file_by_path(&rel_path)?.is_some() {
-                    tracing::debug!("Index stale: {} is no longer readable", rel_path);
-                    return Ok(true);
-                }
-                continue;
-            }
-            Err(_) => continue,
-        };
-        if store.needs_reindex(&rel_path, &content).unwrap_or(true) {
-            tracing::debug!("Index stale: {} changed", rel_path);
-            return Ok(true);
-        }
-    }
-
-    // Files under a directory the walk could not list did not necessarily
-    // vanish: the indexer keeps their rows (`initial_index`), so they do not
-    // make the index stale either.
-    vanished.retain(|path| !failures.covers(path));
-    if let Some(path) = vanished.iter().next() {
-        tracing::debug!("Index stale: {} removed", path);
-    }
-    Ok(!vanished.is_empty())
 }
 
 #[cfg(test)]
