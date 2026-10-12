@@ -57,6 +57,7 @@ mod bug_probes {
         symbols: Vec<Symbol>,
         refs: Vec<Reference>,
         calls: Vec<(String, String, usize)>,
+        relations: Vec<(String, String, &'static str)>,
         imports: Vec<(String, Option<String>, ImportKind)>,
     }
 
@@ -67,10 +68,16 @@ mod bug_probes {
         let tree = support.parse_path(lang, path, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, lang);
-        let calls = StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+        let structure = StructureExtractor::extract(&tree, source, lang, &symbols, &refs);
+        let calls = structure
             .calls
             .into_iter()
             .map(|e| (e.caller, e.callee, e.line))
+            .collect();
+        let relations = structure
+            .relations
+            .into_iter()
+            .map(|r| (r.type_name, r.super_name, r.kind.as_str()))
             .collect();
         let imports = ImportExtractor::extract(&tree, source, lang)
             .unwrap()
@@ -82,6 +89,7 @@ mod bug_probes {
             symbols,
             refs,
             calls,
+            relations,
             imports,
         }
     }
@@ -1815,5 +1823,78 @@ public:
         assert!(!e.has_error);
         assert_eq!(sym(&e.symbols, "run").kind, SymbolKind::Function);
         assert_eq!(e.imports.len(), 1);
+    }
+
+    // B45 (PR #171 review): a Python docstring is taken whole between its
+    // delimiters, escape sequences included.
+    #[test]
+    fn b45_python_docstring_with_escapes_is_complete() {
+        let source = "def f():\n    \"\"\"Open C:\\\\temp for details.\n\n    Second \\t line.\n    \"\"\"\n    pass\n";
+        let symbols = extract(Language::Python, source);
+        assert_eq!(
+            sym(&symbols, "f").doc_comment.as_deref(),
+            Some("Open C:\\\\temp for details.\n\nSecond \\t line.")
+        );
+    }
+
+    // B46 (PR #171 review): the `id` of an element is captured whatever the
+    // attribute's case, whether the value is quoted or bare, and on
+    // self-closing tags.
+    #[test]
+    fn b46_html_id_forms() {
+        let source = "<html>\n<body>\n  <div id=main>\n    <input id=\"search\" />\n    <p ID=\"up\">x</p>\n    <a id='q' href=\"#\">y</a>\n    <span data-id=\"no\" idx=\"no\">z</span>\n  </div>\n</body>\n</html>\n";
+        let symbols = extract(Language::Html, source);
+        let found: Vec<(&str, usize)> = symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable && s.name != "html")
+            .map(|s| (s.name.as_str(), s.start_line))
+            .collect();
+        assert_eq!(found, vec![("main", 3), ("search", 4), ("up", 5), ("q", 6)]);
+    }
+
+    // B47 (PR #171 review): the type relations of a `.h` header come from the
+    // C++ branch, as the grammar that parsed it.
+    #[test]
+    fn b47_h_header_type_relations_use_cpp() {
+        let header = "class Shape {\n public:\n  virtual ~Shape();\n};\nstruct Box : public Shape {};\nclass Ball : Shape, private Round {};\n";
+        let e = extract_file("inc/shape.h", header);
+        assert!(!e.has_error);
+        assert_eq!(
+            e.relations,
+            vec![
+                ("Box".to_string(), "Shape".to_string(), "extends"),
+                ("Ball".to_string(), "Round".to_string(), "extends"),
+                ("Ball".to_string(), "Shape".to_string(), "extends"),
+            ]
+        );
+        assert!(extract_file("inc/shape.hpp", header).relations == e.relations);
+    }
+
+    // B48 (PR #171 review): constructors declared or defined in the class
+    // body are method symbols of the class, not free functions.
+    #[test]
+    fn b48_cpp_in_class_constructors() {
+        let source = "class C {\npublic:\n  C();\n  explicit C(int x);\n  C(const C&) = default;\n  C(C&&) { init(); }\n  ~C();\n  static C make();\n};\nC::C() {}\n";
+        let e = extract_file("c.cpp", source);
+        assert!(!e.has_error);
+        let found: Vec<(&str, SymbolKind, usize, Option<&str>)> = e
+            .symbols
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.start_line, s.parent.as_deref()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("C", SymbolKind::Class, 1, None),
+                ("C", SymbolKind::Method, 3, Some("C")),
+                ("C", SymbolKind::Method, 4, Some("C")),
+                ("C", SymbolKind::Method, 5, Some("C")),
+                ("C", SymbolKind::Method, 6, Some("C")),
+                ("~C", SymbolKind::Method, 7, Some("C")),
+                ("make", SymbolKind::Method, 8, Some("C")),
+                ("C", SymbolKind::Method, 10, Some("C")),
+            ]
+        );
+        assert!(e.calls.contains(&("C".to_string(), "init".to_string(), 6)));
     }
 }

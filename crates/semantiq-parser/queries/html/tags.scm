@@ -12,12 +12,20 @@
         (start_tag
             (tag_name) @name)) @definition.variable)
 
+; L'attribut est insensible à la casse (`ID="main"`), sa valeur est citée ou
+; nue (`id=main`), et la balise peut être auto-fermante (`<input id="q" />`).
 ((element
-    (start_tag
+    [(start_tag
         (attribute
             (attribute_name) @_attr
-            (quoted_attribute_value (attribute_value) @name))))
-    (#eq? @_attr "id")) @definition.variable
+            [(quoted_attribute_value (attribute_value) @name)
+             (attribute_value) @name]))
+     (self_closing_tag
+        (attribute
+            (attribute_name) @_attr
+            [(quoted_attribute_value (attribute_value) @name)
+             (attribute_value) @name]))])
+    (#match? @_attr "^[iI][dD]$")) @definition.variable
 
 (script_element
     (start_tag

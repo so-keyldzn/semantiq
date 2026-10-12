@@ -788,12 +788,13 @@ fn python_docstring(node: &Node, source: &str) -> Option<String> {
     if string.kind() != "string" || first.named_child_count() != 1 {
         return None;
     }
+    // Everything between the delimiters, whatever tree-sitter-python nests
+    // under it (`string_content`, `escape_sequence`): escapes stay as written.
     let mut cursor = string.walk();
-    let content = string
-        .children(&mut cursor)
-        .find(|c| c.kind() == "string_content")?
-        .utf8_text(source.as_bytes())
-        .ok()?;
+    let children: Vec<Node> = string.children(&mut cursor).collect();
+    let start = children.iter().find(|c| c.kind() == "string_start")?;
+    let end = children.iter().rfind(|c| c.kind() == "string_end")?;
+    let content = source.get(start.end_byte()..end.start_byte())?;
     let doc = dedent_docstring(content);
     (!doc.is_empty()).then_some(doc)
 }

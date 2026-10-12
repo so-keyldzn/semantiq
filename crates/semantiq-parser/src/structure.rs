@@ -128,6 +128,9 @@ impl StructureExtractor {
     }
 
     pub fn type_relations(tree: &Tree, source: &str, language: Language) -> Vec<TypeRelation> {
+        // Branch on the grammar that produced the tree: a `.h` header keeps
+        // `Language::C` but holds C++ `class_specifier` / `base_class_clause`.
+        let language = language.grammar_of(tree).language();
         let mut relations = Vec::new();
         let mut stack = vec![tree.root_node()];
         let mut cursor = tree.walk();

@@ -161,6 +161,16 @@ impl Grammar {
     pub fn parsed(self, tree: &tree_sitter::Tree) -> bool {
         *tree.language() == self.tree_sitter_language()
     }
+
+    /// The language whose node kinds this grammar produces: the extractors
+    /// that branch on the language (type relations) use it for a `.h` header
+    /// parsed as C++ instead of the file's `Language::C` label.
+    pub fn language(self) -> Language {
+        match self {
+            Grammar::Tsx => Language::TypeScript,
+            Grammar::Language(lang) => lang,
+        }
+    }
 }
 
 impl Language {

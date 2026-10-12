@@ -40,6 +40,20 @@
         declarator: (function_declarator
             declarator: (destructor_name) @name)) @definition.method)
 
+; Constructeurs : sans type de retour, leur declarator est un `identifier`
+; (pas un `field_identifier`), déclaré (`C();`, `explicit C(int);`) ou défini
+; dans la classe (`C() {}`, `C(const C&) = default;`). Déclarés avant le
+; pattern « fonction libre » pour gagner la déduplication.
+(field_declaration_list
+    (declaration
+        declarator: (function_declarator
+            declarator: (identifier) @name)) @definition.method)
+
+(field_declaration_list
+    (function_definition
+        declarator: (function_declarator
+            declarator: (identifier) @name)) @definition.method)
+
 ; Méthode externe via qualified_identifier (Foo::bar ou ns::Foo::bar).
 ; tree-sitter-cpp imbrique les qualifications ; `extract` garde la feuille
 ; (`bar`) comme nom et met la portée (`ns::Foo`) dans le parent

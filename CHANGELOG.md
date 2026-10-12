@@ -210,18 +210,20 @@ confidence of `impact` / `calls` see.
   function-pointer typedefs (`typedef int (*cb)(int)`) are symbols; the names
   declared by `#define` and by enumerators are definitions, not usages (#148).
 - Python docstrings (first statement of a `def` / `class` body, PEP 257
-  dedented) and Elixir `@doc` / `@moduledoc` strings are attached as the
-  symbol's doc comment (#150).
+  dedented, taken whole between the delimiters) and Elixir `@doc` /
+  `@moduledoc` strings are attached as the symbol's doc comment (#150).
 - HTML: `<script>` / `<style>` at any depth and every element with an `id`
-  (named after the id) are symbols, not only the root `<html>` (#154).
+  (named after the id; `ID=`, bare values and self-closing tags included) are
+  symbols, not only the root `<html>` (#154).
 - C++: a method defined out of its class (`int C::add(int)`) is indexed under
   its bare name `add` with `parent = C` (`ns::C` with the enclosing namespace),
   reachable by `explain` / `calls` / `refs`; its definition line is no longer a
-  usage; in-class method declarations (`int add(int);`, pure virtual methods)
-  are method symbols (#79).
+  usage; in-class method and constructor declarations (`int add(int);`, pure
+  virtual methods, `C();`, `C() = default;`) are method symbols (#79).
 - `.h` headers are parsed with the C++ grammar (they keep the `c` language
-  label): classes, namespaces, templates and member declarations of C++
-  headers are indexed and their keywords no longer pollute `refs` (#144).
+  label): classes, namespaces, templates, member declarations and inheritance
+  (`hierarchy`) of C++ headers are indexed and their keywords no longer
+  pollute `refs` (#144).
 - `.mts` / `.cts` files are indexed as TypeScript and `./x.mjs` / `./x.cjs`
   imports resolve to `x.mts` / `x.cts` (#151).
 
