@@ -13,6 +13,10 @@
 //! lowered for dynamic languages (reflection), public symbols, symbols
 //! carrying an attribute or decorator (framework / macro registration) and
 //! methods of types extending a library supertype (possible overrides).
+//!
+//! Candidates are judged in path order, only until `limit` symbols of the
+//! highest confidence are known: the report then lists exactly those, and
+//! the exclusion counts cover the candidates judged.
 
 use super::impact::is_test_location;
 use super::resolution::Resolver;
@@ -86,9 +90,12 @@ pub struct DeadCodeExclusions {
 #[derive(Debug, Clone, Default)]
 pub struct DeadCodeReport {
     pub symbols: Vec<DeadSymbol>,
-    /// Unreferenced candidates examined before filtering.
+    /// Unreferenced candidates found before filtering.
     pub candidates: usize,
+    /// Among the candidates judged: the walk stops once `limit` high
+    /// confidence symbols are known.
     pub excluded: DeadCodeExclusions,
+    /// Candidates were left unjudged or results dropped: `limit` reached.
     pub truncated: bool,
 }
 
@@ -122,7 +129,12 @@ impl RetrievalEngine {
         let mut files: HashMap<String, Option<Vec<String>>> = HashMap::new();
         let mut relations = HashMap::new();
 
-        for candidate in candidates {
+        // Candidates come in path order and the report keeps that order
+        // within a confidence level: once `limit` high-confidence symbols
+        // are known, no later candidate can make the report.
+        let mut high = 0;
+        let mut candidates = candidates.into_iter();
+        for candidate in candidates.by_ref() {
             match self.judge(
                 &candidate,
                 options.include_public,
@@ -143,8 +155,17 @@ impl RetrievalEngine {
                         confidence,
                         reasons,
                     });
+                    if confidence == DeadCodeConfidence::High {
+                        high += 1;
+                        if high >= limit {
+                            break;
+                        }
+                    }
                 }
             }
+        }
+        if candidates.next().is_some() {
+            report.truncated = true;
         }
 
         // Most certain first; stable path/line order within a level.
@@ -222,6 +243,9 @@ impl RetrievalEngine {
             }
         }
 
+        // The attribute scan (which reads the file) comes before the public
+        // check so an `@Override` / `@Test` member counts as a trait member
+        // or a test, whatever its visibility.
         let attributes = self.attributes_above(files, path, s.start_line as usize, language);
         let signature = s.signature.as_deref().unwrap_or("");
         if attributes

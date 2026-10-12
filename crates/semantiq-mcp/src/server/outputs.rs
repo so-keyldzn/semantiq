@@ -376,17 +376,11 @@ pub fn impact_output(
         .map(|f| f.file_path.clone())
         .collect();
 
+    let (definitions, definition_count) = listed_definitions(analysis.definitions);
     Ok(ImpactOutput {
         symbol: analysis.symbol,
-        definitions: analysis
-            .definitions
-            .into_iter()
-            .map(|d| ImpactDefinitionOut {
-                file_path: d.file_path,
-                line: d.line,
-                kind: d.kind,
-            })
-            .collect(),
+        definitions,
+        definition_count,
         site_count: analysis.sites.len(),
         files,
         test_files,

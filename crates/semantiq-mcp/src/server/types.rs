@@ -510,10 +510,23 @@ pub struct ImpactParams {
     pub limit: Option<usize>,
 }
 
+/// Definitions listed in the `definitions` of `semantiq_impact`,
+/// `semantiq_calls` and `semantiq_hierarchy`: a common name (`new`) has
+/// thousands, which dwarfed the analysis itself in the output.
+pub const MAX_LISTED_DEFINITIONS: usize = 20;
+
+/// Serde helper: leave a `false` flag out of the JSON.
+pub(crate) fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ImpactOutput {
     pub symbol: String,
+    /// Where the symbol is defined (the first 20 when a name has more)
     pub definitions: Vec<ImpactDefinitionOut>,
+    /// Definitions of the name in the index, listed or not
+    pub definition_count: usize,
     pub site_count: usize,
     /// Impacted files, closest impact first
     pub files: Vec<ImpactedFile>,
@@ -533,6 +546,8 @@ pub struct ImpactDefinitionOut {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ImpactedFile {
     pub file_path: String,
+    /// Test file (heuristic); absent when false
+    #[serde(default, skip_serializing_if = "is_false")]
     pub is_test: bool,
     /// Smallest depth among this file's sites
     pub depth: usize,
@@ -555,18 +570,42 @@ pub struct ImpactSiteOut {
     pub confidence: String,
 }
 
-/// One line per definition: `kind path:line`.
-pub(crate) fn render_definitions(output: &mut String, definitions: &[ImpactDefinitionOut]) {
+/// Keep the first [`MAX_LISTED_DEFINITIONS`]; returns the list and the count.
+pub(crate) fn listed_definitions(
+    definitions: Vec<semantiq_retrieval::ImpactDefinition>,
+) -> (Vec<ImpactDefinitionOut>, usize) {
+    let count = definitions.len();
+    let listed = definitions
+        .into_iter()
+        .take(MAX_LISTED_DEFINITIONS)
+        .map(|d| ImpactDefinitionOut {
+            file_path: d.file_path,
+            line: d.line,
+            kind: d.kind,
+        })
+        .collect();
+    (listed, count)
+}
+
+/// One line listing the definitions: `kind path:line`, `count` in all.
+pub(crate) fn render_definitions(
+    output: &mut String,
+    definitions: &[ImpactDefinitionOut],
+    count: usize,
+) {
     if definitions.is_empty() {
         output.push_str("No definition in the index: matched by name only.\n");
         return;
     }
-    let defs: Vec<String> = definitions
+    let mut defs: Vec<String> = definitions
         .iter()
         .map(|d| format!("{} {}:{}", d.kind, d.file_path, d.line))
         .collect();
+    if count > definitions.len() {
+        defs.push(format!("… {} more", count - definitions.len()));
+    }
     output.push_str(&format!("Defined: {}\n", defs.join(", ")));
-    if definitions.len() > 1 {
+    if count > 1 {
         output.push_str("Several definitions share this name: pass file_path to pick one.\n");
     }
 }
@@ -585,7 +624,7 @@ impl ImpactOutput {
                 ""
             }
         );
-        render_definitions(&mut output, &self.definitions);
+        render_definitions(&mut output, &self.definitions, self.definition_count);
 
         for file in &self.files {
             output.push_str(&format!(

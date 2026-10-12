@@ -476,6 +476,38 @@ fn test_dead_code_filters() {
 /// excluded like Rust `pub`, and reported with low confidence under
 /// `include_public`. Private declarations keep the high confidence.
 #[test]
+fn test_dead_code_stops_judging_once_the_limit_is_known() {
+    // #163: every candidate was judged (file read for attributes) before
+    // the limit truncated the report.
+    let (engine, _root) = index_project(&[
+        ("a.rs", "fn dead_a() {}\nfn dead_b() {}\n"),
+        ("z.rs", "#[test]\nfn later() {}\n"),
+    ]);
+    let report = engine
+        .find_dead_code(&DeadCodeOptions {
+            limit: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let names: Vec<&str> = report.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["dead_a"]);
+    assert!(report.truncated);
+    assert_eq!(report.candidates, 3);
+    // `later` was never judged: its test attribute was not read.
+    assert_eq!(report.excluded.tests, 0);
+
+    let full = engine
+        .find_dead_code(&DeadCodeOptions {
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(full.symbols.len(), 2);
+    assert!(!full.truncated);
+    assert_eq!(full.excluded.tests, 1);
+}
+
+#[test]
 fn test_dead_code_typescript_exports_are_public() {
     let tsx = "export default function Panel() { return <Unused />; }\nexport function Unused() { return null; }\nexport const unusedConst = () => 1;\nfunction localDead() { return 1; }\n";
     let barrel = "export { Panel } from './components/Panel';\n";
