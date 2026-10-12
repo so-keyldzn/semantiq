@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 use semantiq_mcp::{SemantiqServer, disable_update_check};
 use std::path::PathBuf;
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn};
 
 use super::common::{ensure_directory, resolve_db_path, warn_if_semantic_search_unavailable};
 
@@ -34,11 +35,12 @@ pub(crate) async fn serve(
         .to_str()
         .context("Project root path contains invalid UTF-8")?;
     let server = SemantiqServer::new(&db_path, project_root_str)?;
+    let engine = Arc::clone(server.engine());
 
     // Start auto-indexer in background
     server.start_auto_indexer();
 
-    if let Some(port) = http_port {
+    let result = if let Some(port) = http_port {
         // HTTP API mode
         info!("Starting Semantiq HTTP API server");
         info!("Project root: {:?}", project_root);
@@ -51,9 +53,22 @@ pub(crate) async fn serve(
         info!("Project root: {:?}", project_root);
         info!("Database: {:?}", db_path);
 
-        let service = server.serve(rmcp::transport::stdio()).await?;
-        service.waiting().await?;
+        async {
+            let service = server.serve(rmcp::transport::stdio()).await?;
+            service.waiting().await?;
+            Ok(())
+        }
+        .await
+    };
 
-        Ok(())
+    // The distance observations a session collected for `semantiq calibrate`
+    // are otherwise flushed only every 50: a short session lost most of
+    // them (#135).
+    match tokio::task::spawn_blocking(move || engine.flush_observations()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!("Could not flush distance observations: {}", e),
+        Err(e) => warn!("Could not flush distance observations: {}", e),
     }
+
+    result
 }

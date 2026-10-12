@@ -1,11 +1,15 @@
 //! Calibrate semantic search thresholds based on collected observations.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use semantiq_index::{CalibrationData, IndexStore};
-use semantiq_retrieval::{CalibrationConfig, ThresholdCalibrator, format_calibration_summary};
+use semantiq_retrieval::{
+    APPLIED_MIN_SAMPLES, CalibrationConfig, LanguageThresholds, ThresholdCalibrator,
+    format_calibration_summary,
+};
 use std::path::{Path, PathBuf};
 
-use super::common::{outln, print_stdout, resolve_db_path};
+use super::common::{outln, print_stdout};
+use super::query::{IndexArgs, locate_index};
 
 /// Run threshold calibration.
 pub(crate) async fn calibrate(
@@ -14,15 +18,14 @@ pub(crate) async fn calibrate(
     dry_run: bool,
     min_samples: usize,
 ) -> Result<()> {
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let db_path = resolve_db_path(database, &cwd);
-
-    if !db_path.exists() {
-        anyhow::bail!(
-            "Database not found: {:?}. Run 'semantiq index' first.",
-            db_path
-        );
-    }
+    // Same lookup as `stats` and the query commands (`--database`, else
+    // `.semantiq.db` in the current directory or a parent): from a
+    // subdirectory, calibrate the project's index rather than suggest a
+    // second, nested one (#105).
+    let (db_path, _root) = locate_index(&IndexArgs {
+        database,
+        ..IndexArgs::default()
+    })?;
 
     let store = IndexStore::open(&db_path)?;
 
@@ -48,6 +51,16 @@ fn run(
     outln!(out, "Min samples: {}", min_samples);
     outln!(out, "Dry run: {}", dry_run);
     outln!(out);
+    outln!(
+        out,
+        "One observation = one search query per language (median candidate distance)."
+    );
+    outln!(
+        out,
+        "Search applies a calibration from {} observations (confidence medium).",
+        APPLIED_MIN_SAMPLES
+    );
+    outln!(out);
 
     // Get observation counts
     let counts = store.get_observation_counts()?;
@@ -66,13 +79,28 @@ fn run(
 
     outln!(out, "Distance Observations:");
     outln!(out, "  Total: {}", total);
-    for (lang, count) in &counts {
-        let status = if *count >= min_samples {
+    let mut languages: Vec<_> = counts.iter().collect();
+    languages.sort();
+    for (lang, count) in languages {
+        let status = if *count >= APPLIED_MIN_SAMPLES {
             "ready"
+        } else if *count >= min_samples {
+            "ready, stored but not applied until"
         } else {
             "insufficient"
         };
-        outln!(out, "  {}: {} ({})", lang, count, status);
+        if status.ends_with("until") {
+            outln!(
+                out,
+                "  {}: {} ({} {} observations)",
+                lang,
+                count,
+                status,
+                APPLIED_MIN_SAMPLES
+            );
+        } else {
+            outln!(out, "  {}: {} ({})", lang, count, status);
+        }
     }
     outln!(out);
 
@@ -84,6 +112,19 @@ fn run(
     }
 
     Ok(())
+}
+
+/// Why a calibration below the applied floor is stored but changes nothing
+/// in search (`ThresholdConfig::get` keeps the defaults below confidence
+/// medium), so "Calibration saved" is not read as "thresholds in force".
+fn not_applied_caveat(language: &str, thresholds: &LanguageThresholds) -> Option<String> {
+    (!thresholds.should_use()).then(|| {
+        format!(
+            "Note: {} has {} observations (confidence {}): stored but not applied by search \
+             until {} observations.",
+            language, thresholds.sample_count, thresholds.confidence, APPLIED_MIN_SAMPLES
+        )
+    })
 }
 
 fn calibrate_language(
@@ -119,6 +160,9 @@ fn calibrate_language(
         );
         outln!(out, "  confidence: {}", result.thresholds.confidence);
         outln!(out, "  samples: {}", result.thresholds.sample_count);
+        if let Some(caveat) = not_applied_caveat(language, &result.thresholds) {
+            outln!(out, "  {}", caveat);
+        }
 
         if let Some(ref stats) = result.thresholds.stats {
             outln!(out);
@@ -179,6 +223,21 @@ fn calibrate_all(
 
     // Print summary
     outln!(out, "{}", format_calibration_summary(&config));
+    let mut caveats: Vec<String> = config
+        .per_language
+        .iter()
+        .filter_map(|(language, thresholds)| not_applied_caveat(language, thresholds))
+        .collect();
+    caveats.sort();
+    if let Some(caveat) = not_applied_caveat("global", &config.global) {
+        caveats.push(caveat);
+    }
+    if !caveats.is_empty() {
+        outln!(out);
+        for caveat in caveats {
+            outln!(out, "{}", caveat);
+        }
+    }
 
     if !dry_run {
         // Save per-language calibrations

@@ -378,7 +378,7 @@ fn test_without_embeddings_answers_non_search_queries() {
         ],
         RetrievalEngine::without_embeddings,
     );
-    assert!(engine.embedding_model.is_none());
+    assert!(engine.embedding_model().is_none());
     assert!(engine.distance_collector().is_none());
 
     let refs = engine.find_references("core_op", 50).unwrap();

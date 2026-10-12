@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use semantiq_index::IndexStore;
+use semantiq_retrieval::{APPLIED_MIN_SAMPLES, BOOTSTRAP_THRESHOLD, Confidence};
 use std::path::PathBuf;
 
 use super::common::{outln, print_stdout};
@@ -70,10 +71,13 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
     let total_observations: usize = observation_counts.values().sum();
     let calibrations = store.load_all_calibrations().unwrap_or_default();
 
-    const BOOTSTRAP_THRESHOLD: usize = 500;
-
     outln!(out);
     outln!(out, "ML Calibration:");
+    outln!(
+        out,
+        "  (one observation = one search query per language; a calibration is applied from {} observations)",
+        APPLIED_MIN_SAMPLES
+    );
 
     // Show bootstrap status
     let bootstrap_progress =
@@ -114,13 +118,22 @@ pub(crate) async fn stats(database: Option<PathBuf>) -> Result<()> {
         } else {
             cal.language.clone()
         };
+        let applied = cal
+            .confidence
+            .parse::<Confidence>()
+            .is_ok_and(|c| c.is_sufficient());
         outln!(
             out,
-            "    {}: max_dist={:.3}, min_sim={:.3} ({})",
+            "    {}: max_dist={:.3}, min_sim={:.3} ({}{})",
             label,
             cal.max_distance,
             cal.min_similarity,
-            cal.confidence
+            cal.confidence,
+            if applied {
+                ""
+            } else {
+                ", not applied: defaults in force"
+            }
         );
     }
 

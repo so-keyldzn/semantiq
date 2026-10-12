@@ -678,3 +678,65 @@ fn database_without_project_uses_the_recorded_root() {
     assert_eq!(refs["definitions"][0]["file_path"], "src/lib.rs");
     assert_eq!(refs["usages"].as_array().unwrap().len(), 1);
 }
+
+/// #105: `calibrate` finds the index like `stats` and the query commands
+/// (current directory or a parent), instead of asking for a nested index.
+#[test]
+fn calibrate_locates_the_index_from_a_subdirectory() {
+    let dir = indexed_project();
+    let output = semantiq(&dir.path().join("src"), &["calibrate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Semantiq Threshold Calibration"), "{out}");
+    assert!(out.contains("No distance observations found"), "{out}");
+    assert!(!dir.path().join("src/.semantiq.db").exists());
+}
+
+/// #135: a calibration below the applied floor is saved with a note saying
+/// search does not use it yet, in `calibrate` and in `stats`.
+#[test]
+fn calibrate_says_when_a_calibration_is_not_applied() {
+    let dir = indexed_project();
+    let rows: Vec<(String, f32, u64, i64)> = (0..150u64)
+        .map(|i| {
+            (
+                "rust".to_string(),
+                0.5 + (i % 40) as f32 * 0.01,
+                i,
+                1_700_000_000,
+            )
+        })
+        .collect();
+    semantiq_index::IndexStore::open(&dir.path().join(".semantiq.db"))
+        .unwrap()
+        .insert_distance_observations_batch(&rows)
+        .unwrap();
+
+    let output = semantiq(dir.path(), &["calibrate", "--min-samples", "500"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("rust: 150 (insufficient)"), "{out}");
+
+    let output = semantiq(dir.path(), &["calibrate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Calibration saved to database."), "{out}");
+    assert!(
+        out.contains("rust has 150 observations (confidence low): stored but not applied"),
+        "{out}"
+    );
+    assert!(out.contains("until 500 observations"), "{out}");
+
+    let output = semantiq(dir.path(), &["stats"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("rust: max_dist="), "{out}");
+    assert!(
+        out.contains("(low, not applied: defaults in force)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Bootstrap: 30% (150/500 observations)"),
+        "{out}"
+    );
+}

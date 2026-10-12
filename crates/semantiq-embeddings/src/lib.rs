@@ -1,12 +1,15 @@
 pub mod model;
+pub mod slot;
 
 pub use model::{
-    EMBEDDINGS_ENV_VAR, EmbeddingBackend, EmbeddingConfig, EmbeddingModel, Pooling, QUERY_PREFIX,
-    StubEmbeddingModel, StubReason, create_embedding_model, pool_and_normalize, selected_backend,
+    EMBEDDINGS_ENV_VAR, EmbeddingBackend, EmbeddingConfig, EmbeddingModel, MODELS_DIR_ENV_VAR,
+    ModelLoadError, Pooling, QUERY_PREFIX, StubEmbeddingModel, StubReason, create_embedding_model,
+    pool_and_normalize, public_load_reason, selected_backend,
 };
+pub use slot::{ModelLoaderFn, ModelSlot, ModelStatus, ModelUnavailable, RetryPolicy};
 
 #[cfg(feature = "onnx")]
-pub use model::ensure_models_downloaded;
+pub use model::{ensure_models_downloaded, models_dir};
 
 /// Dimension of the embedding vectors (CodeRankEmbed produces 768-dim vectors).
 /// Single source of truth: `semantiq-index` sizes `chunks_vec` from it.

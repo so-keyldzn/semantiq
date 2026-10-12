@@ -16,6 +16,7 @@ use crate::IndexStore;
 use crate::store::{EmbeddingCounts, PendingChunk};
 use anyhow::Result;
 use semantiq_embeddings::EmbeddingModel;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -132,10 +133,21 @@ pub fn embed_pending(
     should_stop: &dyn Fn() -> bool,
     on_batch: &mut dyn FnMut(&EmbeddingProgress),
 ) -> Result<EmbedResult> {
+    // `running` is cleared on every exit: an error counting the chunks
+    // (`SQLITE_BUSY` behind a concurrent `index --force`) or a panic in the
+    // model used to leave it set, and the "N% ready" notice never went away.
+    let _finish = FinishOnDrop(progress);
     progress.start(store.embedding_counts()?);
-    let result = embed_pending_inner(store, model, batch_size, progress, should_stop, on_batch);
-    progress.finish();
-    result
+    embed_pending_inner(store, model, batch_size, progress, should_stop, on_batch)
+}
+
+/// Clears `running` when dropped, whatever path the pass took.
+struct FinishOnDrop<'a>(&'a EmbeddingProgress);
+
+impl Drop for FinishOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
 }
 
 fn embed_pending_inner(
@@ -207,8 +219,13 @@ fn embed_batch(model: &dyn EmbeddingModel, batch: &[PendingChunk]) -> Vec<Option
 
 /// Loads the embedding model on the background thread, at its first pass.
 /// Called again, after a backoff, when a load fails (download, disk, digest);
-/// the thread owns it and calls it sequentially.
-pub type ModelLoader = Box<dyn FnMut() -> Result<Box<dyn EmbeddingModel>> + Send>;
+/// the thread owns it and calls it sequentially. The model is shared
+/// (`Arc`): `serve` hands out the search engine's own, so it is loaded once.
+///
+/// The `Display` of an error is stored as the progress's `model_error` and
+/// shown to clients by the search notice and `GET /stats`: keep paths, URLs
+/// and digests out of it (`semantiq_embeddings::public_load_reason`).
+pub type ModelLoader = Box<dyn FnMut() -> Result<Arc<dyn EmbeddingModel>> + Send>;
 
 /// Timing of the background thread.
 #[derive(Debug, Clone, Copy)]
@@ -387,7 +404,7 @@ impl Shared {
     }
 
     fn run(&self, store: &IndexStore, mut load_model: ModelLoader) {
-        let mut model: Option<Box<dyn EmbeddingModel>> = None;
+        let mut model: Option<Arc<dyn EmbeddingModel>> = None;
         let mut retry = ModelRetry::new(self.config);
         // `PRAGMA data_version` read before the chunks were last counted or
         // embedded. It changes only when another connection commits (CLI
@@ -397,9 +414,60 @@ impl Shared {
         let mut seen_version: Option<i64> = None;
 
         loop {
+            let wake = self.wait();
+            if matches!(wake, Wake::Shutdown) {
+                return;
+            }
+            // A panic in the loader or the model (ort, tokenizers on an
+            // unexpected input) used to kill the thread with `running` left
+            // set and no error reported (#87). It is now one failed pass:
+            // reported like a failed load, retried with the same backoff.
+            let pass = catch_unwind(AssertUnwindSafe(|| {
+                self.pass(
+                    wake,
+                    store,
+                    &mut model,
+                    &mut load_model,
+                    &mut retry,
+                    &mut seen_version,
+                )
+            }));
+            if let Err(payload) = pass {
+                let wait = retry.failed();
+                warn!(
+                    "Embedding pass panicked, semantic index paused (next attempt in {}s): {}",
+                    wait.as_secs(),
+                    panic_message(payload.as_ref())
+                );
+                model = None;
+                // The chunks of the interrupted pass are still pending, but a
+                // commit on this process's own connection does not change
+                // `data_version`: the recovery poll must look at them.
+                seen_version = None;
+                self.progress.set_model_error(Some(
+                    "the embedding pass stopped unexpectedly; it is retried in the background"
+                        .to_string(),
+                ));
+                self.progress.finish();
+            }
+        }
+    }
+
+    /// One wake-up of the thread: decide whether a pass is due, load the
+    /// model if needed, embed the pending chunks.
+    fn pass(
+        &self,
+        wake: Wake,
+        store: &IndexStore,
+        model: &mut Option<Arc<dyn EmbeddingModel>>,
+        load_model: &mut ModelLoader,
+        retry: &mut ModelRetry,
+        seen_version: &mut Option<i64>,
+    ) {
+        {
             // Read before the pass: a commit landing during the pass changes
             // the version again and is counted by the next poll.
-            let version = match self.wait() {
+            let version = match wake {
                 Wake::Shutdown => return,
                 Wake::Requested => store.data_version().ok(),
                 Wake::Poll => {
@@ -407,7 +475,7 @@ impl Shared {
                         Ok(version) => version,
                         Err(e) => {
                             debug!("Embedding poll skipped: {}", e);
-                            continue;
+                            return;
                         }
                     };
                     if model.is_none() {
@@ -415,30 +483,29 @@ impl Shared {
                         // on a complete index must clear itself too, not
                         // wait for the next notification.
                         if !retry.due() {
-                            continue;
+                            return;
                         }
                         self.progress.running.store(true, Ordering::Relaxed);
-                        let loaded =
-                            Self::load(&mut model, &mut load_model, &mut retry, &self.progress);
+                        let loaded = Self::load(model, load_model, retry, &self.progress);
                         self.progress.finish();
                         if !loaded {
-                            continue;
+                            return;
                         }
                     }
-                    if seen_version == Some(version) {
-                        continue;
+                    if *seen_version == Some(version) {
+                        return;
                     }
                     match store.embedding_counts() {
                         Ok(counts) if counts.pending() > 0 => {
                             debug!("Embedding poll: {} chunks pending", counts.pending());
                         }
                         Ok(_) => {
-                            seen_version = Some(version);
-                            continue;
+                            *seen_version = Some(version);
+                            return;
                         }
                         Err(e) => {
                             debug!("Embedding poll skipped: {}", e);
-                            continue;
+                            return;
                         }
                     }
                     self.progress.running.store(true, Ordering::Relaxed);
@@ -447,14 +514,14 @@ impl Shared {
             };
 
             if model.is_none()
-                && (!retry.due()
-                    || !Self::load(&mut model, &mut load_model, &mut retry, &self.progress))
+                && (!retry.due() || !Self::load(model, load_model, retry, &self.progress))
             {
                 self.progress.finish();
-                continue;
+                return;
             }
             let Some(model) = model.as_deref() else {
-                continue;
+                self.progress.finish();
+                return;
             };
 
             let start = Instant::now();
@@ -476,14 +543,14 @@ impl Shared {
                 Ok(_) => {}
                 Err(e) => warn!("Embedding pass failed: {}", e),
             }
-            seen_version = version;
+            *seen_version = version;
         }
     }
 
     /// One load attempt; records the outcome in `retry` and in the progress's
     /// `model_error`. Returns whether a model is now loaded.
     fn load(
-        model: &mut Option<Box<dyn EmbeddingModel>>,
+        model: &mut Option<Arc<dyn EmbeddingModel>>,
         load_model: &mut ModelLoader,
         retry: &mut ModelRetry,
         progress: &EmbeddingProgress,
@@ -499,7 +566,7 @@ impl Shared {
                 let wait = retry.failed();
                 warn!(
                     "Embedding model unavailable, semantic index not built \
-                     (next attempt in {}s): {}",
+                     (next attempt in {}s): {:#}",
                     wait.as_secs(),
                     e
                 );
@@ -507,6 +574,17 @@ impl Shared {
                 false
             }
         }
+    }
+}
+
+/// The text of a panic payload (`panic!("…")` gives a `&str` or a `String`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
     }
 }
 

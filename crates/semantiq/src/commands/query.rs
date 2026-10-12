@@ -293,7 +293,7 @@ fn complete_embeddings(engine: &RetrievalEngine, store: &IndexStore) -> Result<(
     if counts.pending() <= INLINE_EMBEDDING_LIMIT {
         let result = embed_pending(
             store,
-            model,
+            model.as_ref(),
             DEFAULT_BATCH_SIZE,
             &EmbeddingProgress::new(),
             &|| false,

@@ -15,6 +15,11 @@ pub(super) const DEFAULT_MIN_SIMILARITY: f32 = 0.3;
 /// Minimum number of observations required for calibration.
 pub(super) const MIN_SAMPLES_FOR_CALIBRATION: usize = 100;
 
+/// Observations a calibration needs before search applies it
+/// ([`Confidence::Medium`]); below, it is stored but the defaults stay in
+/// force. Auto-calibration only saves calibrations past this floor.
+pub const APPLIED_MIN_SAMPLES: usize = 500;
+
 /// Confidence level for calibrated thresholds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Confidence {
@@ -34,7 +39,7 @@ impl Confidence {
     pub fn from_count(count: usize) -> Self {
         if count < MIN_SAMPLES_FOR_CALIBRATION {
             Self::None
-        } else if count < 500 {
+        } else if count < APPLIED_MIN_SAMPLES {
             Self::Low
         } else if count < 2000 {
             Self::Medium
