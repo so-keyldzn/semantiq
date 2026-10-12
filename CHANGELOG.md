@@ -322,10 +322,13 @@ shape. Phase 1 only: embeddings are kept.
   the stub's phase 2 writes nothing into a real model's vectors. A real model
   finding another model's vectors drops only those (every chunk is pending
   again) and keeps files, symbols and references. The reconciliation runs
-  when phase 2 starts, not at open (#86).
+  when phase 2 starts, not at open, and before any "nothing pending" shortcut:
+  a complete index of another model's vectors is pending from the first
+  chunk for `semantiq index`, `--embeddings-only` and `search` alike (#86).
 - A parser version bump no longer throws the embeddings away: the structural
   tables are cleared and every file is re-extracted, and the embedding of a
-  chunk whose content did not change is carried over (#86).
+  chunk whose content did not change is carried over; `semantiq index
+  --embeddings-only` rebuilds the structure first in that case (#86).
 - Two processes opening an old index together (`serve` and a CLI command right
   after `semantiq update`) migrated it twice: the second one failed with
   `duplicate column name`. The schema version is read again under the write

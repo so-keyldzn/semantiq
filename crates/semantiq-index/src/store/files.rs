@@ -504,6 +504,20 @@ impl IndexStore {
         self.with_conn(Self::set_parser_version_impl)
     }
 
+    /// Overwrite one `metadata` row. Test support only: lets a test play an
+    /// index left by an older parser (`parser_version`) or by another
+    /// embedding model (`embedding_model`, `embedding_dim`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Internal implementation for use within a transaction.
     pub(crate) fn set_parser_version_impl(conn: &Connection) -> Result<()> {
         conn.execute(

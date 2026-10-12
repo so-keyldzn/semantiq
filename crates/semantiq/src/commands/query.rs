@@ -9,7 +9,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use semantiq_index::embedder::DEFAULT_BATCH_SIZE;
-use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
+use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending, prepare_phase2};
 use semantiq_mcp::server::{
     CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
     ImpactParams, RepoMapParams, SearchParams, calls_output, dead_code_output, deps_output,
@@ -278,7 +278,9 @@ fn complete_embeddings(engine: &RetrievalEngine, store: &IndexStore) -> Result<(
         );
         return Ok(());
     }
-    let counts = store.embedding_counts()?;
+    // Reconciled before the count: after a model change every chunk is
+    // pending, and the query vector is never compared with the old vectors.
+    let (_, counts) = prepare_phase2(store)?;
     if counts.pending() == 0 {
         return Ok(());
     }

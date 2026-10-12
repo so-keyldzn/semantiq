@@ -13,6 +13,7 @@
 //! batch per transaction.
 
 use crate::IndexStore;
+use crate::schema::EmbeddingSpace;
 use crate::store::{EmbeddingCounts, PendingChunk};
 use anyhow::Result;
 use semantiq_embeddings::EmbeddingModel;
@@ -137,21 +138,12 @@ pub fn embed_pending(
     // (`SQLITE_BUSY` behind a concurrent `index --force`) or a panic in the
     // model used to leave it set, and the "N% ready" notice never went away.
     let _finish = FinishOnDrop(progress);
-    progress.start(store.embedding_counts()?);
-    match store.prepare_embedding_space()? {
+    let (space, counts) = prepare_phase2(store)?;
+    progress.start(counts);
+    match space {
         // Another real model's vectors; the stub's zeros must not join them.
-        crate::EmbeddingSpace::Foreign { model: foreign } => {
-            warn!(
-                "The index holds vectors of {foreign} and this process embeds with the stub: \
-                 phase 2 skipped, nothing written"
-            );
-            Ok(EmbedResult::default())
-        }
-        space => {
-            if let crate::EmbeddingSpace::Reset { previous } = space {
-                info!("Vectors of {previous} dropped: every chunk is pending again");
-                progress.start(store.embedding_counts()?);
-            }
+        EmbeddingSpace::Foreign { .. } => Ok(EmbedResult::default()),
+        EmbeddingSpace::Current | EmbeddingSpace::Reset { .. } => {
             embed_pending_inner(store, model, batch_size, progress, should_stop, on_batch)
         }
     }
@@ -164,6 +156,35 @@ impl Drop for FinishOnDrop<'_> {
     fn drop(&mut self) {
         self.0.finish();
     }
+}
+
+/// Where phase 2 starts from: the stored vectors aligned with the model this
+/// process embeds with ([`IndexStore::prepare_embedding_space`]), then the
+/// chunk counts as they stand after that.
+///
+/// Every phase 2 decision goes through here, the "nothing pending" fast paths
+/// of `semantiq index`, `--embeddings-only` and the inline embedding of
+/// `search` included: a fully embedded index holding another model's vectors
+/// is not complete, it is pending from the first chunk, and a search must not
+/// compare this model's query vector with them (#86). On
+/// [`EmbeddingSpace::Foreign`] the counts describe the other model's vectors
+/// and the caller writes nothing.
+pub fn prepare_phase2(store: &IndexStore) -> Result<(EmbeddingSpace, EmbeddingCounts)> {
+    let space = store.prepare_embedding_space()?;
+    match &space {
+        EmbeddingSpace::Current => {}
+        EmbeddingSpace::Reset { previous } => {
+            info!("Vectors of {previous} dropped: every chunk is pending again");
+        }
+        EmbeddingSpace::Foreign { model } => {
+            warn!(
+                "The index holds vectors of {model} and this process embeds with the stub: \
+                 phase 2 skipped, nothing written"
+            );
+        }
+    }
+    let counts = store.embedding_counts()?;
+    Ok((space, counts))
 }
 
 fn embed_pending_inner(
@@ -511,8 +532,15 @@ impl Shared {
                     if *seen_version == Some(version) {
                         return;
                     }
-                    match store.embedding_counts() {
-                        Ok(counts) if counts.pending() > 0 => {
+                    // Reconciled before the count: a complete index of another
+                    // model's vectors (a CLI run with another build meanwhile)
+                    // is pending from the first chunk.
+                    match prepare_phase2(store) {
+                        Ok((EmbeddingSpace::Foreign { .. }, _)) => {
+                            *seen_version = Some(version);
+                            return;
+                        }
+                        Ok((_, counts)) if counts.pending() > 0 => {
                             debug!("Embedding poll: {} chunks pending", counts.pending());
                         }
                         Ok(_) => {
