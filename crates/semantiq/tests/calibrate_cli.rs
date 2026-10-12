@@ -94,8 +94,16 @@ fn calibrate_dry_run_reports_without_saving() {
     let out = stdout(&output);
     assert!(out.contains("Semantiq Threshold Calibration"), "{out}");
     assert!(out.contains("Dry run: true"), "{out}");
-    assert!(out.contains("rust: 120 (ready)"), "{out}");
-    assert!(out.contains("python: 120 (ready)"), "{out}");
+    // 120 >= --min-samples but < APPLIED_MIN_SAMPLES (500): calibrated,
+    // stored, not applied by search (#174).
+    assert!(
+        out.contains("rust: 120 (ready, stored but not applied until 500 observations)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("python: 120 (ready, stored but not applied until 500 observations)"),
+        "{out}"
+    );
     assert!(out.contains("Dry run - not saving to database."), "{out}");
     assert!(!out.contains("Calibration saved"), "{out}");
 
@@ -112,6 +120,10 @@ fn calibrate_saves_thresholds_for_the_languages_with_enough_samples() {
     assert!(output.status.success(), "{}", stderr(&output));
     let out = stdout(&output);
     assert!(out.contains("Calibration saved to database."), "{out}");
+    assert!(
+        out.contains("Note: rust has 120 observations (confidence low): stored but not applied"),
+        "{out}"
+    );
 
     for language in ["rust", "python", "_global"] {
         let saved = calibration(project.path(), language)
@@ -159,6 +171,7 @@ fn calibrate_without_a_database_is_an_error() {
     let output = semantiq(dir.path(), &["calibrate"]);
     assert_eq!(output.status.code(), Some(1));
     let err = stderr(&output);
-    assert!(err.contains("Database not found"), "{err}");
+    // The lookup of `stats` and the query commands (#105).
+    assert!(err.contains("No Semantiq index found in"), "{err}");
     assert!(err.contains("semantiq index"), "{err}");
 }
