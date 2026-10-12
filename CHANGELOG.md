@@ -61,11 +61,13 @@ confidence of `impact` / `calls` see.
   and `npm/` out of the build context (7 GB before); a cargo-chef stage caches
   the dependency build so a source edit only recompiles the workspace crates;
   `cargo build --release --locked`; the demo project is a copy of the sources
-  being built instead of a `git clone` of `main` at build time (reproducible,
-  builds offline); `libssl-dev`, `pkg-config` and `git` are dropped (ureq uses
-  rustls); the model cache lives in `/app/data` (`XDG_DATA_HOME`) and the
-  container indexes the structure first, embeddings continue in the
-  background (#118).
+  being built instead of a `git clone` of `main` at build time
+  (reproducible); `libssl-dev`, `pkg-config` and `git` are dropped (ureq uses
+  rustls); the image ships the embedding model (`/app/data`, `XDG_DATA_HOME`)
+  and the index of the demo project, both built with the image: `serve`
+  loads the model before it binds the listener, so a container that had to
+  download it first could outlast the health check's start period before
+  `/health` answered (#118).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the

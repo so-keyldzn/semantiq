@@ -217,7 +217,10 @@ Options:
 #### Docker
 
 The `Dockerfile` builds the binary (cargo-chef dependency layer, `--locked`)
-and serves the HTTP API over a copy of this repository's sources, as a demo:
+and serves the HTTP API over a copy of this repository's sources, as a demo.
+The image ships the embedding model and the index of that copy (both built
+with the image), so a container answers as soon as it starts and needs no
+network:
 
 ```bash
 docker build -t semantiq .
@@ -227,8 +230,8 @@ curl http://localhost:8080/health
 
 `HTTP_PORT` (8080) and `HTTP_HOST` (`0.0.0.0`: inside a container the
 server's loopback default is unreachable from the published port) are
-environment variables; the embedding model is cached under `/app/data`
-(mount a volume to keep it).
+environment variables; the embedding model lives under `/app/data`
+(`XDG_DATA_HOME`).
 
 ### `semantiq update [OPTIONS]`
 

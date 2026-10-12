@@ -1,6 +1,7 @@
-# Semantiq HTTP API Docker image: the server indexes a copy of this
-# repository (the sources of the build itself, not a clone of `main`) and
-# serves the REST API + MCP Streamable HTTP on $HTTP_PORT.
+# Semantiq HTTP API Docker image: the server serves the REST API + MCP
+# Streamable HTTP on $HTTP_PORT over a copy of this repository (the sources
+# of the build itself, not a clone of `main`), indexed at build time with the
+# embedding model, so a container answers as soon as it starts.
 #
 #   docker build -t semantiq .
 #   docker run --rm -p 8080:8080 semantiq
@@ -74,15 +75,25 @@ EXPOSE 8080
 ENV RUST_LOG=info
 ENV HTTP_PORT=8080
 ENV HTTP_HOST=0.0.0.0
-# Embedding model cache (~140 MB, downloaded on the first start): mount a
-# volume here to keep it across containers.
+# Embedding model cache (dirs::data_dir()/semantiq/models).
 ENV XDG_DATA_HOME=/app/data
+
+USER semantiq
+
+# Index the demo project here, embeddings included. `semantiq serve` loads
+# the embedding model before it binds the HTTP listener (RetrievalEngine::new
+# downloads it, ~140 MB, when the cache is empty): without this step, the
+# first start of a container would spend that download, possibly longer than
+# the health check's start period, before /health answers. The image ships the
+# model and the index instead; the server only refreshes them and needs no
+# network. The `test` fails the build when the model did not download (the
+# index command only warns and leaves the chunks unembedded).
+RUN semantiq index /app/semantiq-repo \
+    && test -s /app/data/semantiq/models/coderankembed-int8.onnx
 
 # Shell form so the port follows HTTP_PORT.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
     CMD curl -f "http://127.0.0.1:${HTTP_PORT}/health" || exit 1
 
-USER semantiq
-
-# Index the structure first, then serve (embeddings continue in the background).
-CMD ["sh", "-c", "semantiq index /app/semantiq-repo --no-embeddings && exec semantiq serve --project /app/semantiq-repo --http-host ${HTTP_HOST} --http-port ${HTTP_PORT}"]
+# Shell form so the address and port follow HTTP_HOST / HTTP_PORT.
+CMD ["sh", "-c", "exec semantiq serve --project /app/semantiq-repo --http-host ${HTTP_HOST} --http-port ${HTTP_PORT}"]
