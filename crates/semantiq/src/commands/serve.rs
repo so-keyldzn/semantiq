@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use super::common::{ensure_directory, resolve_db_path, warn_if_semantic_search_unavailable};
+use crate::http::CorsOrigins;
 
 pub(crate) async fn serve(
     project: Option<PathBuf>,
@@ -28,6 +29,12 @@ pub(crate) async fn serve(
     };
     ensure_directory(&project_root)?;
 
+    // Validate the HTTP flags before any indexing starts.
+    let cors = match cors_origin {
+        Some(spec) => Some(CorsOrigins::parse(&spec)?),
+        None => None,
+    };
+
     let db_path = resolve_db_path(database, &project_root);
     warn_if_semantic_search_unavailable();
 
@@ -46,7 +53,7 @@ pub(crate) async fn serve(
         info!("Project root: {:?}", project_root);
         info!("Database: {:?}", db_path);
 
-        crate::http::serve_http(server, http_host, port, cors_origin).await
+        crate::http::serve_http(server, http_host, port, cors).await
     } else {
         // MCP stdio mode
         info!("Starting Semantiq MCP server");

@@ -107,7 +107,7 @@ where
 pub struct SearchParams {
     /// What the code does, or a symbol name
     pub query: String,
-    /// Max results (default 10)
+    /// Max results (default 10, max 1000)
     pub limit: Option<usize>,
     /// Min score 0-1 (default 0.3)
     pub min_score: Option<f32>,
@@ -123,7 +123,7 @@ pub struct SearchParams {
 pub struct FindRefsParams {
     /// Symbol name
     pub symbol: String,
-    /// Max references (default 30)
+    /// Max references (default 30, max 1000)
     pub limit: Option<usize>,
 }
 
@@ -212,7 +212,7 @@ impl SearchOutput {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct RepoMapParams {
-    /// Token budget (default 1500, 256-8000)
+    /// Token budget (default 1500, clamped to 256-8000)
     pub max_tokens: Option<usize>,
     /// Files, directories or symbols to center the map on
     pub focus: Option<Vec<String>>,
@@ -506,7 +506,7 @@ pub struct ImpactParams {
     pub file_path: Option<String>,
     /// Levels of users to follow (default 2, max 4)
     pub max_depth: Option<usize>,
-    /// Max impact sites (default 200)
+    /// Max impact sites (default 200, max 1000)
     pub limit: Option<usize>,
 }
 

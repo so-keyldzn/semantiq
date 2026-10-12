@@ -65,6 +65,11 @@ confidence of `impact` / `calls` see.
   files (`*.pem`, `*.key`, `*.p12`, `*.jks`...). `.gitignore`, `.ignore` and
   the global git excludes are honoured outside a git repository too (an
   exported archive, a build directory, a volume without `.git`) (#113).
+- `serve --http-port` refuses `--cors-origin '*'` and `null`: with a wildcard,
+  any website the developer visits could read the indexed source through the
+  loopback API. The flag now takes one or more comma-separated absolute
+  `http(s)://host[:port]` origins (no path, no wildcard; default ports are
+  dropped as browsers do), validated before the server starts (#112).
 
 ### Fixed
 - A directory rename, move or removal is applied by `serve`'s watcher: the
@@ -240,6 +245,32 @@ confidence of `impact` / `calls` see.
   pollute `refs` (#144).
 - `.mts` / `.cts` files are indexed as TypeScript and `./x.mjs` / `./x.cjs`
   imports resolve to `x.mts` / `x.cts` (#151).
+- The update channel works again: the GitHub `releases/latest` answer (~20 KB
+  with its assets and notes) was cut at 10 KB, so the version check and
+  `semantiq update` failed on every run since February and blamed the network.
+  The body cap is now 1 MiB and a truncated or unparsable answer is reported as
+  such (#110).
+- `RUST_LOG` is honoured: the filter was built from a fixed string, so the
+  documented variable was never read. `--verbose` still wins; the defaults are
+  `info,ort=warn` (`warn,ort=error` for query commands) (#128).
+- HTTP API: the query endpoints no longer queue behind a saturated server. A
+  global 50-request concurrency cap now rejects the next request at once with
+  503 (`OVERLOADED`), a request still running after 30 s is answered 504
+  (`TIMEOUT`) while its handler keeps the slot until its SQLite work ends, and
+  `/health` runs outside both limits so a busy server still reports as alive
+  to a Docker `HEALTHCHECK` (#99).
+- README: documents HTTP mode (`--http-port`, `--http-host`, `--cors-origin`,
+  the ten endpoints, REST defaults and caps, which endpoints share the MCP
+  shapes) (#129); Known Limitations no longer claims `export const` is not
+  indexed and states the real size caps (1 MB for code, 256 KB for JSON /
+  YAML / TOML) (#130); the data formats are described as indexing keys and
+  sections as symbols, the tool and strategy counts, the `stats` sample
+  (`Embeddings`, `ML Calibration`), the `semantiq_explain` fields, the
+  reindex triggers (embedding model change) and the dead setup-guide link are
+  fixed, and the npm README lists the 19 languages (#131). Limit caps are
+  stated once: every `limit` is clamped to 1-1000 (hierarchy: per direction)
+  and `max_tokens` to 256-8000, in REFERENCE.md, SKILL.md, the README, the
+  CLI `--help` and the MCP parameter descriptions (#133).
 
 
 - `insert_file` upserts the row and returns its id in one statement

@@ -7,6 +7,13 @@ project root and use `/` on every platform (Windows included); a path argument
 (`deps <file>`, `--file`, `--focus`, `--path-prefix`) is accepted with either
 `/` or `\`.
 
+Every `--limit` is clamped to `1..=1000` (`hierarchy`: per direction),
+`--max-depth` to the range given below and `map --max-tokens` to
+`256..=8000`, silently: a value outside the range becomes the nearest bound
+(`--limit 0` → 1, `--max-tokens 9000` → 8000). The output carries the value
+used (`max_tokens`, `max_depth`) and `truncated: true` when the cut list had
+more entries. Over the HTTP API every limit is capped at 100.
+
 ## `semantiq search <query> --json`
 
 ```jsonc
@@ -44,7 +51,7 @@ project root and use `/` on every platform (Windows included); a path argument
   A text hit on a line longer than 500 characters is cut to a window around
   the match (`…` on the cut sides); minified or generated files (lines
   averaging more than 500 characters, or binary) are not searched.
-- `truncated`: more results exist beyond `--limit` (default 10).
+- `truncated`: more results exist beyond `--limit` (default 10, max 1000).
 - `--symbol-kind` (CSV) applies to every strategy before its limit: symbol
   hits of those kinds, semantic hits whose chunk defines a symbol of one of
   them, and no text hits (a line has no kind). Import statements are
@@ -84,7 +91,7 @@ project root and use `/` on every platform (Windows included); a path argument
   definitions are listed, by file path.
 - `content`: one line, trimmed and cut to 120 characters (for a definition,
   the line declaring the name).
-- `truncated`: the limit (`--limit`, default 30) was reached.
+- `truncated`: the limit (`--limit`, default 30, max 1000) was reached.
 
 ## `semantiq deps <file> --json`
 
@@ -200,7 +207,7 @@ those definitions, sorted.
   code), personalized toward `--focus` entries when given.
 - A symbol's `rank` is the share of importance it receives through
   references. Ranks keep 4 significant digits. The map keeps the best symbols that fit `--max-tokens`
-  (default 1500, 256 to 8000).
+  (default 1500, clamped to 256-8000).
 - `focus_files` / `focus_symbols`: how `--focus` entries were resolved
   (directories expand to their files); `unmatched_focus` matched nothing.
 - Variables, imports, modules and data files (JSON, YAML, TOML, HTML) are
@@ -268,7 +275,7 @@ those definitions, sorted.
   a library type (`Send`, `Exception`…), not walked further.
 - Rust: `impl Trait for Type` gives `implements`, supertraits give `extends`.
   C#: extends vs implements is a heuristic (first base, `I`-prefixed names).
-- `truncated`: the limit per direction (`--limit`, default 200) was reached:
+- `truncated`: the limit per direction (`--limit`, default 200, max 1000) was reached:
   some relations are not listed.
 
 ## `semantiq dead-code --json`

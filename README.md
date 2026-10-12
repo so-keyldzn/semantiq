@@ -190,14 +190,22 @@ Creates:
 
 ### `semantiq serve [OPTIONS]`
 
-Start the MCP server.
+Start the MCP server (stdio), or the HTTP API with `--http-port`.
 
 ```bash
 semantiq serve                           # Use current directory
 semantiq serve --project /path/to/project
 semantiq serve --database /custom/path.db
 semantiq serve --no-update-check         # Disable version notifications
+semantiq serve --http-port 3000          # HTTP API + MCP Streamable HTTP instead of stdio
+semantiq serve --http-port 3000 --cors-origin http://localhost:5173
+semantiq serve --http-port 3000 --http-host 0.0.0.0   # reachable from the network (no auth!)
 ```
+
+Options:
+- `--http-port N` - Serve the [HTTP API](#http-api---http-port) on this port instead of MCP over stdio
+- `--http-host ADDR` - Address to bind (default `127.0.0.1`; anything else exposes the unauthenticated API to the network)
+- `--cors-origin ORIGINS` - Browser origins allowed to read the API, comma-separated absolute `http(s)://host[:port]` origins; `*` and `null` are refused. Default: no cross-origin access
 
 ### `semantiq update [OPTIONS]`
 
@@ -301,7 +309,7 @@ semantiq map --path-prefix crates/core/
 ```
 
 Options:
-- `--max-tokens N` - Token budget, estimated as characters / 4 (default: 1500, range 256-8000)
+- `--max-tokens N` - Token budget, estimated as characters / 4 (default: 1500, clamped to 256-8000)
 - `--focus LIST` - Files, directories or symbol names to center the map on (repeatable or comma-separated)
 - `--path-prefix P` - Only list files under this path
 
@@ -330,18 +338,44 @@ Index:
   References: 4870
   Call edges: 1210
   Type relations: 38
+
+Embeddings:
+  Model: nomic-ai/CodeRankEmbed
+  Chunks embedded: 85/85 (100%)
+  Semantic search: enabled
+
+ML Calibration:
+  Bootstrap: 12% (63/500 observations)
+    Mode: BOOTSTRAP (collecting 100% of observations)
+
+  Observations by language:
+    rust: 63
+
+  Calibrated thresholds: 0
+    (will auto-calibrate after bootstrap)
 ```
 
 `References`, `Call edges` and `Type relations` are the tables behind
 `refs` / `impact` / `dead-code`, `calls` and `hierarchy`; `GET /stats`
 reports them as `indexed_refs`, `indexed_call_edges` and
-`indexed_type_relations`.
+`indexed_type_relations`. `Embeddings` says how much of the semantic index
+is computed and whether semantic search is available at all (`UNAVAILABLE`
+with the reason when the stub model is in use, e.g. `SEMANTIQ_EMBEDDINGS=stub`
+or the macOS Intel build); `ML Calibration` tracks the adaptive search
+thresholds (`semantiq calibrate`, after 500 observations).
 
 ## MCP Tools
 
 Every `path` / `file_path` in the outputs is relative to the project root and
 uses `/` on every platform (Windows included); path parameters (`file_path`,
 `focus`, `path_prefix`) accept either `/` or `\`.
+
+Every `limit` (and the `--limit` of the CLI commands) is clamped to 1-1000
+(`semantiq_hierarchy`: per direction), `max_depth` to its stated range and
+`max_tokens` to 256-8000, silently: a value outside the range is replaced by
+the nearest bound and the output reports the value used (`truncated: true`
+when the cut list has more entries). The [HTTP API](#http-api---http-port)
+caps limits at 100.
 
 ### `semantiq_search`
 
@@ -352,7 +386,7 @@ Semantic + lexical code search combining 3 strategies. Returns, per hit,
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `query` | string | required | Search query (max 500 chars) |
-| `limit` | number | 10 | Maximum results |
+| `limit` | number | 10 | Maximum results (max 1000) |
 | `min_score` | number | 0.3 | Score threshold (0.0-1.0) |
 | `file_type` | string | - | Filter by extensions (CSV: `rs,ts,py`) |
 | `symbol_kind` | string | - | Filter by symbol type (CSV); applies to every strategy before its limit, text hits are left out |
@@ -374,7 +408,7 @@ the unfocused ranking is cached until the index changes.
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_tokens` | number | 1500 | Token budget (256-8000, estimated as chars / 4) |
+| `max_tokens` | number | 1500 | Token budget (clamped to 256-8000, estimated as chars / 4) |
 | `focus` | string[] | - | Files, directories or symbol names to center the map on (personalized PageRank) |
 | `path_prefix` | string | - | Only list files under this path |
 
@@ -388,7 +422,7 @@ Find all references (definitions + usages) of a symbol.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `symbol` | string | required | Symbol name to search |
-| `limit` | number | 30 | Maximum results |
+| `limit` | number | 30 | Maximum results (max 1000) |
 
 ### `semantiq_deps`
 
@@ -413,9 +447,11 @@ Get detailed explanation of a symbol.
 | `symbol` | string | required | Symbol name to explain |
 
 Returns:
-- All definitions found
+- All definitions found (`definitions`: file, kind, lines)
 - Signatures and documentation
-- Usage patterns and locations
+- `usage_count` (non-definition occurrences of the name) and `imported_in`
+  (the import statements, as `path:line`); for the locations themselves use
+  `semantiq_find_refs`
 
 ### `semantiq_impact`
 
@@ -425,7 +461,7 @@ to run. Each site has a confidence (`same_file`, `imports`, `unique_name`,
 `name_only`) since matching is by name.
 
 **Parameters:** `symbol` (required), `file_path` (pick one of several
-definitions), `max_depth` (default 2, max 4), `limit` (default 200).
+definitions), `max_depth` (default 2, max 4), `limit` (default 200, max 1000).
 
 ### `semantiq_calls`
 
@@ -450,7 +486,7 @@ transitively: Rust `impl Trait for Type` and supertraits, TS/JS, Python, Java,
 Kotlin, C#, C++, PHP, Ruby, Scala (not Go's implicit interfaces).
 
 **Parameters:** `symbol` (required), `max_depth` (default 3, max 5), `limit`
-(per direction, default 200).
+(per direction, default 200, max 1000).
 
 ### `semantiq_dead_code`
 
@@ -466,6 +502,58 @@ deleting.
 `semantiq_calls`, `semantiq_hierarchy` and `semantiq_dead_code` are also
 available as `semantiq calls`, `semantiq hierarchy`, `semantiq dead-code` and,
 in HTTP mode, `POST /calls`, `POST /hierarchy`, `POST /dead-code`.
+
+## HTTP API (`--http-port`)
+
+`semantiq serve --http-port <PORT>` replaces MCP over stdio with an HTTP
+server that exposes the same tools two ways: REST endpoints and the MCP
+Streamable HTTP transport at `/mcp` (for remote MCP clients). It binds to
+`127.0.0.1` unless `--http-host` says otherwise and has no authentication:
+anyone who can reach the port can read the indexed source, so only bind
+beyond loopback on a network you trust.
+
+```bash
+semantiq serve --project . --http-port 3000
+curl -s localhost:3000/health
+curl -s -X POST localhost:3000/search -H 'content-type: application/json' \
+  -d '{"query": "retry with backoff", "limit": 5}'
+```
+
+| Endpoint | Body | Response |
+|----------|------|----------|
+| `GET /health` | - | `{"status": "ok", "version": "..."}`; answers even while every other endpoint is saturated |
+| `GET /stats` | - | Index counts plus `indexing`, `watching`, `embedding`, `embedded_chunks`, `semantic_index_ready_percent`, `semantic_search` (+ `_unavailable_reason`) |
+| `POST /search` | `query`, `limit` (default **20**, max 100), `min_score`, `file_type`, `symbol_kind` | `results[]` with `file_path`, `start_line`, `end_line`, `score` (unrounded), `content`, `metadata.symbol_name` / `symbol_kind`; `total_count`, `search_time_ms` |
+| `POST /find-refs` | `symbol`, `limit` (default **50**, max 100) | `definitions[]` and `references[]` with `file_path`, `line`, `usage_type`, `context` (`column` is always `null`); `total_count`, `search_time_ms` |
+| `POST /deps` | `file_path` | `imports[]` and `imported_by[]` with `path`, `symbols`, `kind`, `line`; `search_time_ms` |
+| `POST /explain` | `symbol` | `kind` (`symbol` or `unknown`), `definitions[]` with `file_path`, `line`, `signature`, `documentation`; `related_symbols`, `search_time_ms` |
+| `POST /map` | `max_tokens`, `focus`, `path_prefix` | the `semantiq_repo_map` structured output |
+| `POST /calls` | the `semantiq_calls` parameters, `limit` capped at 100 | the `semantiq_calls` structured output |
+| `POST /hierarchy` | the `semantiq_hierarchy` parameters, `limit` capped at 100 | the `semantiq_hierarchy` structured output |
+| `POST /dead-code` | the `semantiq_dead_code` parameters, `limit` capped at 100 | the `semantiq_dead_code` structured output |
+
+`/search`, `/find-refs`, `/deps` and `/explain` predate the MCP structured
+outputs and keep their own shapes (above); `/map`, `/calls`, `/hierarchy` and
+`/dead-code` return exactly the `structuredContent` of the MCP tool, documented
+in [skills/semantiq/REFERENCE.md](skills/semantiq/REFERENCE.md). Errors are
+`{"error": "...", "code": "..."}` with 400 for invalid input.
+
+Limits and protections:
+- Request bodies above 1 MB are rejected (413).
+- The query endpoints (everything but `/health` and `/mcp`) run at most 50
+  requests at once; the next one is rejected immediately with 503
+  (`OVERLOADED`) instead of waiting, and a request still running after 30 s is
+  answered 504 (`TIMEOUT`). Its SQLite work cannot be interrupted, so the
+  handler keeps its slot until that work ends: the cap bounds the work in
+  flight, not only the waiting clients. `/health` is outside these limits so
+  a busy server still reports as alive (Docker `HEALTHCHECK`).
+- When bound to loopback, a `Host` header other than `localhost`, `127.0.0.1`,
+  `[::1]` or the bound address is rejected with 403 (DNS rebinding), on the REST
+  endpoints and `/mcp` alike.
+- No cross-origin access by default: `--cors-origin` names the browser origins
+  allowed to read the answers (absolute `http(s)://host[:port]`, comma-separated,
+  default ports dropped as browsers do); `*` and `null` are refused because
+  they would let any website the developer visits read the indexed code.
 
 ## Supported Languages
 
@@ -489,7 +577,12 @@ in HTTP mode, `POST /calls`, `POST /hierarchy`, `POST /dead-code`.
 | Bash | `.sh`, `.bash`, `.zsh` |
 | Elixir | `.ex`, `.exs` |
 
-### Partial Support (chunks + embeddings only)
+### Data formats (keys and sections as symbols + chunks + embeddings; no imports, calls or hierarchy)
+
+Top-level keys, tables and sections are indexed as `variable` / `struct`
+symbols, so `semantiq_find_refs` / `semantiq_explain` find them and
+`semantiq_search` matches their content; these files have no imports, call
+edges or type relations and are left out of the repo map.
 
 | Language | Extensions |
 |----------|-----------|
@@ -503,10 +596,10 @@ in HTTP mode, `POST /calls`, `POST /hierarchy`, `POST /dead-code`.
 ```
 crates/
 ├── semantiq/           # CLI binary (clap subcommands)
-├── semantiq-mcp/       # MCP server (rmcp, 4 tools)
+├── semantiq-mcp/       # MCP server (rmcp, 9 tools)
 ├── semantiq-parser/    # Tree-sitter parsing (19 languages)
 ├── semantiq-index/     # SQLite storage (FTS5, sqlite-vec)
-├── semantiq-retrieval/ # Search engine (4 strategies)
+├── semantiq-retrieval/ # Search engine (3 strategies)
 └── semantiq-embeddings/# ONNX model (CodeRankEmbed, 768-D)
 ```
 
@@ -616,15 +709,17 @@ semantiq index --force
 ```
 
 Automatic reindex is triggered when:
-- Parser version changes (new tree-sitter grammars)
+- Parser version changes (extraction rules or tree-sitter grammars)
 - Schema version changes (database migrations)
+- The embedding model changes (model id or dimension stored in the index):
+  the vectors are dropped and recomputed
 
 ## Known Limitations
 
-- **`semantiq_explain`**: Works best with functions, classes, structs, and interfaces. Exported variables (e.g., `export const config = {...}`) may not be indexed as symbols. Use `semantiq_search` as a fallback.
+- **Name-based resolution**: `semantiq_find_refs`, `semantiq_impact`, `semantiq_calls` and `semantiq_dead_code` match symbols by name, so homonyms share references; a confidence (`same_file`, `imports`, `unique_name`, `name_only`) qualifies each site, and `file_path` picks one of several definitions.
 - **Embedding model**: CodeRankEmbed INT8, downloaded automatically on first run (~139MB from HuggingFace, SHA-256 pinned). See [Embedding model (first run)](#embedding-model-first-run) for the cache location and opt-out.
 - **macOS Intel (x86_64)**: No semantic (embedding) search, due to an ONNX Runtime limitation; symbol and text search work.
-- **File size limit**: Files larger than 1MB are skipped.
+- **File size limit**: Files larger than 1 MB (code) or 256 KB (JSON, YAML, TOML) are skipped.
 
 ## Excluded Directories
 
@@ -684,7 +779,8 @@ method.
 
 ## Documentation
 
-- **[MCP Setup Guide](docs/MCP-SETUP-GUIDE.md)** - Detailed configuration for all IDEs
+- **[Compatibility](#compatibility)** - Configuration for each MCP client (Claude Code, Claude Desktop, Cursor, Windsurf, ...)
+- **[Agent Skill reference](skills/semantiq/REFERENCE.md)** - The `--json` / `structuredContent` shapes of every tool
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ## License

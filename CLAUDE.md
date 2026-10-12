@@ -149,7 +149,7 @@ Bump the version in `Cargo.toml` (workspace), `npm/package.json`, `.claude-plugi
 
 ### HTTP API (`--http-port`)
 
-Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp`. The whole router (REST and `/mcp`) rejects a `Host` header that is not `localhost` / `127.0.0.1` / `[::1]` / the bound address with 403 (DNS rebinding, `http/host.rs`, the same `AllowedHosts` list is given to rmcp) unless `--http-host` is non-loopback. Middleware: 1MB body limit, 50 concurrent requests, CORS (`--cors-origin` for production).
+Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-host 0.0.0.0` exposes it to the network. Endpoints: `GET /health`, `GET /stats`, `POST /search`, `POST /map`, `POST /find-refs`, `POST /deps`, `POST /explain`, `POST /calls`, `POST /hierarchy`, `POST /dead-code` (the last three return the MCP tools' structured output, limit capped at 100). MCP Streamable HTTP at `/mcp`. The whole router (REST and `/mcp`) rejects a `Host` header that is not `localhost` / `127.0.0.1` / `[::1]` / the bound address with 403 (DNS rebinding, `http/host.rs`, the same `AllowedHosts` list is given to rmcp) unless `--http-host` is non-loopback. Middleware: 1MB body limit; the query endpoints (not `/health`, not `/mcp`) run under `http/limits.rs`: a global 50-slot semaphore with load shedding (503 `OVERLOADED` instead of queueing) and a 30 s timeout (504 `TIMEOUT`; the handler runs on its own task and keeps its slot until its blocking SQLite work ends, so the cap bounds the work in flight); CORS off by default, `--cors-origin` takes comma-separated absolute `http(s)://host[:port]` origins validated by `http/cors.rs` (`*` / `null` refused), checked in `commands/serve.rs` before indexing starts. `RUST_LOG` is honoured by `log_filter()` in `main.rs` (`--verbose` wins).
 
 ### Environment Variables
 
@@ -161,7 +161,7 @@ Alternative to MCP stdio. Binds to `127.0.0.1` by default (no auth); `--http-hos
 | `SEMANTIQ_MODELS_DIR` | `dirs::data_dir()/semantiq/models` | Directory of the model files; without it and without a data directory (`HOME` / `XDG_DATA_HOME` unset) the load fails with a hint, never falling back to the current directory |
 | `SEMANTIQ_UPDATE_CHECK` | `true` | `"0"` or `"false"` to disable version check |
 | `SEMANTIQ_UPDATE_CACHE_HOURS` | `24` | Hours to cache GitHub version check |
-| `RUST_LOG` | `info,ort=warn` | Tracing filter (`--verbose` sets `debug`) |
+| `RUST_LOG` | `info,ort=warn` (`warn,ort=error` for query commands) | Tracing filter, standard `EnvFilter` syntax; `--verbose` overrides it with `debug` |
 
 ### Testing Patterns
 

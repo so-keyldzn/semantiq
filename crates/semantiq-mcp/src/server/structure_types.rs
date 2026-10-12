@@ -15,7 +15,7 @@ pub struct CallsParams {
     pub file_path: Option<String>,
     /// Call levels to follow (default 1, max 3)
     pub max_depth: Option<usize>,
-    /// Max call edges (default 100)
+    /// Max call edges (default 100, max 1000)
     pub limit: Option<usize>,
 }
 
@@ -57,7 +57,7 @@ pub struct HierarchyParams {
     pub symbol: String,
     /// Inheritance levels to follow (default 3, max 5)
     pub max_depth: Option<usize>,
-    /// Max relations per direction (default 200)
+    /// Max relations per direction (default 200, max 1000)
     pub limit: Option<usize>,
 }
 
@@ -95,7 +95,7 @@ pub struct DeadCodeParams {
     pub language: Option<String>,
     /// Also report public / exported symbols (default false)
     pub include_public: Option<bool>,
-    /// Max symbols (default 100)
+    /// Max symbols (default 100, max 1000)
     pub limit: Option<usize>,
 }
 

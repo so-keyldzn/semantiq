@@ -210,7 +210,7 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
     println!("Checking for updates...");
 
     let latest = version_check::fetch_latest_uncached(META_TIMEOUT)
-        .ok_or_else(|| anyhow!("could not reach GitHub to check the latest version"))?;
+        .context("could not determine the latest release on GitHub")?;
 
     let newer = version_check::is_version_newer(&latest, current_version);
     debug!(current = current_version, latest = %latest, newer, "update check");

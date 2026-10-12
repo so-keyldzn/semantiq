@@ -82,7 +82,11 @@ enum Commands {
         #[arg(long)]
         http_port: Option<u16>,
 
-        /// CORS allowed origin for HTTP API (e.g., "https://example.com")
+        /// Origin(s) allowed to read the HTTP API from a browser: absolute
+        /// http(s) origins, comma-separated (e.g. "https://example.com" or
+        /// "http://localhost:5173,https://demo.example.com"). "*" is refused:
+        /// it would let every website read the indexed source. Default: no
+        /// cross-origin access.
         #[arg(long)]
         cors_origin: Option<String>,
 
@@ -133,7 +137,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Maximum results
+        /// Maximum results (max 1000)
         #[arg(short, long, default_value = "10")]
         limit: usize,
 
@@ -162,7 +166,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Maximum references
+        /// Maximum references (max 1000)
         #[arg(short, long, default_value = "30")]
         limit: usize,
     },
@@ -211,7 +215,7 @@ enum Commands {
         #[command(flatten)]
         index: IndexArgs,
 
-        /// Token budget for the map (256-8000, estimated as chars/4)
+        /// Token budget for the map (clamped to 256-8000, estimated as chars/4)
         #[arg(long, default_value_t = semantiq_retrieval::DEFAULT_REPO_MAP_TOKENS)]
         max_tokens: usize,
 
@@ -320,6 +324,31 @@ enum Commands {
     },
 }
 
+/// The tracing filter: `--verbose` wins, then `RUST_LOG` when set and valid,
+/// else `warn,ort=error` for query commands (their stdout is parsed by agents,
+/// so stderr stays quiet) and `info,ort=warn` otherwise. ONNX Runtime logs are
+/// kept one level below the rest in both defaults.
+fn log_filter(verbose: bool, is_query: bool, rust_log: Option<String>) -> EnvFilter {
+    if verbose {
+        return EnvFilter::new("debug");
+    }
+    let default = if is_query {
+        "warn,ort=error"
+    } else {
+        "info,ort=warn"
+    };
+    match rust_log {
+        Some(spec) if !spec.trim().is_empty() => match EnvFilter::try_new(&spec) {
+            Ok(filter) => filter,
+            Err(e) => {
+                eprintln!("warning: ignoring invalid RUST_LOG={spec:?}: {e}");
+                EnvFilter::new(default)
+            }
+        },
+        _ => EnvFilter::new(default),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -339,14 +368,7 @@ async fn main() -> Result<()> {
             | Commands::DeadCode { .. }
     );
 
-    // Setup logging - filter out verbose ONNX Runtime logs
-    let filter = if cli.verbose {
-        EnvFilter::new("debug")
-    } else if is_query {
-        EnvFilter::new("warn,ort=error")
-    } else {
-        EnvFilter::new("info,ort=warn")
-    };
+    let filter = log_filter(cli.verbose, is_query, std::env::var("RUST_LOG").ok());
 
     // Use JSON logging by default for serve command (MCP server)
     let use_json = !is_query && (cli.json || matches!(cli.command, Commands::Serve { .. }));
@@ -517,5 +539,46 @@ async fn main() -> Result<()> {
             min_samples,
         } => commands::calibrate(database, language, dry_run, min_samples).await,
         Commands::Update { check, force } => commands::update(check, force).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter;
+    use tracing_subscriber::EnvFilter;
+
+    /// `EnvFilter`'s `Display` reorders the directives, so compare through it.
+    fn same_as(filter: EnvFilter, spec: &str) -> bool {
+        filter.to_string() == EnvFilter::new(spec).to_string()
+    }
+
+    #[test]
+    fn rust_log_is_honoured_unless_verbose() {
+        // Defaults when the variable is unset or empty.
+        assert!(same_as(log_filter(false, true, None), "warn,ort=error"));
+        assert!(same_as(log_filter(false, false, None), "info,ort=warn"));
+        assert!(same_as(
+            log_filter(false, false, Some(String::new())),
+            "info,ort=warn"
+        ));
+        // RUST_LOG replaces the default for query and server commands alike.
+        assert!(same_as(
+            log_filter(false, true, Some("debug".into())),
+            "debug"
+        ));
+        assert!(same_as(
+            log_filter(false, false, Some("semantiq_index=trace".into())),
+            "semantiq_index=trace"
+        ));
+        // --verbose still wins.
+        assert!(same_as(
+            log_filter(true, false, Some("error".into())),
+            "debug"
+        ));
+        // An unparsable spec falls back to the default instead of panicking.
+        assert!(same_as(
+            log_filter(false, false, Some("=,=bad".into())),
+            "info,ort=warn"
+        ));
     }
 }

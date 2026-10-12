@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -12,6 +13,11 @@ const CACHE_FILE: &str = "version_cache.json";
 pub const REPO: &str = "so-keyldzn/semantiq";
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_CACHE_HOURS: u64 = 24;
+/// Cap on the `releases/latest` answer. The release object carries every
+/// asset plus the generated notes and is already ~20 KB; 1 MiB keeps the
+/// memory bound without ever truncating it (a truncated body fails to parse
+/// and the whole update channel looks dead).
+const MAX_RELEASE_BODY_BYTES: u64 = 1024 * 1024;
 
 /// Thread-safe flag to disable update checks without using unsafe env vars
 static UPDATE_CHECK_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -125,7 +131,7 @@ fn write_cache(cache: &VersionCache) {
     }
 }
 
-fn fetch_latest_version(timeout: Duration) -> Option<String> {
+fn fetch_latest_version(timeout: Duration) -> Result<String> {
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(timeout))
@@ -139,19 +145,39 @@ fn fetch_latest_version(timeout: Duration) -> Option<String> {
         .header("User-Agent", "semantiq-version-checker")
         .header("Accept", "application/vnd.github.v3+json")
         .call()
-        .ok()?;
+        .with_context(|| format!("request failed: {GITHUB_API_URL}"))?;
 
-    // Limit response body to 10KB to prevent memory exhaustion
+    let body = read_release_body(response.into_body().as_reader())?;
+    parse_release_tag(&body)
+}
+
+/// Read the release JSON, bounded by `MAX_RELEASE_BODY_BYTES`. A body that hits
+/// the cap is reported as such instead of being handed to the parser truncated.
+fn read_release_body(reader: impl std::io::Read) -> Result<String> {
     let mut body = String::new();
-    response
-        .into_body()
-        .as_reader()
-        .take(10 * 1024)
+    reader
+        .take(MAX_RELEASE_BODY_BYTES + 1)
         .read_to_string(&mut body)
-        .ok()?;
-    let release: GitHubRelease = serde_json::from_str(&body).ok()?;
-    let version = release.tag_name.trim_start_matches('v').to_string();
-    Some(version)
+        .context("failed to read the GitHub release response")?;
+    if body.len() as u64 > MAX_RELEASE_BODY_BYTES {
+        anyhow::bail!(
+            "GitHub release response exceeds {} bytes",
+            MAX_RELEASE_BODY_BYTES
+        );
+    }
+    Ok(body)
+}
+
+/// Extract the released version (without the leading `v`) from the JSON of
+/// `GET /repos/<owner>/<repo>/releases/latest`.
+fn parse_release_tag(body: &str) -> Result<String> {
+    let release: GitHubRelease =
+        serde_json::from_str(body).context("failed to parse the GitHub release response")?;
+    let version = release.tag_name.trim_start_matches('v');
+    if version.is_empty() {
+        anyhow::bail!("GitHub release has an empty tag name");
+    }
+    Ok(version.to_string())
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
@@ -207,7 +233,13 @@ pub fn check_for_update(current_version: &str, config: &VersionCheckConfig) -> O
     }
 
     // Fetch from GitHub
-    let latest = fetch_latest_version(config.timeout)?;
+    let latest = match fetch_latest_version(config.timeout) {
+        Ok(latest) => latest,
+        Err(e) => {
+            debug!("Version check failed: {e:#}");
+            return None;
+        }
+    };
 
     // Update cache
     let cache = VersionCache {
@@ -227,11 +259,12 @@ pub fn check_for_update(current_version: &str, config: &VersionCheckConfig) -> O
 }
 
 /// Fetch the latest released version (without the leading `v`), bypassing the
-/// on-disk cache and the disable flag. Returns `None` on network/parse failure.
+/// on-disk cache and the disable flag. The error says whether the request, the
+/// read or the parse failed.
 ///
 /// Used by the explicit `update` command, which must always see the real latest
 /// release rather than a possibly-stale cached value.
-pub fn fetch_latest_uncached(timeout: Duration) -> Option<String> {
+pub fn fetch_latest_uncached(timeout: Duration) -> Result<String> {
     fetch_latest_version(timeout)
 }
 
@@ -255,6 +288,54 @@ mod tests {
             }
             None => assert!(dirs::data_dir().is_none()),
         }
+    }
+
+    /// A `releases/latest` object as GitHub returns it today: ten assets with
+    /// their metadata plus generated notes, well over the 10 KB the reader used
+    /// to cap the body at (#110).
+    fn release_json(tag: &str) -> String {
+        let assets: Vec<String> = (0..10)
+            .map(|i| {
+                format!(
+                    r#"{{"url":"https://api.github.com/repos/so-keyldzn/semantiq/releases/assets/{i}","id":{i},"node_id":"RA_kwDOxxxxxxxx","name":"semantiq-{tag}-target-{i}.tar.gz","label":"","uploader":{{"login":"github-actions[bot]","id":41898282,"node_id":"MDM6Qm90NDE4OTgyODI=","avatar_url":"https://avatars.githubusercontent.com/in/15368?v=4","gravatar_id":"","url":"https://api.github.com/users/github-actions%5Bbot%5D","html_url":"https://github.com/apps/github-actions","followers_url":"https://api.github.com/users/github-actions%5Bbot%5D/followers","following_url":"https://api.github.com/users/github-actions%5Bbot%5D/following{{/other_user}}","gists_url":"https://api.github.com/users/github-actions%5Bbot%5D/gists{{/gist_id}}","starred_url":"https://api.github.com/users/github-actions%5Bbot%5D/starred{{/owner}}{{/repo}}","subscriptions_url":"https://api.github.com/users/github-actions%5Bbot%5D/subscriptions","organizations_url":"https://api.github.com/users/github-actions%5Bbot%5D/orgs","repos_url":"https://api.github.com/users/github-actions%5Bbot%5D/repos","events_url":"https://api.github.com/users/github-actions%5Bbot%5D/events{{/privacy}}","received_events_url":"https://api.github.com/users/github-actions%5Bbot%5D/received_events","type":"Bot","site_admin":false}},"content_type":"application/gzip","state":"uploaded","size":9000000,"download_count":3,"created_at":"2026-10-11T10:00:00Z","updated_at":"2026-10-11T10:00:05Z","browser_download_url":"https://github.com/so-keyldzn/semantiq/releases/download/{tag}/semantiq-{tag}-target-{i}.tar.gz"}}"#
+                )
+            })
+            .collect();
+        let notes = "## What's Changed\\n".to_string()
+            + &"* fix: something by @someone in #123\\n".repeat(60);
+        format!(
+            r#"{{"url":"https://api.github.com/repos/so-keyldzn/semantiq/releases/1","html_url":"https://github.com/so-keyldzn/semantiq/releases/tag/{tag}","id":1,"tag_name":"{tag}","target_commitish":"main","name":"{tag}","draft":false,"prerelease":false,"created_at":"2026-10-11T09:00:00Z","published_at":"2026-10-11T10:00:00Z","assets":[{}],"body":"{notes}"}}"#,
+            assets.join(",")
+        )
+    }
+
+    #[test]
+    fn release_body_larger_than_10kb_is_read_whole_and_parsed() {
+        let json = release_json("v0.12.0");
+        assert!(json.len() > 10 * 1024, "fixture is {} bytes", json.len());
+        let body = read_release_body(json.as_bytes()).unwrap();
+        assert_eq!(body.len(), json.len());
+        assert_eq!(parse_release_tag(&body).unwrap(), "0.12.0");
+    }
+
+    #[test]
+    fn release_body_over_the_cap_is_rejected_not_truncated() {
+        let padding = "x".repeat(MAX_RELEASE_BODY_BYTES as usize + 1);
+        let err = read_release_body(padding.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn truncated_release_json_is_a_parse_error() {
+        let json = release_json("v0.12.0");
+        let err = parse_release_tag(&json[..10 * 1024]).unwrap_err();
+        assert!(err.to_string().contains("parse"), "{err}");
+        assert!(
+            parse_release_tag(r#"{"tag_name":""}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("empty")
+        );
     }
 
     #[test]
