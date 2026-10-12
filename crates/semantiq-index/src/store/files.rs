@@ -565,8 +565,10 @@ impl IndexStore {
     /// Check whether the parser version changed and, if so, prepare the full
     /// re-index phase 1 is about to run: the structural tables (symbols,
     /// references, call edges, type relations, imports) are cleared and every
-    /// file's hash is reset so the next walk re-extracts it; the version is
-    /// stamped. Returns true when that happened.
+    /// file's hash and mtime stamp are reset, so the next walk reads every
+    /// file (the mtime fast path, [`FileStamp::trusts`], never trusts a
+    /// zeroed stamp) and re-extracts it; the version is stamped. Returns true
+    /// when that happened.
     ///
     /// Files and chunks stay, embeddings included: `insert_chunks` carries
     /// the embedding of a chunk whose content did not change over to the
@@ -597,7 +599,7 @@ impl IndexStore {
                  DELETE FROM type_relations;
                  DELETE FROM dependencies;
                  DELETE FROM symbols;
-                 UPDATE files SET hash = '';",
+                 UPDATE files SET hash = '', last_modified = 0, indexed_at = 0;",
             )?;
             Self::set_parser_version_impl(&conn)?;
             Ok(true)

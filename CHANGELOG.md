@@ -326,8 +326,9 @@ shape. Phase 1 only: embeddings are kept.
   a complete index of another model's vectors is pending from the first
   chunk for `semantiq index`, `--embeddings-only` and `search` alike (#86).
 - A parser version bump no longer throws the embeddings away: the structural
-  tables are cleared and every file is re-extracted, and the embedding of a
-  chunk whose content did not change is carried over; `semantiq index
+  tables are cleared and every file is read and re-extracted (its mtime stamp
+  is reset too), and the embedding of a chunk whose content did not change is
+  carried over; `semantiq index
   --embeddings-only` rebuilds the structure first in that case (#86).
 - Two processes opening an old index together (`serve` and a CLI command right
   after `semantiq update`) migrated it twice: the second one failed with

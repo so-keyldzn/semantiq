@@ -718,10 +718,12 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.name, new.signature, new.doc_comment);
         END;
 
-        -- `graph_generation`: bumped by every write to `files` (a file is
-        -- upserted before its symbols, references and imports are written,
-        -- and deleted with them), so `graph_fingerprint` is O(1) instead of
-        -- aggregating `files` and `refs` on every repo map call (#165).
+        -- `graph_generation`: bumped by every insert into and delete from
+        -- `files` and by every change of a row's `hash` (a file's row is
+        -- upserted in the transaction that writes its symbols, references
+        -- and imports), so `graph_fingerprint` is O(1) instead of aggregating
+        -- `files` and `refs` on every repo map call (#165). A stamp refresh
+        -- (`last_modified` / `indexed_at` of an unchanged file) bumps nothing.
         INSERT OR IGNORE INTO metadata (key, value) VALUES ('graph_generation', '0');
 
         CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
@@ -729,7 +731,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
              WHERE key = 'graph_generation';
         END;
 
-        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF hash ON files BEGIN
             UPDATE metadata SET value = CAST(value AS INTEGER) + 1
              WHERE key = 'graph_generation';
         END;

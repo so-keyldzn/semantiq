@@ -139,6 +139,9 @@ fn test_check_and_prepare_for_reindex() {
     assert_eq!(stats.file_count, 1);
     assert!(store.needs_reindex("test.rs", "fn main() {}").unwrap());
     assert_eq!(store.get_file_by_path("test.rs").unwrap().unwrap().hash, "");
+    // The walk's mtime fast path must not skip the file either.
+    let stamp = store.load_file_stamps().unwrap().remove("test.rs").unwrap();
+    assert!(!stamp.trusts(1000), "a reset stamp is never trusted");
 
     let needs_reindex = store.check_and_prepare_for_reindex().unwrap();
     assert!(!needs_reindex);

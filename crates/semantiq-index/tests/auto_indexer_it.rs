@@ -10,7 +10,8 @@
 //! 2, `embed_pending`, is covered by `two_phase.rs`), and the orphan invariant
 //! is checked here on reindex all the same.
 
-use semantiq_index::{AutoIndexer, IndexStore};
+use semantiq_embeddings::StubEmbeddingModel;
+use semantiq_index::{AutoIndexer, EmbeddingProgress, IndexStore, embed_pending};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -169,6 +170,56 @@ fn second_initial_index_is_a_full_noop_when_unchanged() {
     assert_eq!(result.skipped, 2, "both files unchanged -> skipped");
     assert_eq!(result.errors, 0);
     assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A parser version bump (#86): `check_and_prepare_for_reindex` keeps the
+/// files and chunks but every file must be read and re-extracted by the
+/// next walk, mtime fast path (#157) included, and the embeddings of the
+/// unchanged chunks are carried over.
+#[test]
+fn parser_bump_reextracts_every_file_despite_unchanged_mtimes() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::new(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    embed_pending(
+        &store,
+        &StubEmbeddingModel::new(),
+        8,
+        &EmbeddingProgress::new(),
+        &|| false,
+        &mut |_| {},
+    )
+    .unwrap();
+    let before = store.get_stats().unwrap();
+    assert!(before.symbol_count > 0 && before.ref_count > 0);
+    let counts = store.embedding_counts().unwrap();
+    assert!(counts.total > 0 && counts.pending() == 0);
+
+    // An index left by an older parser.
+    store.set_metadata("parser_version", "0").unwrap();
+    assert!(store.check_and_prepare_for_reindex().unwrap());
+    assert_eq!(
+        store.get_stats().unwrap().symbol_count,
+        0,
+        "structure cleared"
+    );
+    assert_eq!(store.get_stats().unwrap().file_count, 2, "files kept");
+
+    // Nothing touched the files: their mtimes are the stored ones.
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.indexed, 2, "every file is re-extracted");
+    assert_eq!(result.skipped, 0);
+    let after = store.get_stats().unwrap();
+    assert_eq!(after.symbol_count, before.symbol_count);
+    assert_eq!(after.ref_count, before.ref_count);
+    let counts = store.embedding_counts().unwrap();
+    assert_eq!(counts.pending(), 0, "embeddings carried over");
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+    assert!(!store.needs_full_reindex().unwrap());
 }
 
 #[test]
