@@ -5,18 +5,23 @@ use semantiq_mcp::SemantiqServer;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use crate::http::create_router;
 use crate::http::host::{AllowedHosts, require_allowed_host};
+use crate::http::limits::limit_requests;
 use crate::http::types::*;
+use crate::http::{RequestLimits, create_router};
 
 /// Create a test router with an in-memory database
 fn test_router() -> axum::Router {
+    test_router_with(RequestLimits::default())
+}
+
+fn test_router_with(limits: RequestLimits) -> axum::Router {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
     let server = SemantiqServer::new(&db_path, dir.path().to_str().unwrap()).unwrap();
     // Leak the tempdir so it stays alive for the duration of the test
     std::mem::forget(dir);
-    create_router(Arc::new(server))
+    create_router(Arc::new(server), limits)
 }
 
 /// The test router behind the `Host` guard, as `serve --http-port` builds it
@@ -653,4 +658,113 @@ impl TapHost for Request<Body> {
             .insert("host", axum::http::HeaderValue::from_str(host).unwrap());
         self
     }
+}
+
+// ============================================
+// Request limits (#99)
+// ============================================
+
+/// A router shaped like `create_router`: `/health` outside the limits, a slow
+/// endpoint inside them.
+fn limited_router(limits: RequestLimits, handler_delay: std::time::Duration) -> axum::Router {
+    let slow = axum::Router::new().route(
+        "/slow",
+        axum::routing::get(move || async move {
+            tokio::time::sleep(handler_delay).await;
+            "done"
+        }),
+    );
+    axum::Router::new()
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .merge(limit_requests(slow, limits))
+}
+
+fn get(path: &str) -> Request<Body> {
+    Request::get(path).body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn test_overloaded_query_endpoints_return_503_and_health_still_answers() {
+    let delay = std::time::Duration::from_millis(400);
+    let app = limited_router(
+        RequestLimits {
+            max_concurrent: 1,
+            timeout: std::time::Duration::from_secs(5),
+        },
+        delay,
+    );
+
+    let first = tokio::spawn(app.clone().oneshot(get("/slow")));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // The slot is taken: the second request is rejected at once, not queued.
+    let started = std::time::Instant::now();
+    let shed = app.clone().oneshot(get("/slow")).await.unwrap();
+    assert_eq!(shed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(started.elapsed() < delay, "{:?}", started.elapsed());
+    let error: ErrorResponse = serde_json::from_slice(&response_body(shed).await).unwrap();
+    assert_eq!(error.code, "OVERLOADED");
+
+    // `/health` is outside the limits.
+    let health = app.clone().oneshot(get("/health")).await.unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
+
+    assert_eq!(first.await.unwrap().unwrap().status(), StatusCode::OK);
+
+    // The slot is free again.
+    let again = app.oneshot(get("/slow")).await.unwrap();
+    assert_eq!(again.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_slow_query_endpoints_time_out_with_504() {
+    let app = limited_router(
+        RequestLimits {
+            max_concurrent: 50,
+            timeout: std::time::Duration::from_millis(50),
+        },
+        std::time::Duration::from_secs(5),
+    );
+    let started = std::time::Instant::now();
+    let response = app.oneshot(get("/slow")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let error: ErrorResponse = serde_json::from_slice(&response_body(response).await).unwrap();
+    assert_eq!(error.code, "TIMEOUT");
+}
+
+#[tokio::test]
+async fn test_real_router_limits_cover_every_query_endpoint() {
+    // With no slot at all, every query endpoint is shed and `/health` is not.
+    let app = test_router_with(RequestLimits {
+        max_concurrent: 0,
+        timeout: std::time::Duration::from_secs(5),
+    });
+    let posts = [
+        "/search",
+        "/map",
+        "/find-refs",
+        "/deps",
+        "/explain",
+        "/calls",
+        "/hierarchy",
+        "/dead-code",
+    ];
+    for path in posts {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
+    let stats = app.clone().oneshot(get("/stats")).await.unwrap();
+    assert_eq!(stats.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let health = app.oneshot(get("/health")).await.unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
 }

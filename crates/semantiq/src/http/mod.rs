@@ -4,12 +4,16 @@
 //! demo) and the MCP Streamable HTTP transport at `/mcp`, so remote MCP
 //! clients can connect without spawning a stdio process.
 
+mod cors;
 mod host;
+mod limits;
 mod routes;
 #[cfg(test)]
 mod tests;
 mod types;
 
+pub(crate) use cors::CorsOrigins;
+pub(crate) use limits::RequestLimits;
 pub(crate) use routes::create_router;
 
 use host::{AllowedHosts, require_allowed_host};
@@ -24,23 +28,20 @@ use rmcp::transport::streamable_http_server::{
 use semantiq_mcp::SemantiqServer;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tower::limit::ConcurrencyLimitLayer;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 /// Maximum request body size (1 MB). Prevents OOM from oversized payloads.
 const MAX_BODY_SIZE: usize = 1024 * 1024;
 
-/// Maximum concurrent requests. Prevents resource exhaustion from abuse.
-const MAX_CONCURRENT_REQUESTS: usize = 50;
-
-/// Start the HTTP API server
+/// Start the HTTP API server. `cors` is the validated `--cors-origin`
+/// (`CorsOrigins::parse`); the query endpoints run under `RequestLimits`.
 pub(crate) async fn serve_http(
     server: SemantiqServer,
     host: IpAddr,
     port: u16,
-    cors_origin: Option<String>,
+    cors: Option<CorsOrigins>,
 ) -> Result<()> {
     // The MCP transport validates the `Host` header against loopback names to
     // block DNS rebinding; `require_allowed_host` below does the same for the
@@ -73,24 +74,31 @@ pub(crate) async fn serve_http(
     // requests — `CorsLayer::new()` with no `allow_origin` configured emits no
     // `Access-Control-Allow-Origin` header, so browsers block cross-site reads.
     // Same-origin requests are unaffected. This is the safe default for a local
-    // tool. Pass --cors-origin <ORIGIN> to explicitly opt into a known origin.
-    let cors = if let Some(origin) = cors_origin {
-        CorsLayer::new()
-            .allow_origin(origin.parse::<axum::http::HeaderValue>()?)
-            .allow_methods(Any)
-            .allow_headers(Any)
-    } else {
-        warn!(
-            "No CORS origin specified; cross-origin requests are blocked. \
-             Pass --cors-origin <ORIGIN> to allow a specific origin."
-        );
-        CorsLayer::new()
+    // tool. Pass --cors-origin <ORIGIN> to explicitly opt into known origins;
+    // `*` is refused by `CorsOrigins::parse`.
+    let cors = match cors {
+        Some(origins) => {
+            info!(
+                "CORS: allowing origins {}",
+                origins.origins().collect::<Vec<_>>().join(", ")
+            );
+            origins.layer()
+        }
+        None => {
+            warn!(
+                "No CORS origin specified; cross-origin requests are blocked. \
+                 Pass --cors-origin <ORIGIN> to allow a specific origin."
+            );
+            CorsLayer::new()
+        }
     };
 
-    let mut app: Router = create_router(server)
+    // The request limits (timeout, concurrency, load shedding) are applied by
+    // `create_router` to the query endpoints only: `/health` must answer while
+    // the server is busy and `/mcp` streams must not be cut by the timeout.
+    let mut app: Router = create_router(server, RequestLimits::default())
         .nest_service("/mcp", mcp_service)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
-        .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
     if let Some(allowed) = allowed_hosts {

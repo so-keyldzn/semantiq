@@ -740,3 +740,54 @@ fn calibrate_says_when_a_calibration_is_not_applied() {
         "{out}"
     );
 }
+
+#[test]
+fn rust_log_controls_the_log_level_unless_verbose() {
+    let project = indexed_project();
+    let dir = project.path();
+
+    // Default for a non-query command: info lines on stderr.
+    let output = semantiq(dir, &["index", "--no-embeddings"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("INFO"), "{}", stderr(&output));
+
+    // RUST_LOG is honoured (#128).
+    let output = command(dir, &["index", "--no-embeddings"])
+        .env("RUST_LOG", "error")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("INFO"), "{}", stderr(&output));
+
+    // --verbose still wins over RUST_LOG.
+    let output = command(dir, &["--verbose", "index", "--no-embeddings"])
+        .env("RUST_LOG", "error")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("DEBUG"), "{}", stderr(&output));
+}
+
+#[test]
+fn serve_refuses_a_wildcard_cors_origin() {
+    let project = indexed_project();
+    let dir = project.path();
+    // Validated before the server starts: the command exits at once.
+    let output = semantiq(dir, &["serve", "--http-port", "0", "--cors-origin", "*"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("every website"),
+        "{}",
+        stderr(&output)
+    );
+    let output = semantiq(
+        dir,
+        &["serve", "--http-port", "0", "--cors-origin", "example.com"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("https://host"),
+        "{}",
+        stderr(&output)
+    );
+}

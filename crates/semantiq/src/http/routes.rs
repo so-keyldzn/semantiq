@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error};
 
+use super::limits::{RequestLimits, limit_requests};
 use super::types::{
     Dependency, DepsRequest, DepsResponse, ErrorResponse, ExplainRequest, ExplainResponse,
     FindRefsRequest, FindRefsResponse, HealthResponse, MapRequest, MapResponse, Reference,
@@ -24,10 +25,18 @@ use super::types::{
 
 type AppState = Arc<SemantiqServer>;
 
-/// Create the router with all API endpoints
-pub(crate) fn create_router(server: AppState) -> Router {
+/// Create the router with all API endpoints. `/health` answers outside the
+/// request limits so a busy server still reports as alive; every other
+/// endpoint runs under `limits` (see `limits.rs`).
+pub(crate) fn create_router(server: AppState, limits: RequestLimits) -> Router {
     Router::new()
         .route("/health", get(health))
+        .merge(limit_requests(query_router(server), limits))
+}
+
+/// The query endpoints: everything but `/health`.
+fn query_router(server: AppState) -> Router {
+    Router::new()
         .route("/stats", get(stats))
         .route("/search", post(search))
         .route("/map", post(map))
