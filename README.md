@@ -24,6 +24,12 @@ npm install -g semantiq-mcp
 cargo install --git https://github.com/so-keyldzn/semantiq.git
 ```
 
+Or download the archive for your platform from the
+[releases page](https://github.com/so-keyldzn/semantiq/releases) (macOS
+arm64 / x86_64, Linux glibc arm64 / x86_64, Windows x86_64; each `.tar.gz`
+has a `.sha256` next to it) and put `semantiq` on your `PATH`. There is no
+Homebrew tap and no crates.io crate.
+
 ### Embedding model (first run)
 
 Semantic search uses [CodeRankEmbed](https://huggingface.co/nomic-ai/CodeRankEmbed)
@@ -164,13 +170,14 @@ semantiq init /my/project  # Specific path
 semantiq init --no-mcp     # Skill + CLI only (no .mcp.json entry)
 semantiq init --no-skill   # MCP only
 semantiq init --no-index   # Skip the initial indexing
-semantiq init --force      # Replace skill files you modified with the bundled ones
+semantiq init --force      # Replace skill files and a `.mcp.json` entry you modified with the bundled ones
 semantiq init --global     # Install the skill in ~/.claude/skills/semantiq/ only
 ```
 
 Re-running `init` is safe: unchanged files are left alone, the Semantiq section
 of `CLAUDE.md` (between `<!-- semantiq:start -->` markers) is refreshed in
-place, and an edited `SKILL.md` is kept unless `--force`.
+place, and an edited `SKILL.md` or a customised `semantiq` entry in
+`.mcp.json` (absolute `command`, extra `args`, `env`) is kept unless `--force`.
 
 ### `semantiq init-cursor [PATH]`
 
@@ -207,6 +214,25 @@ Options:
 - `--http-host ADDR` - Address to bind (default `127.0.0.1`; anything else exposes the unauthenticated API to the network)
 - `--cors-origin ORIGINS` - Browser origins allowed to read the API, comma-separated absolute `http(s)://host[:port]` origins; `*` and `null` are refused. Default: no cross-origin access
 
+#### Docker
+
+The `Dockerfile` builds the binary (cargo-chef dependency layer, `--locked`)
+and serves the HTTP API over a copy of this repository's sources, as a demo.
+The image ships the embedding model and the index of that copy (both built
+with the image), so a container answers as soon as it starts and needs no
+network:
+
+```bash
+docker build -t semantiq .
+docker run --rm -p 8080:8080 semantiq
+curl http://localhost:8080/health
+```
+
+`HTTP_PORT` (8080) and `HTTP_HOST` (`0.0.0.0`: inside a container the
+server's loopback default is unreachable from the published port) are
+environment variables; the embedding model lives under `/app/data`
+(`XDG_DATA_HOME`).
+
 ### `semantiq update [OPTIONS]`
 
 Self-update to the latest release. The downloaded archive is verified by SHA256 checksum before it replaces the current binary.
@@ -216,9 +242,9 @@ semantiq update          # Download and install the latest version
 semantiq update --check  # Check for a newer version without installing
 ```
 
-A binary installed by Homebrew or npm is updated by the package manager
-instead (`brew upgrade semantiq`, `npm update -g semantiq-mcp`): `semantiq
-update` says so and leaves it alone.
+A binary installed by npm is updated by npm instead (`npm update -g
+semantiq-mcp`), one under a Homebrew `Cellar` by the formula that installed it
+(Semantiq publishes no tap): `semantiq update` says so and leaves it alone.
 
 ### `semantiq index [PATH] [OPTIONS]`
 

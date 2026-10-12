@@ -80,7 +80,8 @@ pub(crate) struct InitOptions {
     pub no_mcp: bool,
     /// Do not install the skill in `.claude/skills/semantiq/`.
     pub no_skill: bool,
-    /// Overwrite skill files that differ from the bundled version.
+    /// Overwrite skill files and a `.mcp.json` entry that differ from the
+    /// bundled version.
     pub force: bool,
     /// Install the skill in `~/.claude/skills/` only.
     pub global: bool,
@@ -134,7 +135,7 @@ fn setup_project(project_root: &Path, options: InitOptions) -> Result<()> {
 
     let mcp_json = project_root.join(".mcp.json");
     if !options.no_mcp {
-        write_mcp_json(&mcp_json)?;
+        write_mcp_json(&mcp_json, options.force)?;
     } else if mcp_json_has_semantiq(&mcp_json) {
         println!("Kept the existing `semantiq` entry in .mcp.json (remove it to disable MCP)");
     }
@@ -265,8 +266,10 @@ fn mcp_json_has_semantiq(path: &Path) -> bool {
 ///
 /// If the file exists, parse it and merge the entry under `mcpServers.semantiq`,
 /// preserving any other servers already configured. If parsing fails, abort
-/// rather than clobber user data.
-fn write_mcp_json(path: &Path) -> Result<()> {
+/// rather than clobber user data. An existing `semantiq` entry that differs
+/// from the default (an absolute `command`, extra `args`, `env`) is the
+/// user's: it is kept unless `force`, like an edited skill file.
+fn write_mcp_json(path: &Path, force: bool) -> Result<()> {
     let semantiq_entry = json!({
         "command": "semantiq",
         "args": ["serve"],
@@ -292,9 +295,19 @@ fn write_mcp_json(path: &Path) -> Result<()> {
         .as_object_mut()
         .context(".mcp.json's `mcpServers` field must be an object")?;
 
-    if servers.get("semantiq") == Some(&semantiq_entry) {
-        println!(".mcp.json is up to date");
-        return Ok(());
+    match servers.get("semantiq") {
+        Some(existing) if *existing == semantiq_entry => {
+            println!(".mcp.json is up to date");
+            return Ok(());
+        }
+        Some(existing) if existing.is_object() && !force => {
+            println!(
+                "Kept the existing `semantiq` entry in .mcp.json (differs from the default; \
+                 use --force to replace it)"
+            );
+            return Ok(());
+        }
+        _ => {}
     }
     let entry_replaced = servers
         .insert("semantiq".to_string(), semantiq_entry)
@@ -457,7 +470,7 @@ mod tests {
     fn test_mcp_entry_kept_with_no_mcp() {
         let dir = tempdir().unwrap();
         let mcp_json = dir.path().join(".mcp.json");
-        write_mcp_json(&mcp_json).unwrap();
+        write_mcp_json(&mcp_json, false).unwrap();
         let before = fs::read_to_string(&mcp_json).unwrap();
 
         let options = InitOptions {
@@ -466,6 +479,53 @@ mod tests {
         };
         setup_project(dir.path(), options).unwrap();
         assert_eq!(fs::read_to_string(&mcp_json).unwrap(), before);
+        assert!(mcp_json_has_semantiq(&mcp_json));
+    }
+
+    #[test]
+    fn test_customised_mcp_entry_kept_unless_force() {
+        let dir = tempdir().unwrap();
+        let mcp_json = dir.path().join(".mcp.json");
+        let customised = json!({
+            "mcpServers": {
+                "semantiq": {
+                    "command": "/opt/semantiq/bin/semantiq",
+                    "args": ["serve", "--no-update-check"],
+                    "env": {"SEMANTIQ_ONNX_THREADS": "2"}
+                },
+                "other": {"command": "other-server"}
+            }
+        });
+        fs::write(
+            &mcp_json,
+            serde_json::to_string_pretty(&customised).unwrap(),
+        )
+        .unwrap();
+        let before = fs::read_to_string(&mcp_json).unwrap();
+
+        setup_project(dir.path(), InitOptions::default()).unwrap();
+        assert_eq!(fs::read_to_string(&mcp_json).unwrap(), before);
+
+        let force = InitOptions {
+            force: true,
+            ..Default::default()
+        };
+        setup_project(dir.path(), force).unwrap();
+        let root: Value = serde_json::from_str(&read(dir.path(), ".mcp.json")).unwrap();
+        assert_eq!(
+            root["mcpServers"]["semantiq"],
+            json!({"command": "semantiq", "args": ["serve"]})
+        );
+        assert_eq!(root["mcpServers"]["other"]["command"], "other-server");
+    }
+
+    #[test]
+    fn test_broken_mcp_entry_replaced() {
+        // A `semantiq` entry that is not an object cannot be a customisation.
+        let dir = tempdir().unwrap();
+        let mcp_json = dir.path().join(".mcp.json");
+        fs::write(&mcp_json, r#"{"mcpServers": {"semantiq": null}}"#).unwrap();
+        write_mcp_json(&mcp_json, false).unwrap();
         assert!(mcp_json_has_semantiq(&mcp_json));
     }
 }

@@ -308,9 +308,9 @@ pub fn run(current_version: &str, opts: UpdateOptions) -> Result<UpdateOutcome> 
 /// package stays consistent, and a directory this user cannot write to fails
 /// now rather than after the download and the checksum.
 fn check_install_location(current: &Path) -> Result<()> {
-    if let Some(command) = package_manager_command(current) {
+    if let Some(hint) = package_manager_hint(current) {
         bail!(
-            "semantiq at {} was installed by a package manager: run `{command}` to update it",
+            "semantiq at {} was installed by a package manager: {hint}",
             current.display()
         );
     }
@@ -335,14 +335,18 @@ fn check_install_location(current: &Path) -> Result<()> {
     }
 }
 
-/// The command that updates a binary a package manager put at `exe`:
-/// Homebrew keeps its binaries under a `Cellar` directory, npm under
-/// `node_modules` (`semantiq-mcp/bin/semantiq`).
-fn package_manager_command(exe: &Path) -> Option<&'static str> {
+/// How to update a binary a package manager put at `exe`: Homebrew keeps its
+/// binaries under a `Cellar` directory (Semantiq publishes no tap, so the
+/// formula is the user's own), npm under `node_modules`
+/// (`semantiq-mcp/bin/semantiq`).
+fn package_manager_hint(exe: &Path) -> Option<&'static str> {
     let mut components = exe.components().filter_map(|c| c.as_os_str().to_str());
     components.find_map(|component| match component {
-        "Cellar" => Some("brew upgrade semantiq"),
-        "node_modules" => Some("npm update -g semantiq-mcp"),
+        "Cellar" => Some(
+            "update it with Homebrew, from the formula that installed it (Semantiq publishes \
+             no Homebrew tap)",
+        ),
+        "node_modules" => Some("run `npm update -g semantiq-mcp` to update it"),
         _ => None,
     })
 }
@@ -381,25 +385,26 @@ mod tests {
 
     #[test]
     fn package_manager_installs_are_detected() {
+        let brew = package_manager_hint(Path::new(
+            "/opt/homebrew/Cellar/semantiq/0.11.0/bin/semantiq",
+        ))
+        .unwrap();
+        // No tap exists: the hint must not promise `brew upgrade semantiq`.
+        assert!(brew.contains("Homebrew") && brew.contains("no Homebrew tap"));
+        assert!(!brew.contains("brew upgrade"));
         assert_eq!(
-            package_manager_command(Path::new(
-                "/opt/homebrew/Cellar/semantiq/0.11.0/bin/semantiq"
-            )),
-            Some("brew upgrade semantiq")
-        );
-        assert_eq!(
-            package_manager_command(Path::new(
+            package_manager_hint(Path::new(
                 "/usr/local/lib/node_modules/semantiq-mcp/bin/semantiq"
             )),
-            Some("npm update -g semantiq-mcp")
+            Some("run `npm update -g semantiq-mcp` to update it")
         );
         assert_eq!(
-            package_manager_command(Path::new("/home/me/.cargo/bin/semantiq")),
+            package_manager_hint(Path::new("/home/me/.cargo/bin/semantiq")),
             None
         );
         // A directory merely named like one is not a package manager install.
         assert_eq!(
-            package_manager_command(Path::new("/srv/cellar-tools/semantiq")),
+            package_manager_hint(Path::new("/srv/cellar-tools/semantiq")),
             None
         );
     }

@@ -50,6 +50,24 @@ confidence of `impact` / `calls` see.
   query per file, and the query commands run that single walk instead of a
   hash walk followed by a second one; an up-to-date index is neither written
   to nor reported on (#157).
+- `homebrew/Formula/semantiq.rb` is removed: no tap ever
+  published it (placeholder checksums, version 0.1.0). The npm installer's
+  fallback message, the README and `semantiq update` no longer point at
+  `brew install so-keyldzn/tap/semantiq` or `cargo install semantiq` (neither
+  the tap nor the crates.io crate exists) but at the GitHub Releases archive
+  and `cargo install --git`; a binary under a Homebrew `Cellar` is still
+  refused by `semantiq update`, with a hint that names no tap (#117).
+- Dockerfile: `.dockerignore` keeps `target/`, `.git`, index DBs, `bench/`
+  and `npm/` out of the build context (7 GB before); a cargo-chef stage caches
+  the dependency build so a source edit only recompiles the workspace crates;
+  `cargo build --release --locked`; the demo project is a copy of the sources
+  being built instead of a `git clone` of `main` at build time
+  (reproducible); `libssl-dev`, `pkg-config` and `git` are dropped (ureq uses
+  rustls); the image ships the embedding model (`/app/data`, `XDG_DATA_HOME`)
+  and the index of the demo project, both built with the image: `serve`
+  loads the model before it binds the listener, so a container that had to
+  download it first could outlast the health check's start period before
+  `/health` answered (#118).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -70,6 +88,10 @@ confidence of `impact` / `calls` see.
   loopback API. The flag now takes one or more comma-separated absolute
   `http(s)://host[:port]` origins (no path, no wildcard; default ports are
   dropped as browsers do), validated before the server starts (#112).
+- The npm installer extracts the verified archive with `execFileSync('tar',
+  [...])` (an argv) instead of a shell command line built by string
+  interpolation: a quote or `$(...)` in the install path is no longer
+  interpreted (#114).
 
 ### Fixed
 - A directory rename, move or removal is applied by `serve`'s watcher: the
@@ -272,13 +294,36 @@ confidence of `impact` / `calls` see.
   and `max_tokens` to 256-8000, in REFERENCE.md, SKILL.md, the README, the
   CLI `--help` and the MCP parameter descriptions (#133).
 
-
 - `insert_file` upserts the row and returns its id in one statement
   (`RETURNING`), and a file's symbols, references, call edges, chunks and
   dependencies are written in the same transaction as its hash: a concurrent
   prune (`--force`, a newer binary's rebuild) can no longer make `index_file`
   fail with "Query returned no rows" or leave new rows under the old hash
   (#89).
+- The Docker image serves the HTTP API on `0.0.0.0` (`HTTP_HOST`, like
+  `HTTP_PORT`): with the 0.12.0 loopback default, the published port never
+  answered while the in-container health check stayed green. The health check
+  follows `HTTP_PORT` (#101).
+- `semantiq init` keeps a customised `semantiq` entry in `.mcp.json` (absolute
+  `command`, extra `args`, `env`) instead of replacing it with the default on
+  every run; `--force` replaces it, like an edited skill file (#102).
+- The npm installer downloads through the proxy npm is configured with
+  (`npm_config_https_proxy` / `npm_config_proxy`, then `HTTPS_PROXY`,
+  `https_proxy`, `ALL_PROXY`; `NO_PROXY` / `npm_config_noproxy` exempt hosts),
+  tunnelling the GitHub download with HTTP CONNECT (Basic proxy credentials
+  from the URL); the exemptions are checked again at every redirect, since
+  GitHub sends release assets to another host (#104).
+- The npm installer refuses Linux musl (Alpine) with a clear message instead
+  of installing a glibc binary that fails at launch; `getPlatform`,
+  `install()` and the extraction are covered by `npm test` against a local
+  release, and the served platforms are documented in `npm/README.md`
+  (`win32-arm64` passes npm's separate `os` × `cpu` filters and is refused by
+  the installer) (#126).
+- bench/agent: task suites are validated when loaded (file and task id in the
+  error) instead of a `ZeroDivisionError` in `score()` on an empty
+  `expected`; `scoring.score` raises on it too; the README documents every
+  `run.py` option, and `test_bench.py` covers the validation and the scoring
+  (#127).
 
 ## [0.12.0] - 2026-10-11
 
