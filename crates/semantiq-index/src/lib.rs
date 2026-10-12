@@ -25,5 +25,5 @@ pub use store::{
     ExtensionFilter, FileIndexWrite, FileStamp, FileStampRefresh, IndexStats, IndexStore,
     PendingChunk, RACY_WINDOW_SECS,
 };
-pub use store::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
+pub use store::{GraphFile, GraphRefCount, GraphSymbol, MAX_NAME_DEFINERS, RepoGraphData};
 pub use watcher::FileWatcher;

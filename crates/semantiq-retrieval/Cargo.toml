@@ -36,3 +36,5 @@ semantiq-index = { path = "../semantiq-index", features = ["test-support"] }
 # `tests/engine_startup.rs` corrupts chunks_vec from outside the store.
 rusqlite.workspace = true
 tempfile.workspace = true
+# Stage timings of `examples/repo_map_bench.rs`.
+tracing-subscriber.workspace = true
