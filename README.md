@@ -344,10 +344,12 @@ Semantic + lexical code search combining 3 strategies. Returns, per hit,
 | `limit` | number | 10 | Maximum results |
 | `min_score` | number | 0.3 | Score threshold (0.0-1.0) |
 | `file_type` | string | - | Filter by extensions (CSV: `rs,ts,py`) |
-| `symbol_kind` | string | - | Filter by symbol type (CSV) |
+| `symbol_kind` | string | - | Filter by symbol type (CSV); applies to every strategy before its limit, text hits are left out |
 | `snippets` | boolean | false | Include each hit's code (default: one preview line) |
 
-**Symbol kinds:** `function`, `method`, `class`, `struct`, `enum`, `interface`, `trait`, `module`, `variable`, `constant`, `type`
+**Symbol kinds:** `function`, `method`, `class`, `struct`, `enum`, `interface`, `trait`, `module`, `variable`, `constant`, `type`; `import` opts the import statements in, which are otherwise never symbol hits.
+
+Text hits come from the index (the chunks of the indexed files, through a trigram FTS5 table), never from a read of the project files.
 
 ### `semantiq_repo_map`
 

@@ -4,6 +4,24 @@ All notable changes to Semantiq will be documented in this file.
 
 ## [Unreleased]
 
+The text index (`chunks_fts`, below) is built from the existing chunks the
+first time this version opens an index (a few seconds per 100 MB of source);
+it grows the database by about 2.5× the size of the indexed source text.
+
+### Changed
+- The text strategy of `search` (and the `refs` fallback for names unknown
+  to the syntax index) answers from the index: a trigram FTS5 table over the
+  chunks selects the chunks holding each term and the term's regex locates
+  the lines, instead of reading every file of the project on each search
+  that did not fill `limit` (3.6-4.4 s for a query without a hit on a
+  24k-file corpus, now a few milliseconds). Only indexed files are searched,
+  as they were last indexed; files of other extensions (`.sql`, `.css`...)
+  are no longer text-searched (#160).
+- `search --symbol-kind` applies to every strategy before its limit:
+  semantic hits whose chunk defines no symbol of the wanted kinds and text
+  hits (a line has no kind) are left out, where it used to filter the
+  symbol strategy only and let the other hits through (#93).
+
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
   query refresh, the watcher and the text search: a link to a file or
@@ -37,6 +55,32 @@ All notable changes to Semantiq will be documented in this file.
 - `semantiq index <file>`, `serve --project <file>` and `init <file>` fail
   with `<file> is not a directory` instead of a SQLite "unable to open"
   error or an index whose only row has an empty path (#137).
+- `search --symbol-kind` / `--file-type` apply before the per-strategy
+  `LIMIT`: in SQL for the symbol and text strategies, by growing the KNN
+  candidate pool (up to 2048) for the semantic one. `--symbol-kind struct
+  --limit 5` found no struct when more than 5 functions of the same name
+  outranked it (#134).
+- A query token without a letter or digit (`auth - login`, `_`) no longer
+  expands to an empty term whose regex matched every line of the first
+  file walked: the first 10 lines of an arbitrary file came back at
+  score 0.525 (#92).
+- Text search keeps the lines starting with `#` in the languages where `#`
+  is not a comment: `#[derive(...)]`, `#[tool]`, `#define`, `#include`,
+  `#pragma`, `#region` and shebangs are found; `#` lines are still skipped
+  in Python, Ruby, Bash, Elixir, YAML, TOML and PHP (except `#[`
+  attributes) (#94).
+- `refs` no longer lists import statements as definitions and `search` no
+  longer returns them as symbol hits (they scored like definitions and ate
+  `--limit`): an import is a usage, listed once under `usages` with `kind:
+  import`. `--symbol-kind import` opts them back in as symbol hits (#77).
+- `refs <common name>` reads at most `--limit` definitions, in one SQL
+  query with their file path, and each file once for the snippets, where
+  it read every definition's file before the limit (`refs new` on a
+  24k-file corpus: 7 780 definition spans read for 50 results) (#159).
+- `semantiq search` says on stderr when semantic search is unavailable (a
+  build without the `onnx` feature, e.g. macOS Intel, or
+  `SEMANTIQ_EMBEDDINGS=stub`), as the MCP server already did in its
+  instructions: only symbol and text matches are returned (#106).
 
 ## [0.12.0] - 2026-10-11
 
