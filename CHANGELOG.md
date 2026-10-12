@@ -9,9 +9,10 @@ first time this version opens an index (a few seconds per 100 MB of source);
 it grows the database by about 2.5× the size of the indexed source text.
 
 Existing indexes are rebuilt on the first run of this version
-(`PARSER_VERSION` 21): the parser fixes below change what is extracted, and
-the import fixes change what `deps`, the repo map and the `imports`
-confidence of `impact` / `calls` see.
+(`PARSER_VERSION` 21, schema v11): the parser fixes below change what is
+extracted, the import fixes change what `deps`, the repo map and the
+`imports` confidence of `impact` / `calls` see, and the `refs` table changes
+shape. Phase 1 only: embeddings are kept.
 
 ### Changed
 - The text strategy of `search` (and the `refs` fallback for names unknown
@@ -68,6 +69,23 @@ confidence of `impact` / `calls` see.
   loads the model before it binds the listener, so a container that had to
   download it first could outlast the health check's start period before
   `/health` answered (#118).
+- Schema v11: the `refs` table stores an interned name id and a 1-byte kind
+  code instead of repeating the name and kind words on every row and in
+  `idx_refs_file_id` (table + index a third smaller on this repository), and the
+  `idx_files_path` index, a duplicate of the `UNIQUE` index on `files.path`,
+  is dropped (#162).
+- `impact` and `calls --direction callers` rank the occurrences of a common
+  name by file set (near files, their importers, the rest) computed once per
+  query instead of a correlated `EXISTS` over `dependencies` evaluated for
+  every occurrence before the `LIMIT` (0.7 s per BFS node for `new` on a
+  24k-file index) (#161).
+- The repo map cache key is O(1): a `graph_generation` counter maintained by
+  triggers on `files` plus the last symbol / dependency ids, instead of
+  aggregating `files` and counting `refs` on every unfocused `repo_map`
+  call; the store's read queries use cached prepared statements (#165).
+- The chunks / chunks_vec integrity canary runs once at `serve` startup
+  instead of on every CLI command, each of which joined both tables in full
+  when building its engine (#164).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -293,6 +311,28 @@ confidence of `impact` / `calls` see.
   stated once: every `limit` is clamped to 1-1000 (hierarchy: per direction)
   and `max_tokens` to 256-8000, in REFERENCE.md, SKILL.md, the README, the
   CLI `--help` and the MCP parameter descriptions (#133).
+- `calls <name>` (and `semantiq_calls`) failed with `Expression tree is too
+  large (maximum depth 1000)` on any name with about 1000 definitions or more
+  (`new`, `fmt`, `from`, `default` in a large Rust or Java repository): the
+  definition sites were filtered with an `OR` chain. They now go into a
+  row-value `IN (VALUES …)` list, 4000 sites per statement (#155).
+- An embedding-model mismatch no longer wipes the structural index. Opening a
+  CodeRankEmbed index from a stub process (`SEMANTIQ_EMBEDDINGS=stub semantiq
+  stats`, a build without `onnx`) left zero files; it now changes nothing, and
+  the stub's phase 2 writes nothing into a real model's vectors. A real model
+  finding another model's vectors drops only those (every chunk is pending
+  again) and keeps files, symbols and references. The reconciliation runs
+  when phase 2 starts, not at open (#86).
+- A parser version bump no longer throws the embeddings away: the structural
+  tables are cleared and every file is re-extracted, and the embedding of a
+  chunk whose content did not change is carried over (#86).
+- Two processes opening an old index together (`serve` and a CLI command right
+  after `semantiq update`) migrated it twice: the second one failed with
+  `duplicate column name`. The schema version is read again under the write
+  lock (#88).
+- A failing statement in `semantiq index --force`'s clear left the shared
+  connection inside an open transaction, where every later write failed until
+  restart; the clear is rolled back instead (#139).
 
 - `insert_file` upserts the row and returns its id in one statement
   (`RETURNING`), and a file's symbols, references, call edges, chunks and
