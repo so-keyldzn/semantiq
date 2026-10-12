@@ -2,10 +2,12 @@
 
 use super::*;
 use semantiq_parser::{
-    Language, LanguageSupport, ReferenceExtractor, StructureExtractor, SymbolExtractor,
+    ChunkExtractor, Language, LanguageSupport, ReferenceExtractor, StructureExtractor,
+    SymbolExtractor,
 };
 
-/// Index `files` (path, source) under a temp root, with structure.
+/// Index `files` (path, source) under a temp root, with structure and the
+/// chunks the text search answers from.
 fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir) {
     let root = tempfile::Builder::new()
         .prefix("semantiq-structure")
@@ -13,6 +15,7 @@ fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir)
         .unwrap();
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
     let mut support = LanguageSupport::new().unwrap();
+    let chunker = ChunkExtractor::new();
     for (path, source) in files {
         let full = root.path().join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -26,6 +29,8 @@ fn index_project(files: &[(&str, &str)]) -> (RetrievalEngine, tempfile::TempDir)
             .unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, language).unwrap();
         store.insert_symbols(file_id, &symbols).unwrap();
+        let chunks = chunker.extract(&tree, source, language).unwrap();
+        store.insert_chunks(file_id, &chunks).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, language);
         store.insert_references(file_id, &refs).unwrap();
         let structure = StructureExtractor::extract(&tree, source, language, &symbols, &refs);
@@ -328,6 +333,24 @@ fn test_impact_enclosing_symbol_falls_back_to_a_top_level_binding() {
             (2, "cached", 3, Some("read"))
         ]
     );
+}
+
+#[test]
+fn test_explain_text_fallback_counts_usages_outside_data_file_definitions() {
+    // #96: the definitions in YAML files, which the text search skips, were
+    // subtracted from the hits and the count clamped at 0.
+    let (engine, _root) = index_project(&[
+        ("config.yaml", "database_url: postgres://a\n"),
+        ("settings.yaml", "database_url: postgres://b\n"),
+        (
+            "src/main.rs",
+            "fn main() { let _ = std::env::var(\"database_url\"); }\n",
+        ),
+    ]);
+    let explanation = engine.explain_symbol("database_url").unwrap();
+    assert!(explanation.found);
+    assert_eq!(explanation.definitions.len(), 2);
+    assert_eq!(explanation.usage_count, 1);
 }
 
 #[test]
