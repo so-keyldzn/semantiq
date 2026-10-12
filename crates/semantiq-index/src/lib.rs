@@ -22,7 +22,7 @@ pub use schema::{
 pub use store::{
     CalibrationData, CalibrationRecord, ChunkHit, ChunkTextHit, DependencyInsert, EmbeddingCounts,
     ExtensionFilter, FileIndexWrite, FileStamp, FileStampRefresh, IndexStats, IndexStore,
-    PendingChunk,
+    PendingChunk, RACY_WINDOW_SECS,
 };
 pub use store::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
 pub use watcher::FileWatcher;

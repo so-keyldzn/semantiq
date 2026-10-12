@@ -47,21 +47,29 @@ pub struct FileStamp {
     pub indexed_at: i64,
 }
 
+/// How long (seconds) a write after the hash can keep a file's mtime: the
+/// coarsest mtime granularity in common use (FAT and exFAT round to 2 s;
+/// SMB and some NFS mounts do the same, and a server clock a second behind
+/// looks alike). Ext4, APFS and NTFS keep sub-second times, where 1 s would
+/// do; the wider window only costs one extra hash of the files modified in
+/// the second before an index run.
+pub const RACY_WINDOW_SECS: i64 = 2;
+
 impl FileStamp {
     /// Whether a file with this mtime (seconds) can be trusted unchanged
     /// without hashing it. Not when the mtime moved, and not when the file
-    /// was modified in the same second its content was hashed (or later,
-    /// by a clock skew): a write landing in that second after the hash
-    /// leaves the mtime where it is, so such a row is hashed again, as
-    /// git's "racy" index entries are.
+    /// was modified within [`RACY_WINDOW_SECS`] before its content was
+    /// hashed (or later, by a clock skew): a write landing in that window
+    /// after the hash can leave the mtime where it is, so such a row is
+    /// hashed again, as git's "racy" index entries are.
     pub fn trusts(&self, last_modified: i64) -> bool {
         self.last_modified == last_modified && !self.is_racy()
     }
 
-    /// Whether the mtime of the file was in or after the second its content
-    /// was hashed.
+    /// Whether the mtime of the file is within [`RACY_WINDOW_SECS`] before
+    /// the second its content was hashed, or after it.
     pub fn is_racy(&self) -> bool {
-        self.last_modified >= self.indexed_at
+        self.last_modified + RACY_WINDOW_SECS > self.indexed_at
     }
 }
 

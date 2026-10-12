@@ -1333,6 +1333,7 @@ fn unchanged_content_with_a_moved_mtime_is_restamped() {
 /// settles, so a write landing right after the hash is never missed.
 #[test]
 fn racy_stamp_is_hashed_again() {
+    use semantiq_index::RACY_WINDOW_SECS;
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     build_toy_project(&root);
@@ -1344,7 +1345,10 @@ fn racy_stamp_is_hashed_again() {
     let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
     indexer.initial_index().unwrap();
     let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
-    assert!(stamp.last_modified >= stamp.indexed_at, "racy");
+    assert!(
+        stamp.last_modified + RACY_WINDOW_SECS > stamp.indexed_at,
+        "racy"
+    );
 
     // Same mtime, new content: the stamp cannot be trusted, the hash tells.
     fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
@@ -1354,9 +1358,68 @@ fn racy_stamp_is_hashed_again() {
     assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
 }
 
+/// On a filesystem with coarse mtimes (FAT: 2 s), a write right after the
+/// hash can land on the mtime of the second *before* it. Such a stamp is
+/// racy too, so the file is hashed again; one `RACY_WINDOW_SECS` older,
+/// the stamp is trusted.
+#[test]
+fn coarse_mtime_in_the_window_before_the_hash_is_hashed_again() {
+    use semantiq_index::RACY_WINDOW_SECS;
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let util = root.join("src/util.rs");
+    let old_mtime = hour_ago();
+    set_mtime(&util, old_mtime);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    let content = fs::read_to_string(&util).unwrap();
+
+    // The hash happened one second after the (rounded) mtime: a FAT write
+    // after it can keep that mtime. Rewrite the content, keep the mtime.
+    store
+        .insert_file_at(
+            "src/util.rs",
+            Some("rust"),
+            &content,
+            stamp.last_modified,
+            stamp.last_modified + RACY_WINDOW_SECS - 1,
+        )
+        .unwrap();
+    fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
+    set_mtime(&util, old_mtime);
+    assert_eq!(
+        indexer.initial_index().unwrap().indexed,
+        1,
+        "a stamp within the window before the hash is hashed again"
+    );
+    assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
+
+    // Hashed a full window after the mtime: trusted, a same-mtime rewrite
+    // is not seen (by design, as on any filesystem).
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    let content = fs::read_to_string(&util).unwrap();
+    store
+        .insert_file_at(
+            "src/util.rs",
+            Some("rust"),
+            &content,
+            stamp.last_modified,
+            stamp.last_modified + RACY_WINDOW_SECS,
+        )
+        .unwrap();
+    fs::write(&util, "pub fn delta(x: i32) -> i32 { x * 4 }\n").unwrap();
+    set_mtime(&util, old_mtime);
+    assert_eq!(indexer.initial_index().unwrap().indexed, 0);
+    assert!(store.find_symbol_by_name("delta").unwrap().is_empty());
+}
+
 #[test]
 fn file_stamp_trust_rules() {
-    use semantiq_index::FileStamp;
+    use semantiq_index::{FileStamp, RACY_WINDOW_SECS};
     let stamp = FileStamp {
         id: 1,
         hash: "h".into(),
@@ -1373,6 +1436,24 @@ fn file_stamp_trust_rules() {
     assert!(
         racy.is_racy() && !racy.trusts(200),
         "hashed in the mtime's second"
+    );
+    // A filesystem with 2 s mtimes (FAT, SMB) can give a write after the
+    // hash the mtime of the second before it.
+    let coarse = FileStamp {
+        last_modified: 200 - RACY_WINDOW_SECS + 1,
+        ..stamp.clone()
+    };
+    assert!(
+        coarse.is_racy() && !coarse.trusts(coarse.last_modified),
+        "mtime within the racy window before the hash"
+    );
+    let settled = FileStamp {
+        last_modified: 200 - RACY_WINDOW_SECS,
+        ..stamp.clone()
+    };
+    assert!(
+        !settled.is_racy() && settled.trusts(settled.last_modified),
+        "mtime older than the racy window"
     );
     let future = FileStamp {
         last_modified: 300,
