@@ -9,7 +9,7 @@ first time this version opens an index (a few seconds per 100 MB of source);
 it grows the database by about 2.5× the size of the indexed source text.
 
 Existing indexes are rebuilt on the first run of this version
-(`PARSER_VERSION` 20): the parser fixes below change what is extracted, and
+(`PARSER_VERSION` 21): the parser fixes below change what is extracted, and
 the import fixes change what `deps`, the repo map and the `imports`
 confidence of `impact` / `calls` see.
 
@@ -192,6 +192,39 @@ confidence of `impact` / `calls` see.
   (`requirements.push("json")`) or has a receiver is no import. Elixir:
   `alias A.{B, C}` gives one import per leaf instead of the fragment `A.{B`,
   and `alias A.B, as: C` is named `C` (#84).
+- Java, C#, Kotlin, Scala, PHP (and TS classes with decorators): an annotated
+  member's `signature` is the line that carries its name and modifiers
+  (`public double area() {`) instead of the annotation (`@Override`), so
+  `dead-code` reads its visibility; `dead-code` also reads the attributes at
+  the top of the symbol's span (`@Test`, `@Override`, `[Fact]`), which excludes
+  tests and overrides and lowers the confidence of framework-annotated members
+  (#140).
+- Go: interface methods (`method_elem`) and `type X = Y` aliases are symbols,
+  methods get their receiver type as `parent` (`Circle::Area`), and a grouped
+  `import ( … )` yields one import symbol per spec named after its alias or
+  last path segment instead of one symbol holding the whole block (#145).
+- JS/TS: class fields holding a function (`onClick = (e) => {…}`, `static
+  handler = function () {}`) and `#private()` methods are method symbols, so
+  their calls are attributed to them and not to the class (#146).
+- C/C++: `#define` macros (`constant`, function-like ones `function`) and
+  function-pointer typedefs (`typedef int (*cb)(int)`) are symbols; the names
+  declared by `#define` and by enumerators are definitions, not usages (#148).
+- Python docstrings (first statement of a `def` / `class` body, PEP 257
+  dedented) and Elixir `@doc` / `@moduledoc` strings are attached as the
+  symbol's doc comment (#150).
+- HTML: `<script>` / `<style>` at any depth and every element with an `id`
+  (named after the id) are symbols, not only the root `<html>` (#154).
+- C++: a method defined out of its class (`int C::add(int)`) is indexed under
+  its bare name `add` with `parent = C` (`ns::C` with the enclosing namespace),
+  reachable by `explain` / `calls` / `refs`; its definition line is no longer a
+  usage; in-class method declarations (`int add(int);`, pure virtual methods)
+  are method symbols (#79).
+- `.h` headers are parsed with the C++ grammar (they keep the `c` language
+  label): classes, namespaces, templates and member declarations of C++
+  headers are indexed and their keywords no longer pollute `refs` (#144).
+- `.mts` / `.cts` files are indexed as TypeScript and `./x.mjs` / `./x.cjs`
+  imports resolve to `x.mts` / `x.cts` (#151).
+
 
 ## [0.12.0] - 2026-10-11
 

@@ -469,12 +469,12 @@ in HTTP mode, `POST /calls`, `POST /hierarchy`, `POST /dead-code`.
 | Language | Extensions |
 |----------|-----------|
 | Rust | `.rs` |
-| TypeScript | `.ts`, `.tsx` |
+| TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` |
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` |
 | Python | `.py`, `.pyi` |
 | Go | `.go` |
 | Java | `.java` |
-| C | `.c`, `.h` |
+| C | `.c`, `.h` (headers are parsed with the C++ grammar, so C++ classes declared in `.h` are indexed) |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.hh` |
 | PHP | `.php`, `.phtml`, `.php3`, `.php4`, `.php5`, `.php7`, `.phps` |
 | Ruby | `.rb`, `.rake`, `.gemspec` |
