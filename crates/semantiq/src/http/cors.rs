@@ -90,9 +90,11 @@ fn parse_origin(origin: &str) -> Result<HeaderValue> {
              (wildcards are not allowed)"
         );
     }
+    // Browsers leave the scheme's default port out of the `Origin` header.
+    let default_port = if scheme == "https" { 443 } else { 80 };
     let normalised = match authority.port_u16() {
-        Some(port) => format!("{scheme}://{host}:{port}"),
-        None => format!("{scheme}://{host}"),
+        Some(port) if port != default_port => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
     };
     HeaderValue::from_str(&normalised)
         .map_err(|e| anyhow::anyhow!("invalid --cors-origin {origin:?}: {e}"))
@@ -141,6 +143,17 @@ mod tests {
         );
         assert_eq!(origins("http://localhost:5173"), ["http://localhost:5173"]);
         assert_eq!(origins("http://[::1]:5173"), ["http://[::1]:5173"]);
+        // Default ports are dropped, as browsers serialise them.
+        assert_eq!(origins("https://example.com:443"), ["https://example.com"]);
+        assert_eq!(origins("http://example.com:80"), ["http://example.com"]);
+        assert_eq!(
+            origins("http://example.com:443"),
+            ["http://example.com:443"]
+        );
+        assert_eq!(
+            origins("https://example.com:80"),
+            ["https://example.com:80"]
+        );
         assert_eq!(
             origins("http://localhost:5173, https://demo.example.com"),
             ["http://localhost:5173", "https://demo.example.com"]

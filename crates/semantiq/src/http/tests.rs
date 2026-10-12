@@ -9,6 +9,7 @@ use crate::http::host::{AllowedHosts, require_allowed_host};
 use crate::http::limits::limit_requests;
 use crate::http::types::*;
 use crate::http::{RequestLimits, create_router};
+use std::time::{Duration, Instant};
 
 /// Create a test router with an in-memory database
 fn test_router() -> axum::Router {
@@ -665,15 +666,26 @@ impl TapHost for Request<Body> {
 // ============================================
 
 /// A router shaped like `create_router`: `/health` outside the limits, a slow
-/// endpoint inside them.
-fn limited_router(limits: RequestLimits, handler_delay: std::time::Duration) -> axum::Router {
-    let slow = axum::Router::new().route(
-        "/slow",
-        axum::routing::get(move || async move {
-            tokio::time::sleep(handler_delay).await;
-            "done"
-        }),
-    );
+/// endpoint inside them. `/slow` sleeps on the async side, `/blocking` on the
+/// blocking pool like the SQLite work of the real handlers.
+fn limited_router(limits: RequestLimits, handler_delay: Duration) -> axum::Router {
+    let slow = axum::Router::new()
+        .route(
+            "/slow",
+            axum::routing::get(move || async move {
+                tokio::time::sleep(handler_delay).await;
+                "done"
+            }),
+        )
+        .route(
+            "/blocking",
+            axum::routing::get(move || async move {
+                tokio::task::spawn_blocking(move || std::thread::sleep(handler_delay))
+                    .await
+                    .unwrap();
+                "done"
+            }),
+        );
     axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
         .merge(limit_requests(slow, limits))
@@ -685,20 +697,20 @@ fn get(path: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn test_overloaded_query_endpoints_return_503_and_health_still_answers() {
-    let delay = std::time::Duration::from_millis(400);
+    let delay = Duration::from_millis(400);
     let app = limited_router(
         RequestLimits {
             max_concurrent: 1,
-            timeout: std::time::Duration::from_secs(5),
+            timeout: Duration::from_secs(5),
         },
         delay,
     );
 
     let first = tokio::spawn(app.clone().oneshot(get("/slow")));
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // The slot is taken: the second request is rejected at once, not queued.
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let shed = app.clone().oneshot(get("/slow")).await.unwrap();
     assert_eq!(shed.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(started.elapsed() < delay, "{:?}", started.elapsed());
@@ -721,16 +733,49 @@ async fn test_slow_query_endpoints_time_out_with_504() {
     let app = limited_router(
         RequestLimits {
             max_concurrent: 50,
-            timeout: std::time::Duration::from_millis(50),
+            timeout: Duration::from_millis(50),
         },
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
     );
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let response = app.oneshot(get("/slow")).await.unwrap();
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(started.elapsed() < Duration::from_secs(2));
     let error: ErrorResponse = serde_json::from_slice(&response_body(response).await).unwrap();
     assert_eq!(error.code, "TIMEOUT");
+}
+
+#[tokio::test]
+async fn test_timed_out_handler_keeps_its_slot_until_the_blocking_work_ends() {
+    // A timeout answers the client but cannot stop the SQLite work: the slot
+    // must stay taken until that work ends, or repeated timed-out requests
+    // would pile up an unbounded number of blocking jobs.
+    let work = Duration::from_millis(500);
+    let app = limited_router(
+        RequestLimits {
+            max_concurrent: 1,
+            timeout: Duration::from_millis(50),
+        },
+        work,
+    );
+    let started = Instant::now();
+    let timed_out = app.clone().oneshot(get("/blocking")).await.unwrap();
+    assert_eq!(timed_out.status(), StatusCode::GATEWAY_TIMEOUT);
+
+    // Still within the blocking work: the slot is held, the request is shed.
+    let shed = app.clone().oneshot(get("/blocking")).await.unwrap();
+    assert_eq!(
+        shed.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        started.elapsed()
+    );
+
+    // Once the orphaned work is done, the slot is free: the next request is
+    // admitted (and times out in turn, it is the same slow handler).
+    tokio::time::sleep(work).await;
+    let admitted = app.oneshot(get("/blocking")).await.unwrap();
+    assert_eq!(admitted.status(), StatusCode::GATEWAY_TIMEOUT);
 }
 
 #[tokio::test]

@@ -54,8 +54,8 @@ confidence of `impact` / `calls` see.
 - `serve --http-port` refuses `--cors-origin '*'` and `null`: with a wildcard,
   any website the developer visits could read the indexed source through the
   loopback API. The flag now takes one or more comma-separated absolute
-  `http(s)://host[:port]` origins (no path, no wildcard), validated before the
-  server starts (#112).
+  `http(s)://host[:port]` origins (no path, no wildcard; default ports are
+  dropped as browsers do), validated before the server starts (#112).
 
 ### Fixed
 - A directory rename, move or removal is applied by `serve`'s watcher: the
@@ -242,8 +242,9 @@ confidence of `impact` / `calls` see.
 - HTTP API: the query endpoints no longer queue behind a saturated server. A
   global 50-request concurrency cap now rejects the next request at once with
   503 (`OVERLOADED`), a request still running after 30 s is answered 504
-  (`TIMEOUT`), and `/health` runs outside both limits so a busy server still
-  reports as alive to a Docker `HEALTHCHECK` (#99).
+  (`TIMEOUT`) while its handler keeps the slot until its SQLite work ends, and
+  `/health` runs outside both limits so a busy server still reports as alive
+  to a Docker `HEALTHCHECK` (#99).
 - README: documents HTTP mode (`--http-port`, `--http-host`, `--cors-origin`,
   the ten endpoints, REST defaults and caps, which endpoints share the MCP
   shapes) (#129); Known Limitations no longer claims `export const` is not

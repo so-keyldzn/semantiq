@@ -538,15 +538,17 @@ Limits and protections:
 - The query endpoints (everything but `/health` and `/mcp`) run at most 50
   requests at once; the next one is rejected immediately with 503
   (`OVERLOADED`) instead of waiting, and a request still running after 30 s is
-  answered 504 (`TIMEOUT`). `/health` is outside these limits so a busy server
-  still reports as alive (Docker `HEALTHCHECK`).
+  answered 504 (`TIMEOUT`). Its SQLite work cannot be interrupted, so the
+  handler keeps its slot until that work ends: the cap bounds the work in
+  flight, not only the waiting clients. `/health` is outside these limits so
+  a busy server still reports as alive (Docker `HEALTHCHECK`).
 - When bound to loopback, a `Host` header other than `localhost`, `127.0.0.1`,
   `[::1]` or the bound address is rejected with 403 (DNS rebinding), on the REST
   endpoints and `/mcp` alike.
 - No cross-origin access by default: `--cors-origin` names the browser origins
-  allowed to read the answers (absolute `http(s)://host[:port]`, comma-separated);
-  `*` and `null` are refused because they would let any website the developer
-  visits read the indexed code.
+  allowed to read the answers (absolute `http(s)://host[:port]`, comma-separated,
+  default ports dropped as browsers do); `*` and `null` are refused because
+  they would let any website the developer visits read the indexed code.
 
 ## Supported Languages
 
