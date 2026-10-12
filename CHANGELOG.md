@@ -38,13 +38,15 @@ confidence of `impact` / `calls` see.
   comparisons per identifier. Part of #158.
 - Phase 1 indexing (`semantiq index`, `serve` startup, the query refresh)
   parses files on `SEMANTIQ_INDEX_THREADS` threads (default: the CPU count,
-  at most 8) and writes each file's row and tables in one transaction with
-  cached statements, one commit per file instead of six; `semantiq index`
-  logs the files/s rate and the thread count (#158).
+  at most 8; the parsers of a thread are built on its first file, so a walk
+  with nothing to parse builds none) and writes each file's row and tables
+  in one transaction with cached statements, one commit per file instead of
+  six; `semantiq index` logs the files/s rate and the thread count (#158).
 - The indexer's walk no longer reads and hashes every file: an indexed file
   whose mtime did not move since its content was hashed is trusted unchanged
-  (a file modified in the same second as the hash is hashed again, like
-  git's racy index entries), the `files` table is loaded once instead of one
+  (a file modified within 2 s before the hash, the mtime granularity of
+  FAT and SMB mounts, or after it is hashed again, like git's racy index
+  entries), the `files` table is loaded once instead of one
   query per file, and the query commands run that single walk instead of a
   hash walk followed by a second one; an up-to-date index is neither written
   to nor reported on (#157).

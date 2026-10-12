@@ -35,7 +35,9 @@ pub struct AutoIndexer {
     store: Arc<IndexStore>,
     watcher: Option<Mutex<FileWatcher>>,
     project_root: PathBuf,
-    language_support: Mutex<LanguageSupport>,
+    /// Parsers for watcher events (`index_file`), built on the first one:
+    /// an indexer that only runs `initial_index` never needs them.
+    language_support: Mutex<Option<LanguageSupport>>,
     chunk_extractor: ChunkExtractor,
     /// Project facts for import classification and resolution: the `go.mod`
     /// module path and the packages the project's files declare
@@ -222,7 +224,7 @@ impl AutoIndexer {
         Ok(Self {
             store,
             watcher: watcher.map(Mutex::new),
-            language_support: Mutex::new(LanguageSupport::new()?),
+            language_support: Mutex::new(None),
             chunk_extractor: ChunkExtractor::new(),
             import_context: scan_import_context(&project_root),
             project_root,
@@ -485,19 +487,20 @@ impl AutoIndexer {
         // instead of one per file.
         let stamps = self.store.load_file_stamps()?;
         let threads = self.threads.max(1);
-        let supports = (0..threads)
-            .map(|_| LanguageSupport::new())
-            .collect::<Result<Vec<_>>>()?;
         let (job_tx, job_rx) = sync_channel::<ParseJob>(threads * 2);
         let (done_tx, done_rx) = sync_channel::<Parsed>(threads * 2);
         let job_rx = Mutex::new(job_rx);
 
         let mut written = InitialIndexResult::default();
         let outcome = std::thread::scope(|scope| -> Result<WalkOutcome> {
-            for mut support in supports {
+            for _ in 0..threads {
                 let job_rx = &job_rx;
                 let done_tx = done_tx.clone();
                 scope.spawn(move || {
+                    // Built on the thread's first job: a walk that finds
+                    // nothing to parse (the query refresh of an up-to-date
+                    // index) never pays for the parsers of every grammar.
+                    let mut support: Option<LanguageSupport> = None;
                     loop {
                         // The lock covers the wait for a job only, not its parse.
                         let job = match job_rx.lock() {
@@ -505,7 +508,13 @@ impl AutoIndexer {
                             Err(_) => break,
                         };
                         let Ok(job) = job else { break };
-                        let extraction = self.extract(&mut support, &job);
+                        let extraction = match &mut support {
+                            Some(support) => self.extract(support, &job),
+                            None => match LanguageSupport::new() {
+                                Ok(built) => self.extract(support.insert(built), &job),
+                                Err(e) => Err(ExtractError::Extractor(e)),
+                            },
+                        };
                         if done_tx.send(Parsed { job, extraction }).is_err() {
                             break;
                         }
@@ -1015,7 +1024,11 @@ impl AutoIndexer {
                 .language_support
                 .lock()
                 .map_err(|e| anyhow::anyhow!("LanguageSupport lock poisoned: {}", e))?;
-            self.extract(&mut language_support, &job)
+            let support = match language_support.as_mut() {
+                Some(support) => support,
+                None => language_support.insert(LanguageSupport::new()?),
+            };
+            self.extract(support, &job)
         };
         self.write_parsed(Parsed { job, extraction })?;
 
