@@ -19,6 +19,36 @@ Requirements: Python 3 (standard library only), `git`, `tar`, an authenticated
 `claude` CLI, and for the semantiq configs a release binary built with
 `cargo build --release --features semantiq-embeddings/onnx` (`--build` does it).
 
+## Options
+
+| Option | Default | Effect |
+|---|---|---|
+| `--tasks FILE...` | `tasks/*.json` | task suite files, one repository each; a malformed suite is rejected before any run (see Tasks) |
+| `--task ID` | all | only this task id (repeatable) |
+| `--category {conceptual,structural,exact}` | all | only tasks of this category (repeatable) |
+| `--configs A,B` | `baseline,semantiq` | configurations to run (see above) |
+| `--model MODEL` | `claude-sonnet-5-5` | passed to `claude --model` |
+| `--effort LEVEL` | none | passed to `claude --effort` |
+| `--reps N` | 1 | repetitions per (task, config) |
+| `--jobs N` | 1 | runs executed in parallel (adds noise to durations) |
+| `--timeout SECONDS` | 900 | per-run timeout; a run that exceeds it is recorded as an error |
+| `--max-budget-usd USD` | 2.0 | per-run spending cap passed to `claude` (0 disables) |
+| `--work-dir DIR` | `$TMPDIR/semantiq-agent-bench` | scratch dir for checkouts, index DBs and transcripts; refused inside the repository |
+| `--out DIR` | `results/<YYYY-MM-DD>` | results directory |
+| `--semantiq-bin PATH` | `target/release/semantiq` | binary for the `semantiq*` configs |
+| `--cli-bin PATH` | `--semantiq-bin` | CLI used by `cli-skill` |
+| `--skill-path PATH` | none | skill directory (or `SKILL.md`) installed for `cli-skill` |
+| `--claude-bin PATH` | `claude` | Claude Code executable |
+| `--build` | off | `cargo build --release --features semantiq-embeddings/onnx` first |
+| `--reuse-index` | off | reuse an existing index DB (index time not measured) |
+| `--keep-agent-docs` | off | keep `CLAUDE.md` / `AGENTS.md` / `.claude` in the checkouts |
+| `--resume` | off | skip runs already recorded in `<out>/runs.jsonl` |
+| `--rebuild` | off | re-score the transcripts of `<out>` with the current task files, no claude call |
+| `--dry-run` | off | list the planned runs and the cost estimate |
+
+The harness has unit tests (suite validation, scoring), without any claude
+call: `python3 bench/agent/test_bench.py`.
+
 ## Configurations
 
 | Config | MCP servers | Extra context | Tools |
@@ -69,6 +99,12 @@ paths or symbol names (`answer_kind`). Each `expected` item lists regexes;
 share of expected items found; precision is the share of entries that are
 expected or allowed. A run succeeds when recall ≥ `min_recall` (default 1.0)
 and precision ≥ `min_precision` (default 0.5). See `scoring.py`.
+
+Suites are validated when loaded (`scoring.validate_suite`): a `repo` block
+(`name`, `source`, `commit`), unique task ids, `category` and `answer_kind`
+among the values above, a non-empty `expected` list of `{id, any}` with valid
+regexes, valid `allowed` regexes, thresholds between 0 and 1. A broken suite
+is reported with its file and task id before any checkout or claude call.
 
 ## Output
 

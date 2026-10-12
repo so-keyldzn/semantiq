@@ -117,9 +117,18 @@ def log(msg: str) -> None:
 
 
 def load_suites(paths: list[Path]) -> list[dict]:
+    """Read the task suites, rejecting a malformed one (`scoring.validate_suite`)
+    before any checkout or claude call."""
     suites = []
     for p in paths:
-        data = json.loads(p.read_text())
+        try:
+            data = json.loads(p.read_text())
+        except json.JSONDecodeError as e:
+            sys.exit(f"{p}: invalid JSON ({e})")
+        try:
+            scoring.validate_suite(data, str(p))
+        except scoring.SuiteError as e:
+            sys.exit(str(e))
         data["file"] = str(p)
         suites.append(data)
     return suites
