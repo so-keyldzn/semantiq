@@ -6,7 +6,7 @@ pub mod schema;
 pub mod store;
 pub mod watcher;
 
-pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult};
+pub use auto_indexer::{AutoIndexer, InitialIndexResult, ProcessResult, read_error_is_final};
 pub use embedder::{
     BackgroundEmbedder, EmbedResult, EmbedderConfig, EmbeddingProgress, ModelLoader, embed_pending,
 };

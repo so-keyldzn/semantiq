@@ -1,6 +1,6 @@
 //! Common utilities and constants for CLI commands
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,7 @@ pub(super) const DEFAULT_DB_NAME: &str = ".semantiq.db";
 /// Resolves a path to an absolute, canonicalized project root path.
 /// If the path is relative, it's joined with the current directory.
 /// The result is canonicalized to resolve `..` components and symlinks.
+/// A path that is not a directory is an error (see [`ensure_directory`]).
 pub(super) fn resolve_project_root(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -18,9 +19,22 @@ pub(super) fn resolve_project_root(path: &Path) -> Result<PathBuf> {
     };
 
     // Canonicalize to resolve .. components and symlinks
-    absolute
+    let root = absolute
         .canonicalize()
-        .with_context(|| format!("Failed to resolve project root: {:?}", absolute))
+        .with_context(|| format!("Failed to resolve project root: {:?}", absolute))?;
+    ensure_directory(&root)?;
+    Ok(root)
+}
+
+/// Fails unless `path` is a directory: a project root must be one. A file
+/// given as the root would otherwise get `<file>/.semantiq.db` (a cryptic
+/// SQLite "unable to open" error) or, with `--database`, be indexed as the
+/// only file of the project under an empty path.
+pub(super) fn ensure_directory(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        bail!("{} is not a directory", path.display());
+    }
+    Ok(())
 }
 
 /// Returns the database path, using the provided path or defaulting to
@@ -90,6 +104,17 @@ mod tests {
         let result = resolve_project_root(path).unwrap();
         // canonicalize resolves symlinks, so compare canonical forms
         assert_eq!(result, env::current_dir().unwrap().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_project_root_rejects_a_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("Cargo.toml");
+        std::fs::write(&file, "[package]").unwrap();
+        let err = resolve_project_root(&file).unwrap_err().to_string();
+        assert!(err.contains("is not a directory"), "{err}");
+        assert!(ensure_directory(dir.path()).is_ok());
+        assert!(resolve_project_root(&dir.path().join("missing")).is_err());
     }
 
     #[test]

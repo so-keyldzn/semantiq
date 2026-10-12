@@ -614,8 +614,10 @@ Automatic reindex is triggered when:
 
 ## Excluded Directories
 
-Indexing follows `.gitignore` (plus the global git excludes and
-`.git/info/exclude`) and skips, wherever they appear, the directories that
+Indexing follows `.gitignore` and `.ignore` (plus the global git excludes and
+`.git/info/exclude`), inside a git repository or not, never follows symlinks
+(a link to a file or directory outside the project is not read, a link inside
+it is not indexed twice) and skips, wherever they appear, the directories that
 never hold project source:
 ```
 VCS:          .git, .hg, .svn, .jj
@@ -632,9 +634,16 @@ caches:       __pycache__, .cache, .parcel-cache, .turbo, .nx, .nyc_output,
               .ipynb_checkpoints
 IDE state:    .idea, .vs, .vscode-test, .history
 ```
-plus Semantiq's own files (`.semantiq.db*`) and credential files, whose name
-starts with `.env`, `.secret` or `.credential` (`.env.json`, `.env.yaml`,
-`.envrc`, `.secrets.yml`, `.credentials.json`...). Other hidden directories
+plus Semantiq's own files (`.semantiq.db*`) and credential files: names
+starting with `.env`, `.secret` or `.credential` (`.env.json`, `.env.yaml`,
+`.envrc`, `.secrets.yml`, `.credentials.json`...), data files (`.json`,
+`.yaml`, `.yml`, `.toml`, `.ini`, `.properties`) whose name contains `secret`,
+`credential`, `service-account` or `adminsdk` (`secrets.yaml`,
+`credentials.json`, `serviceAccount.json`, `app-firebase-adminsdk-x.json`),
+`kubeconfig*`, SSH keys (`id_rsa*`, `id_ed25519*`), dotenv files (`*.env`)
+and key or certificate files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`,
+`*.keystore`, `*.ppk`, `*.asc`, `*.gpg`, `*.kdbx`). Code files are never
+excluded by their name (`secrets.rs`, `credentials.ts`). Other hidden directories
 (`.github`, `.storybook`, `.vscode`, `.config`, `.husky`, `.changeset`,
 `.devcontainer`, `.claude`...) and hidden files (`.eslintrc.json`,
 `.gitlab-ci.yml`...) are indexed like any other, subject to `.gitignore`.

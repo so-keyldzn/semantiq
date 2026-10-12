@@ -135,6 +135,64 @@ impl IndexStore {
         })
     }
 
+    /// Delete the file at `path` and every file under the directory `path`
+    /// (`path/...`), with their data, and return how many rows went. The
+    /// watcher reports a directory rename or removal as one event on the
+    /// directory, so the rows of its files are only reachable by prefix.
+    /// Same transaction shape as [`Self::delete_file`]: the `chunks_vec` rows
+    /// are purged first, in the same transaction.
+    pub fn delete_files_under(&self, path: &str) -> Result<usize> {
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        self.with_conn(|conn| {
+            conn.execute("BEGIN IMMEDIATE", [])?;
+            let result = (|| -> Result<usize> {
+                // `substr` rather than `LIKE`: `_` and `%` in a path are
+                // literal characters here.
+                conn.execute(
+                    "DELETE FROM chunks_vec
+                     WHERE chunk_id IN (
+                         SELECT c.id FROM chunks c
+                         JOIN files f ON f.id = c.file_id
+                         WHERE f.path = ?1 OR substr(f.path, 1, length(?2)) = ?2
+                     )",
+                    params![path, prefix],
+                )?;
+                let removed = conn.execute(
+                    "DELETE FROM files WHERE path = ?1 OR substr(path, 1, length(?2)) = ?2",
+                    params![path, prefix],
+                )?;
+                Ok(removed)
+            })();
+            match result {
+                Ok(removed) => {
+                    conn.execute("COMMIT", [])?;
+                    Ok(removed)
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", []);
+                    Err(e)
+                }
+            }
+        })
+    }
+
+    /// The relative paths of the indexed files under the directory `dir`
+    /// (`dir/...`), or every path when `dir` is empty.
+    pub fn list_file_paths_under(&self, dir: &str) -> Result<Vec<String>> {
+        if dir.is_empty() {
+            return self.list_file_paths();
+        }
+        let prefix = format!("{}/", dir.trim_end_matches('/'));
+        self.with_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT path FROM files WHERE substr(path, 1, length(?1)) = ?1")?;
+            let paths = stmt
+                .query_map([&prefix], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            Ok(paths)
+        })
+    }
+
     /// List the relative paths of every indexed file.
     pub fn list_file_paths(&self) -> Result<Vec<String>> {
         self.with_conn(|conn| {
@@ -309,5 +367,39 @@ impl IndexStore {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `delete_files_under` removes the path itself and the rows under it
+    /// as a directory, nothing with the same prefix as a name, and `_` or
+    /// `%` in a path are literal.
+    #[test]
+    fn delete_files_under_removes_the_directory_rows_only() {
+        let store = IndexStore::open_in_memory().unwrap();
+        for path in [
+            "src/old",
+            "src/old/a.rs",
+            "src/old/deep/b.rs",
+            "src/older/c.rs",
+            "src/old_x/d.rs",
+            "src/main.rs",
+        ] {
+            store.insert_file(path, Some("rust"), path, 0).unwrap();
+        }
+        assert_eq!(store.delete_files_under("src/old").unwrap(), 3);
+        let mut left = store.list_file_paths().unwrap();
+        left.sort();
+        assert_eq!(left, ["src/main.rs", "src/old_x/d.rs", "src/older/c.rs"]);
+        assert_eq!(store.delete_files_under("src/old").unwrap(), 0);
+        assert_eq!(store.delete_files_under("src/main.rs").unwrap(), 1);
+
+        let mut under = store.list_file_paths_under("src").unwrap();
+        under.sort();
+        assert_eq!(under, ["src/old_x/d.rs", "src/older/c.rs"]);
+        assert!(store.list_file_paths_under("src/old").unwrap().is_empty());
     }
 }

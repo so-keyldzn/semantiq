@@ -431,6 +431,40 @@ fn test_text_fallback_matches_whole_identifiers_case_sensitively() {
     assert_eq!(hits, vec![(2, "text"), (7, "text")], "{hits:?}");
 }
 
+/// The text strategy walks the project like the indexer: a symlink to a file
+/// outside the project is not read through (#109), and a credential store
+/// is not read even under an explicit `file_type` filter (#113).
+#[cfg(unix)]
+#[test]
+fn test_text_search_skips_symlinks_and_credential_files() {
+    use crate::query::SearchOptions;
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::Builder::new()
+        .prefix("semantiq-links")
+        .tempdir()
+        .unwrap();
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("private.js"), "const needle_outside = 1;\n").unwrap();
+    let root = tmp.path().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("app.js"), "const needle_inside = 1;\n").unwrap();
+    std::fs::write(root.join("secrets.env"), "NEEDLE_TOKEN=needle_secret\n").unwrap();
+    symlink(outside.join("private.js"), root.join("linked.js")).unwrap();
+    symlink("app.js", root.join("alias.js")).unwrap();
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let engine = RetrievalEngine::new(store, root.to_str().unwrap());
+
+    let results = engine.search("needle", 10, None).unwrap().results;
+    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    assert_eq!(files, ["app.js"], "{files:?}");
+
+    let options = SearchOptions::new().with_file_types(vec!["env".to_string()]);
+    let results = engine.search("needle", 10, Some(options)).unwrap().results;
+    assert!(results.is_empty(), "{results:?}");
+}
+
 #[test]
 fn test_text_search_skips_minified_files_and_cuts_long_lines() {
     // Regression for #44: a minified bundle returned its whole line as the
