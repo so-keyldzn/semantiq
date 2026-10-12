@@ -1319,8 +1319,10 @@ fn unchanged_mtime_is_trusted_without_reading_the_file() {
     let root = tmp.path().to_path_buf();
     build_toy_project(&root);
     let util = root.join("src/util.rs");
-    // Older than the index: not a racy stamp.
-    set_mtime(&util, hour_ago());
+    // Older than the index: not a racy stamp. One value for both writes:
+    // two `hour_ago()` calls can straddle a second boundary.
+    let old = hour_ago();
+    set_mtime(&util, old);
 
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
     let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
@@ -1328,7 +1330,7 @@ fn unchanged_mtime_is_trusted_without_reading_the_file() {
     let before = store.get_file_by_path("src/util.rs").unwrap().unwrap();
 
     fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
-    set_mtime(&util, hour_ago());
+    set_mtime(&util, old);
     let result = indexer.initial_index().unwrap();
     assert_eq!(result.indexed, 0, "same mtime: the file is not read");
     assert_eq!(result.skipped, 2);

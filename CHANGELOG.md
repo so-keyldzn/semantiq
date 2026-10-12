@@ -149,6 +149,11 @@ shape. Phase 1 only: embeddings are kept.
   and `rust-toolchain` are pinned to commits like every other action (#116).
 
 ### Fixed
+- Two timing-dependent tests of `semantiq-index` are deterministic: the
+  unchanged-mtime test stamps the file with one value (two `hour_ago()` calls
+  could straddle a second boundary, so the macOS/Windows jobs failed about one
+  run in three) and the background-embedder poll test waits for the pass to be
+  cleared, not only for the pending count to reach zero.
 - A directory rename, move or removal is applied by `serve`'s watcher: the
   rows under the old name are removed and the files under the new one
   indexed, instead of ghost rows until a restart (#85).
