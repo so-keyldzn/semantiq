@@ -228,6 +228,11 @@ semantiq index --no-embeddings   # Structure only (seconds): everything but sema
 semantiq index --embeddings-only # Compute the embeddings still missing
 ```
 
+The structure phase parses files on `SEMANTIQ_INDEX_THREADS` threads (default:
+the CPU count, at most 8) and logs its rate in files/s; a run on an up-to-date
+index only stats the files (an indexed file whose mtime did not move is not
+read) and is over in well under a second even on large trees.
+
 Embeddings are committed batch by batch: an interrupted run resumes where it
 stopped with `--embeddings-only` (or under `semantiq serve`). `search` runs
 with the embeddings available and says on stderr how much of the semantic index
@@ -571,7 +576,8 @@ Works with all MCP-compatible tools:
 ## Auto-Indexing
 
 Semantiq automatically:
-- Indexes your project on MCP server startup
+- Indexes your project on MCP server startup (files whose mtime did not move
+  since the last index are not read again)
 - Watches for file changes (2-second intervals)
 - Re-indexes modified files incrementally
 - Regenerates embeddings as needed, only for chunks whose content changed

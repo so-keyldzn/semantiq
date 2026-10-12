@@ -105,10 +105,15 @@ async fn index_with_loader(
 fn index_structure(store: &Arc<IndexStore>, project_root: &Path) -> Result<()> {
     let start = Instant::now();
     let indexer = AutoIndexer::without_watcher(Arc::clone(store), project_root.to_path_buf())?;
+    let rate = |indexed: usize| indexed as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
     let result = indexer.initial_index_with(&mut |progress| {
         // Progress update every 100 files
         if progress.indexed.is_multiple_of(100) {
-            info!("Indexed {} files...", progress.indexed);
+            info!(
+                "Indexed {} files... ({:.0} files/s)",
+                progress.indexed,
+                rate(progress.indexed)
+            );
         }
     })?;
     let stats = store.get_stats()?;
@@ -118,8 +123,12 @@ fn index_structure(store: &Arc<IndexStore>, project_root: &Path) -> Result<()> {
         start.elapsed().as_secs_f64()
     );
     info!(
-        "  Files: {} indexed, {} unchanged, {} removed",
-        result.indexed, result.skipped, result.removed
+        "  Files: {} indexed, {} unchanged, {} removed ({:.0} files/s, {} parser threads)",
+        result.indexed,
+        result.skipped,
+        result.removed,
+        rate(result.indexed),
+        indexer.threads()
     );
     info!("  Symbols: {}", stats.symbol_count);
     info!("  Chunks: {}", stats.chunk_count);

@@ -3,7 +3,7 @@
 use super::IndexStore;
 use crate::schema::ReferenceRecord;
 use anyhow::Result;
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use semantiq_parser::Reference;
 use tracing::debug;
 
@@ -11,31 +11,14 @@ impl IndexStore {
     /// Maximum number of references returned by a single lookup.
     const MAX_REFERENCE_LIMIT: usize = 10000;
 
-    /// Insert references for a file (replaces existing references for that file).
+    /// Insert references for a file (replaces existing references for that
+    /// file), in its own transaction. The indexer writes a file's tables
+    /// together with [`IndexStore::store_file_index`](super::IndexStore::store_file_index).
     pub fn insert_references(&self, file_id: i64, references: &[Reference]) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute("BEGIN IMMEDIATE", [])?;
 
-            let result = (|| -> Result<()> {
-                conn.execute("DELETE FROM refs WHERE file_id = ?1", [file_id])?;
-
-                let mut stmt = conn.prepare(
-                    "INSERT OR IGNORE INTO refs (name, file_id, line, kind, count)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                )?;
-                for reference in references {
-                    stmt.execute(params![
-                        reference.name,
-                        file_id,
-                        reference.line as i64,
-                        reference.kind.as_str(),
-                        reference.count.max(1) as i64,
-                    ])?;
-                }
-                Ok(())
-            })();
-
-            match result {
+            match insert_references_in(conn, file_id, references) {
                 Ok(()) => {
                     conn.execute("COMMIT", [])?;
                     debug!(
@@ -111,6 +94,31 @@ impl IndexStore {
             Ok(count as usize)
         })
     }
+}
+
+/// Replace the references of `file_id` inside the caller's transaction.
+pub(super) fn insert_references_in(
+    conn: &Connection,
+    file_id: i64,
+    references: &[Reference],
+) -> Result<()> {
+    conn.prepare_cached("DELETE FROM refs WHERE file_id = ?1")?
+        .execute([file_id])?;
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO refs (name, file_id, line, kind, count)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for reference in references {
+        stmt.execute(params![
+            reference.name,
+            file_id,
+            reference.line as i64,
+            reference.kind.as_str(),
+            reference.count.max(1) as i64,
+        ])?;
+    }
+    Ok(())
 }
 
 /// SQL expression ranking a row of `file_column` by how likely its use of

@@ -3,7 +3,7 @@
 use super::IndexStore;
 use crate::schema::DependencyRecord;
 use anyhow::Result;
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use std::collections::HashSet;
 
 /// One import of a file, as stored by [`IndexStore::replace_dependencies`].
@@ -25,6 +25,30 @@ pub struct DependencyInsert<'a> {
 const INSERT_DEPENDENCY_SQL: &str = "INSERT INTO dependencies
     (source_file_id, target_path, import_name, kind, resolved_path, line, end_line)
  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+
+/// Replace the dependencies of `source_file_id` inside the caller's
+/// transaction.
+pub(super) fn replace_dependencies_in(
+    conn: &Connection,
+    source_file_id: i64,
+    dependencies: &[DependencyInsert<'_>],
+) -> Result<()> {
+    conn.prepare_cached("DELETE FROM dependencies WHERE source_file_id = ?1")?
+        .execute([source_file_id])?;
+    let mut stmt = conn.prepare_cached(INSERT_DEPENDENCY_SQL)?;
+    for dependency in dependencies {
+        stmt.execute(params![
+            source_file_id,
+            dependency.target_path,
+            dependency.import_name,
+            dependency.kind,
+            dependency.resolved_path,
+            dependency.lines.0 as i64,
+            dependency.lines.1 as i64
+        ])?;
+    }
+    Ok(())
+}
 
 impl IndexStore {
     /// Insert a dependency record. `lines` is the import statement's first
@@ -60,7 +84,8 @@ impl IndexStore {
     /// Replace the dependencies of a file: delete its previous rows and insert
     /// `dependencies`, in one transaction with one prepared statement. A
     /// failure leaves the previous rows in place; one commit per file instead
-    /// of one per import.
+    /// of one per import. The indexer writes a file's tables together with
+    /// [`IndexStore::store_file_index`](super::IndexStore::store_file_index).
     pub fn replace_dependencies(
         &self,
         source_file_id: i64,
@@ -68,26 +93,7 @@ impl IndexStore {
     ) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute("BEGIN IMMEDIATE", [])?;
-            let result = (|| -> Result<()> {
-                conn.execute(
-                    "DELETE FROM dependencies WHERE source_file_id = ?1",
-                    [source_file_id],
-                )?;
-                let mut stmt = conn.prepare_cached(INSERT_DEPENDENCY_SQL)?;
-                for dependency in dependencies {
-                    stmt.execute(params![
-                        source_file_id,
-                        dependency.target_path,
-                        dependency.import_name,
-                        dependency.kind,
-                        dependency.resolved_path,
-                        dependency.lines.0 as i64,
-                        dependency.lines.1 as i64
-                    ])?;
-                }
-                Ok(())
-            })();
-            match result {
+            match replace_dependencies_in(conn, source_file_id, dependencies) {
                 Ok(()) => {
                     conn.execute("COMMIT", [])?;
                     Ok(())

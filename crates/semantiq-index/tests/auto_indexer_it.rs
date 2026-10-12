@@ -1244,3 +1244,326 @@ fn project_imports_are_local_and_resolved() {
     assert_eq!(dependents("app/models.py").len(), 2);
     assert_eq!(dependents("rs/src/util.rs").len(), 2);
 }
+
+/// Set a file's mtime.
+fn set_mtime(path: &Path, time: std::time::SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+}
+
+fn hour_ago() -> std::time::SystemTime {
+    std::time::SystemTime::now() - std::time::Duration::from_secs(3600)
+}
+
+/// #157: an indexed file whose mtime did not move is trusted without being
+/// read. Its content is rewritten behind the index's back (mtime restored):
+/// the walk does not notice, by design, and does once the mtime moves.
+#[test]
+fn unchanged_mtime_is_trusted_without_reading_the_file() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let util = root.join("src/util.rs");
+    // Older than the index: not a racy stamp.
+    set_mtime(&util, hour_ago());
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    let before = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+
+    fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
+    set_mtime(&util, hour_ago());
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.indexed, 0, "same mtime: the file is not read");
+    assert_eq!(result.skipped, 2);
+    let kept = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    assert_eq!(kept.hash, before.hash);
+    assert!(store.find_symbol_by_name("gamma").unwrap().is_empty());
+
+    // The mtime moves: hashed, changed, reindexed.
+    set_mtime(&util, std::time::SystemTime::now());
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.indexed, 1);
+    assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
+    assert!(store.find_symbol_by_name("helper").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// A file whose mtime moved but whose content did not is hashed once: its
+/// stamp is refreshed so that the next walk trusts the new mtime.
+#[test]
+fn unchanged_content_with_a_moved_mtime_is_restamped() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let util = root.join("src/util.rs");
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+
+    let past = hour_ago();
+    set_mtime(&util, past);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.indexed, 0);
+    assert_eq!(result.skipped, 2);
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    let past_secs = past
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert_eq!(
+        stamp.last_modified, past_secs,
+        "the stamp follows the mtime"
+    );
+
+    // Trusted now: a rewrite that keeps the mtime is invisible.
+    fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
+    set_mtime(&util, past);
+    assert_eq!(indexer.initial_index().unwrap().indexed, 0);
+}
+
+/// A file modified in the same second its content was hashed (or later: a
+/// future mtime) keeps a "racy" stamp, hashed again on every walk until it
+/// settles, so a write landing right after the hash is never missed.
+#[test]
+fn racy_stamp_is_hashed_again() {
+    use semantiq_index::RACY_WINDOW_SECS;
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let util = root.join("src/util.rs");
+    let soon = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+    set_mtime(&util, soon);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    assert!(
+        stamp.last_modified + RACY_WINDOW_SECS > stamp.indexed_at,
+        "racy"
+    );
+
+    // Same mtime, new content: the stamp cannot be trusted, the hash tells.
+    fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
+    set_mtime(&util, soon);
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.indexed, 1);
+    assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
+}
+
+/// On a filesystem with coarse mtimes (FAT: 2 s), a write right after the
+/// hash can land on the mtime of the second *before* it. Such a stamp is
+/// racy too, so the file is hashed again; one `RACY_WINDOW_SECS` older,
+/// the stamp is trusted.
+#[test]
+fn coarse_mtime_in_the_window_before_the_hash_is_hashed_again() {
+    use semantiq_index::RACY_WINDOW_SECS;
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let util = root.join("src/util.rs");
+    let old_mtime = hour_ago();
+    set_mtime(&util, old_mtime);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    let content = fs::read_to_string(&util).unwrap();
+
+    // The hash happened one second after the (rounded) mtime: a FAT write
+    // after it can keep that mtime. Rewrite the content, keep the mtime.
+    store
+        .insert_file_at(
+            "src/util.rs",
+            Some("rust"),
+            &content,
+            stamp.last_modified,
+            stamp.last_modified + RACY_WINDOW_SECS - 1,
+        )
+        .unwrap();
+    fs::write(&util, "pub fn gamma(x: i32) -> i32 { x * 3 }\n").unwrap();
+    set_mtime(&util, old_mtime);
+    assert_eq!(
+        indexer.initial_index().unwrap().indexed,
+        1,
+        "a stamp within the window before the hash is hashed again"
+    );
+    assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
+
+    // Hashed a full window after the mtime: trusted, a same-mtime rewrite
+    // is not seen (by design, as on any filesystem).
+    let stamp = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    let content = fs::read_to_string(&util).unwrap();
+    store
+        .insert_file_at(
+            "src/util.rs",
+            Some("rust"),
+            &content,
+            stamp.last_modified,
+            stamp.last_modified + RACY_WINDOW_SECS,
+        )
+        .unwrap();
+    fs::write(&util, "pub fn delta(x: i32) -> i32 { x * 4 }\n").unwrap();
+    set_mtime(&util, old_mtime);
+    assert_eq!(indexer.initial_index().unwrap().indexed, 0);
+    assert!(store.find_symbol_by_name("delta").unwrap().is_empty());
+}
+
+#[test]
+fn file_stamp_trust_rules() {
+    use semantiq_index::{FileStamp, RACY_WINDOW_SECS};
+    let stamp = FileStamp {
+        id: 1,
+        hash: "h".into(),
+        last_modified: 100,
+        indexed_at: 200,
+    };
+    assert!(stamp.trusts(100));
+    assert!(!stamp.trusts(101), "mtime moved");
+    assert!(!stamp.trusts(99), "mtime moved back (cp -p, checkout)");
+    let racy = FileStamp {
+        last_modified: 200,
+        ..stamp.clone()
+    };
+    assert!(
+        racy.is_racy() && !racy.trusts(200),
+        "hashed in the mtime's second"
+    );
+    // A filesystem with 2 s mtimes (FAT, SMB) can give a write after the
+    // hash the mtime of the second before it.
+    let coarse = FileStamp {
+        last_modified: 200 - RACY_WINDOW_SECS + 1,
+        ..stamp.clone()
+    };
+    assert!(
+        coarse.is_racy() && !coarse.trusts(coarse.last_modified),
+        "mtime within the racy window before the hash"
+    );
+    let settled = FileStamp {
+        last_modified: 200 - RACY_WINDOW_SECS,
+        ..stamp.clone()
+    };
+    assert!(
+        !settled.is_racy() && settled.trusts(settled.last_modified),
+        "mtime older than the racy window"
+    );
+    let future = FileStamp {
+        last_modified: 300,
+        ..stamp
+    };
+    assert!(
+        future.is_racy() && !future.trusts(300),
+        "mtime after the hash"
+    );
+}
+
+/// #89 / #158: a file's row and tables are written in one transaction. A
+/// write that fails halfway (here a trigger aborting the chunk insert)
+/// leaves the previous symbols and hash in place, so the file is indexed
+/// again next time instead of carrying new symbols under an old hash.
+#[test]
+fn file_index_write_is_all_or_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    let db = root.join("index.db");
+
+    let store = Arc::new(IndexStore::open(&db).unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+    let before = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+
+    let other = rusqlite::Connection::open(&db).unwrap();
+    other
+        .execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON chunks
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+    fs::write(
+        root.join("src/util.rs"),
+        "pub fn gamma(x: i32) -> i32 { x * 3 }\n",
+    )
+    .unwrap();
+    let result = indexer.initial_index().unwrap();
+    assert_eq!(result.errors, 1);
+    assert_eq!(result.indexed, 0);
+    let kept = store.get_file_by_path("src/util.rs").unwrap().unwrap();
+    assert_eq!(kept.hash, before.hash, "the old hash stays");
+    assert_eq!(kept.id, before.id);
+    assert_eq!(store.find_symbol_by_name("helper").unwrap().len(), 1);
+    assert!(store.find_symbol_by_name("gamma").unwrap().is_empty());
+
+    other.execute_batch("DROP TRIGGER boom;").unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 1);
+    assert_eq!(store.find_symbol_by_name("gamma").unwrap().len(), 1);
+    assert!(store.find_symbol_by_name("helper").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+}
+
+/// #158: the parser pool indexes the same project as a single thread does,
+/// file for file.
+#[test]
+fn parser_pool_matches_single_threaded_indexing() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    for i in 0..40 {
+        write_file(
+            &root,
+            &format!("src/m{i}.rs"),
+            &format!(
+                "use crate::m{prev}::f{prev};\n\npub struct S{i};\n\nimpl S{i} {{\n    pub fn get(&self) -> i32 {{ f{i}() }}\n}}\n\npub fn f{i}() -> i32 {{ f{prev}() + {i} }}\n",
+                prev = (i + 39) % 40
+            ),
+        );
+    }
+    write_file(
+        &root,
+        "data/config.json",
+        "{\"name\": \"toy\", \"threads\": 4}\n",
+    );
+
+    let index_with = |threads: usize| {
+        let store = Arc::new(IndexStore::open_in_memory().unwrap());
+        let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone())
+            .unwrap()
+            .with_threads(threads);
+        assert_eq!(indexer.threads(), threads);
+        let result = indexer.initial_index().unwrap();
+        assert_eq!(result.indexed, 41);
+        assert_eq!(result.errors, 0);
+        let stats = store.get_stats().unwrap();
+        let mut refs: Vec<_> = store
+            .find_references_by_name("f3", 100)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.file_path, r.line, r.kind))
+            .collect();
+        refs.sort();
+        let callers = store.find_callers("f7", 100).unwrap().len();
+        (
+            stats.file_count,
+            stats.symbol_count,
+            stats.ref_count,
+            stats.call_edge_count,
+            stats.chunk_count,
+            stats.dependency_count,
+            refs,
+            callers,
+        )
+    };
+    let single = index_with(1);
+    let pooled = index_with(4);
+    assert_eq!(single, pooled);
+    assert_eq!(single.0, 41);
+    assert!(single.7 >= 2, "{} callers of f7", single.7);
+}

@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 pub use calibrations::{CalibrationData, CalibrationRecord};
 pub use chunks::{ChunkHit, EmbeddingCounts, PendingChunk};
 pub use dependencies::DependencyInsert;
+pub(crate) use files::now_secs;
+pub use files::{FileIndexWrite, FileStamp, FileStampRefresh, RACY_WINDOW_SECS};
 pub use graph::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
 pub use text::{ChunkTextHit, ExtensionFilter};
 
