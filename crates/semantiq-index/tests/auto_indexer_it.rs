@@ -875,6 +875,118 @@ fn ignore_file_edits_reapply_the_rules() {
     assert!(!store.find_symbol_by_name("distIndex").unwrap().is_empty());
 }
 
+/// A root ignore rule that ignores every file (`*`, a mistaken edit) is a
+/// legitimate edit that empties the index: the walk from this root was
+/// validated at startup, so the wrong-root safety net of `initial_index`
+/// must not refuse to prune (Codex review of #138). Lifting the rule brings
+/// everything back.
+#[test]
+fn root_ignore_rule_may_ignore_every_file() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    assert_eq!(indexer.initial_index().unwrap().indexed, 2);
+
+    write_file(&root, ".gitignore", "*\n");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join(".gitignore"))]);
+    assert_eq!(result.errors, 0, "{result:?}");
+    assert_eq!(result.removed, 2);
+    assert_eq!(result.indexed, 0);
+    assert!(indexed_paths(&store).is_empty());
+    assert!(store.find_symbol_by_name("alpha").unwrap().is_empty());
+    assert_eq!(store.count_orphan_chunk_vectors().unwrap(), 0);
+
+    write_file(&root, ".gitignore", "");
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join(".gitignore"))]);
+    assert_eq!(result.indexed, 2, "{result:?}");
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    assert_eq!(indexed_paths(&store), ["src/lib.rs", "src/util.rs"]);
+}
+
+/// Removing an ignore file lifts its rules (Codex review of #138): the
+/// files it hid are indexed, under its own directory for a nested one and
+/// the whole project for the root one. A rename reported on the old path
+/// counts as a removal too.
+#[test]
+fn ignore_file_removal_lifts_the_rules() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    build_toy_project(&root);
+    write_file(
+        &root,
+        "generated/schema.ts",
+        "export function generatedSchema(): number { return 1; }\n",
+    );
+    write_file(
+        &root,
+        "packages/gen/index.ts",
+        "export function distIndex(): number { return 2; }\n",
+    );
+    write_file(
+        &root,
+        "packages/src/index.ts",
+        "export function srcIndex(): number { return 3; }\n",
+    );
+    write_file(&root, ".gitignore", "generated/\n");
+    write_file(&root, "packages/.gitignore", "gen/\n");
+
+    let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    let indexer = AutoIndexer::without_watcher(Arc::clone(&store), root.clone()).unwrap();
+    indexer.initial_index().unwrap();
+    assert_eq!(
+        indexed_paths(&store),
+        ["packages/src/index.ts", "src/lib.rs", "src/util.rs"]
+    );
+
+    // The nested one is deleted: its directory is walked again, not the
+    // rest of the project (`generated/` stays ignored).
+    fs::remove_file(root.join("packages/.gitignore")).unwrap();
+    let result =
+        indexer.process_file_events(vec![FileEvent::Deleted(root.join("packages/.gitignore"))]);
+    assert_eq!(result.indexed, 1, "{result:?}");
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    assert_eq!(
+        indexed_paths(&store),
+        [
+            "packages/gen/index.ts",
+            "packages/src/index.ts",
+            "src/lib.rs",
+            "src/util.rs",
+        ]
+    );
+
+    // The root one is renamed away, reported on the old path.
+    fs::rename(root.join(".gitignore"), root.join(".gitignore.bak")).unwrap();
+    let result = indexer.process_file_events(vec![FileEvent::Modified(root.join(".gitignore"))]);
+    assert_eq!(result.indexed, 1, "{result:?}");
+    assert_eq!(result.removed, 0);
+    assert_eq!(result.errors, 0);
+    assert!(
+        !store
+            .find_symbol_by_name("generatedSchema")
+            .unwrap()
+            .is_empty()
+    );
+
+    // An ignore file vanishing with its directory is a plain removal.
+    fs::remove_dir_all(root.join("packages")).unwrap();
+    let result = indexer.process_file_events(vec![
+        FileEvent::Deleted(root.join("packages/.gitignore")),
+        FileEvent::Deleted(root.join("packages")),
+    ]);
+    assert_eq!(result.removed, 2, "{result:?}");
+    assert_eq!(result.errors, 0);
+    assert_eq!(
+        indexed_paths(&store),
+        ["generated/schema.ts", "src/lib.rs", "src/util.rs"]
+    );
+}
+
 /// A parse failure on a modified file (#90) must not leave the symbols,
 /// references, chunks and imports of the previous version in the index:
 /// they are cleared, the error is reported, and the file is not parsed

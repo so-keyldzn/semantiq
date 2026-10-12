@@ -23,9 +23,10 @@ All notable changes to Semantiq will be documented in this file.
 - A directory rename, move or removal is applied by `serve`'s watcher: the
   rows under the old name are removed and the files under the new one
   indexed, instead of ghost rows until a restart (#85).
-- Editing `.gitignore`, `.ignore` or `.git/info/exclude` while `serve` runs
-  re-applies the rules: files that became ignored lose their rows, files
-  that became un-ignored are indexed (#138).
+- Editing or removing `.gitignore`, `.ignore` or `.git/info/exclude` while
+  `serve` runs re-applies the rules: files that became ignored lose their
+  rows, files that became un-ignored are indexed, and a root rule that
+  ignores every file empties the index instead of being refused (#138).
 - A file whose parse fails no longer keeps the symbols, references, chunks
   and imports of its previous version: they are cleared, the failure is
   counted as an error, and the file is parsed again when it changes (#90).

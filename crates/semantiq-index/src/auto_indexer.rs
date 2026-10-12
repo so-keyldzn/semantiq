@@ -112,10 +112,7 @@ impl AutoIndexer {
     /// warning when `stale` rows of the previous root are about to be
     /// pruned (none after `--force` or a parser-version clear).
     fn record_project_root(&self, stale: usize) -> Result<()> {
-        let canonical = self
-            .project_root
-            .canonicalize()
-            .unwrap_or_else(|_| self.project_root.clone());
+        let canonical = self.canonical_root();
         if stale > 0
             && let Some(previous) = self.store.get_project_root()?
             && previous != canonical
@@ -128,6 +125,19 @@ impl AutoIndexer {
             );
         }
         self.store.set_project_root(&canonical)
+    }
+
+    fn canonical_root(&self) -> PathBuf {
+        self.project_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.project_root.clone())
+    }
+
+    /// Whether a walk from this root already proved consistent with the
+    /// index (`record_project_root`): the index is this project's, not one
+    /// opened from another directory.
+    fn root_is_recorded(&self) -> bool {
+        matches!(self.store.get_project_root(), Ok(Some(recorded)) if recorded == self.canonical_root())
     }
 
     /// Perform initial indexing of all files in the project
@@ -342,9 +352,10 @@ impl AutoIndexer {
     /// not on its files (FSEvents and inotify alike), and a directory just
     /// created may already hold files: a vanished path loses every row under
     /// it, an existing directory has its subtree walked and pruned
-    /// (`index_subtree`). An edited ignore file (`.gitignore`, `.ignore`,
-    /// `.git/info/exclude`) is a change to what the walk reaches below it:
-    /// its directory is walked again, the whole project for the root one.
+    /// (`index_subtree`). An edited or removed ignore file (`.gitignore`,
+    /// `.ignore`, `.git/info/exclude`) is a change to what the walk reaches
+    /// below it: its directory is walked again, the whole project for the
+    /// root one.
     pub fn process_file_events(&self, events: Vec<FileEvent>) -> ProcessResult {
         let mut result = ProcessResult::default();
         let remove = |path: &Path, result: &mut ProcessResult| match self.remove_file(path) {
@@ -366,6 +377,7 @@ impl AutoIndexer {
                     // longer exists is a removal, not a modification.
                     if !path.exists() {
                         remove(&path, &mut result);
+                        subtrees.extend(self.subtree_lifted_by(&path));
                         continue;
                     }
                     if path.is_dir() {
@@ -378,7 +390,10 @@ impl AutoIndexer {
                     }
                     changed.push(path);
                 }
-                FileEvent::Deleted(path) => remove(&path, &mut result),
+                FileEvent::Deleted(path) => {
+                    remove(&path, &mut result);
+                    subtrees.extend(self.subtree_lifted_by(&path));
+                }
             }
         }
 
@@ -395,17 +410,27 @@ impl AutoIndexer {
             .iter()
             .any(|dir| to_relative_string(dir, &self.project_root).is_empty())
         {
-            // The project root itself: the full walk, which covers every
-            // other event as well.
-            match self.initial_index() {
-                Ok(walk) => {
-                    result.indexed += walk.indexed;
-                    result.removed += walk.removed;
-                    result.errors += walk.errors;
-                }
-                Err(e) => {
-                    error!("Failed to walk the project again: {}", e);
-                    result.errors += 1;
+            // The project root itself: one walk of the whole project, which
+            // covers every other event as well. Through `index_subtree`, not
+            // `initial_index`: a root rule that ignores every file (`*`) is
+            // a legitimate edit that empties the index, which the wrong-root
+            // safety net of `initial_index` would refuse to prune. That net
+            // is kept while no walk from this root has proved consistent
+            // with the index (the startup walk failed): the index may be
+            // another project's.
+            if self.root_is_recorded() {
+                self.index_subtree(&self.project_root, &mut result);
+            } else {
+                match self.initial_index() {
+                    Ok(walk) => {
+                        result.indexed += walk.indexed;
+                        result.removed += walk.removed;
+                        result.errors += walk.errors;
+                    }
+                    Err(e) => {
+                        error!("Failed to walk the project again: {}", e);
+                        result.errors += 1;
+                    }
                 }
             }
             changed.clear();
@@ -477,8 +502,17 @@ impl AutoIndexer {
         None
     }
 
-    /// Walk the subtree under `dir` (a directory of the project) with the
-    /// project walk, index the files it reaches that are new or changed, and
+    /// The directory to walk again once the ignore file `path` vanished:
+    /// the rules it held are lifted, the files they hid are reachable. None
+    /// when its directory vanished too (handled as a removal) or for any
+    /// other file.
+    fn subtree_lifted_by(&self, path: &Path) -> Option<PathBuf> {
+        self.subtree_of_ignore_file(path).filter(|dir| dir.is_dir())
+    }
+
+    /// Walk the subtree under `dir` (a directory of the project, or the
+    /// project root itself: `rel_dir` empty, every row a candidate) with
+    /// the project walk, index the files it reaches that are new or changed, and
     /// prune the rows under `dir` of files it did not reach: gone, or ignored
     /// since. Not when the walk failed somewhere, since a file not reached
     /// may simply have been missed. The ignore files above `dir` are read
@@ -523,7 +557,11 @@ impl AutoIndexer {
                 }
                 Err(e) if e.is_partial() => warn!("Ignore rules partially applied: {}", e),
                 Err(e) => {
-                    warn!("Walk error under {}, its rows are kept: {}", rel_dir, e);
+                    warn!(
+                        "Walk error under {}, its rows are kept: {}",
+                        if rel_dir.is_empty() { "." } else { &rel_dir },
+                        e
+                    );
                     complete = false;
                 }
             }
