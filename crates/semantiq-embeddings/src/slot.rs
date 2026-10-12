@@ -308,11 +308,18 @@ mod tests {
     }
 
     /// #76: a failed load is retried after the backoff, without a restart,
-    /// and the reason exposed meanwhile carries no URL (#100).
+    /// and the reason exposed meanwhile carries no URL (#100). The waits read
+    /// the slot's own `retry_in` instead of assuming how long a `sleep` takes,
+    /// and the delays leave a slow runner (macOS CI) room between two
+    /// consecutive calls: a 60 ms sleep against an 80 ms backoff overshot.
     #[test]
     fn retries_after_backoff_and_recovers() {
         let (loader, calls) = flaky(2);
-        let slot = ModelSlot::new(loader, quick());
+        let policy = RetryPolicy {
+            initial_delay: Duration::from_millis(200),
+            max_delay: Duration::from_secs(1),
+        };
+        let slot = ModelSlot::new(loader, policy);
 
         let err = slot.get_or_load().err().expect("unavailable");
         let ModelUnavailable::Failed { reason } = &err else {
@@ -320,20 +327,38 @@ mod tests {
         };
         assert!(reason.contains("download failed"), "{reason}");
         assert!(!reason.contains("example.invalid"), "{reason}");
-        assert!(matches!(slot.status(), ModelStatus::Failed { .. }));
+        let ModelStatus::Failed {
+            retry_in: first_wait,
+            ..
+        } = slot.status()
+        else {
+            panic!("{:?}", slot.status());
+        };
+        assert!(first_wait <= Duration::from_millis(200), "{first_wait:?}");
 
         // Within the backoff: no new attempt, same reason.
         assert_eq!(slot.get_or_load().err().expect("unavailable"), err);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        std::thread::sleep(Duration::from_millis(60));
+        std::thread::sleep(first_wait);
         assert!(slot.get_or_load().is_err(), "second failure");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        // The delay doubled (80 ms): still not due after 60 ms.
-        std::thread::sleep(Duration::from_millis(60));
+        // The delay doubled (400 ms): the next attempt is further away than
+        // the first one was, and not due yet.
+        let ModelStatus::Failed {
+            retry_in: second_wait,
+            ..
+        } = slot.status()
+        else {
+            panic!("{:?}", slot.status());
+        };
+        assert!(
+            second_wait > first_wait,
+            "{second_wait:?} <= {first_wait:?}"
+        );
         assert!(slot.get_or_load().is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        std::thread::sleep(Duration::from_millis(40));
+        std::thread::sleep(second_wait);
 
         assert!(slot.get_or_load().is_ok(), "recovered");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
