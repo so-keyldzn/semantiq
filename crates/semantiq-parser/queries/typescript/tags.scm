@@ -19,9 +19,16 @@
 (type_alias_declaration
     name: (type_identifier) @name) @definition.type
 
-; Method definitions (inside class body)
+; Method definitions (inside class body), including `#private() {}`
 (method_definition
-    name: (property_identifier) @name) @definition.method
+    name: [(property_identifier) (private_property_identifier)] @name) @definition.method
+
+; Class fields holding a function (`private onClick = (e: Event): void => {…}`,
+; `static handler = function () {}`) : methods, so their calls are attributed
+; to them and not to the class.
+(public_field_definition
+    name: [(property_identifier) (private_property_identifier)] @name
+    value: [(arrow_function) (function_expression)]) @definition.method
 
 ; Method / property signatures inside an interface body — needed to index
 ; declarations in `.d.ts` and method shapes in `interface I { foo(): void }`.

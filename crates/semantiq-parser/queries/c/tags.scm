@@ -29,5 +29,19 @@
 (type_definition
     declarator: (type_identifier) @name) @definition.type
 
+; Function-pointer typedef : `typedef int (*callback_t)(int);`
+(type_definition
+    declarator: (function_declarator
+        declarator: (parenthesized_declarator
+            (pointer_declarator
+                declarator: (type_identifier) @name)))) @definition.type
+
+; Preprocessor : object-like macros are constants, function-like macros functions
+(preproc_def
+    name: (identifier) @name) @definition.constant
+
+(preproc_function_def
+    name: (identifier) @name) @definition.function
+
 ; Includes
 (preproc_include) @definition.import

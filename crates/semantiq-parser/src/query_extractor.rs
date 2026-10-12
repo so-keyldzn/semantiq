@@ -170,12 +170,8 @@ impl QuerySymbolExtractor {
     /// 3. Post-traitement : résolution des parents, signatures, doc comments
     pub fn extract(&self, tree: &Tree, source: &str, language: Language) -> Result<Vec<Symbol>> {
         // La query doit venir de la grammaire qui a produit l'arbre (TSX ou
-        // TypeScript pour un fichier TypeScript).
-        let grammar = if Grammar::Tsx.parsed(tree) {
-            Grammar::Tsx
-        } else {
-            Grammar::Language(language)
-        };
+        // TypeScript pour un fichier TypeScript, C++ pour un en-tête `.h`).
+        let grammar = language.grammar_of(tree);
         let query = self
             .queries
             .get(&grammar)
@@ -206,7 +202,9 @@ impl QuerySymbolExtractor {
         let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
         while let Some(m) = matches.next() {
             let mut name: Option<String> = None;
+            let mut name_node: Option<Node> = None;
             let mut name_range: Option<(usize, usize)> = None;
+            let mut qualifier: Option<String> = None;
             let mut kind: Option<SymbolKind> = None;
             let mut definition_node: Option<Node> = None;
 
@@ -215,7 +213,12 @@ impl QuerySymbolExtractor {
 
                 match capture_name {
                     "name" => {
-                        name = Some(capture.node.utf8_text(source_bytes)?.to_string());
+                        // C++ `int ns::C::add(int)` : le nom indexé est la
+                        // feuille `add`, le chemin `ns::C` rejoint le parent.
+                        let (leaf, scope) = Self::split_qualified_name(capture.node, source_bytes);
+                        name = Some(leaf.utf8_text(source_bytes)?.to_string());
+                        qualifier = scope;
+                        name_node = Some(capture.node);
                         name_range = Some((capture.node.start_byte(), capture.node.end_byte()));
                     }
                     name if name.starts_with("definition.") => {
@@ -249,7 +252,19 @@ impl QuerySymbolExtractor {
                         // Match existant prioritaire (pattern_index plus petit ou égal) — on l'ignore.
                     }
                     _ => {
-                        by_range.insert(key, (pattern_idx, RawSymbol { name, kind, node }));
+                        by_range.insert(
+                            key,
+                            (
+                                pattern_idx,
+                                RawSymbol {
+                                    name,
+                                    kind,
+                                    node,
+                                    name_node,
+                                    qualifier,
+                                },
+                            ),
+                        );
                     }
                 }
             }
@@ -261,9 +276,9 @@ impl QuerySymbolExtractor {
         // Construction des Symbol avec post-traitement
         let mut symbols = Vec::new();
         for raw in raw_symbols {
-            let parent = Self::resolve_parent(&raw.node, source, language);
-            let signature = Self::extract_signature(&raw.node, source);
-            let doc_comment = Self::extract_doc_comment(&raw.node, source);
+            let parent = Self::resolve_parent(&raw, source, language);
+            let signature = Self::extract_signature(&raw.node, raw.name_node.as_ref(), source);
+            let doc_comment = Self::extract_doc_comment(&raw.node, source, language);
             let kind = Self::post_process_kind(raw.kind, &raw.node, language);
 
             symbols.push(Symbol {
@@ -340,10 +355,23 @@ impl QuerySymbolExtractor {
     /// Remonte l'arbre depuis le nœud et collecte les noms des conteneurs.
     /// Le séparateur dépend de la convention idiomatique du langage :
     /// `.` pour Elixir (`MyApp.User`), `::` pour la plupart des autres.
-    fn resolve_parent(node: &Node, source: &str, language: Language) -> Option<String> {
+    ///
+    /// Le symbole peut aussi nommer lui-même son conteneur : la portée d'un nom
+    /// qualifié C++ (`int ns::C::add()` → `ns::C`) ou le type receveur d'une
+    /// méthode Go (`func (c *Circle) Area()` → `Circle`), ajoutés après les
+    /// conteneurs englobants.
+    fn resolve_parent(raw: &RawSymbol, source: &str, language: Language) -> Option<String> {
         let source_bytes = source.as_bytes();
-        let mut current = node.parent();
+        let mut current = raw.node.parent();
         let mut path_segments = Vec::new();
+
+        if let Some(own) = raw
+            .qualifier
+            .clone()
+            .or_else(|| Self::self_qualifier(&raw.node, source_bytes, language))
+        {
+            path_segments.push(own);
+        }
 
         while let Some(parent) = current {
             if let Some(parent_name) = Self::container_name(&parent, source_bytes, language) {
@@ -358,6 +386,56 @@ impl QuerySymbolExtractor {
             path_segments.reverse();
             Some(path_segments.join(Self::parent_separator(language)))
         }
+    }
+
+    /// Conteneur que le nœud de définition désigne lui-même : le type receveur
+    /// d'une `method_declaration` Go, sans `*` ni paramètres de type
+    /// (`func (l *List[T]) Len()` → `List`).
+    fn self_qualifier(node: &Node, source_bytes: &[u8], language: Language) -> Option<String> {
+        if language != Language::Go || node.kind() != "method_declaration" {
+            return None;
+        }
+        let receiver = node.child_by_field_name("receiver")?;
+        let mut cursor = receiver.walk();
+        let param = receiver
+            .children(&mut cursor)
+            .find(|c| c.kind() == "parameter_declaration")?;
+        let mut ty = param.child_by_field_name("type")?;
+        loop {
+            match ty.kind() {
+                "type_identifier" => {
+                    return ty.utf8_text(source_bytes).ok().map(str::to_string);
+                }
+                "pointer_type" | "generic_type" => {
+                    ty = ty.named_child(0)?;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Feuille et portée d'un `@name` C++ qualifié : `ns::C::add` →
+    /// (`add`, `Some("ns::C")`), `C::~C` → (`~C`, `Some("C")`). Tout autre
+    /// nœud est sa propre feuille, sans portée.
+    fn split_qualified_name<'a>(name: Node<'a>, source_bytes: &[u8]) -> (Node<'a>, Option<String>) {
+        if name.kind() != "qualified_identifier" {
+            return (name, None);
+        }
+        let mut scopes: Vec<String> = Vec::new();
+        let mut current = name;
+        while current.kind() == "qualified_identifier" {
+            if let Some(scope) = current.child_by_field_name("scope")
+                && let Ok(text) = scope.utf8_text(source_bytes)
+            {
+                scopes.push(text.to_string());
+            }
+            match current.child_by_field_name("name") {
+                Some(inner) => current = inner,
+                None => break,
+            }
+        }
+        let qualifier = (!scopes.is_empty()).then(|| scopes.join("::"));
+        (current, qualifier)
     }
 
     fn parent_separator(language: Language) -> &'static str {
@@ -547,6 +625,24 @@ impl QuerySymbolExtractor {
             )
         }
 
+        // Go `import_spec` : l'alias (`s "strings"` → `s`), sinon le dernier
+        // segment du chemin (`"myapp/internal/store"` → `store`).
+        if node.kind() == "import_spec" {
+            if let Some(alias) = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+            {
+                return Some(alias.to_string());
+            }
+            return node
+                .child_by_field_name("path")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+                .map(|path| {
+                    let path = path.trim_matches(|c| c == '"' || c == '`');
+                    path.rsplit('/').next().unwrap_or(path).to_string()
+                });
+        }
+
         fn find_last(node: Node, source_bytes: &[u8], best: &mut Option<String>) {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -569,20 +665,44 @@ impl QuerySymbolExtractor {
         })
     }
 
-    /// Extrait la signature (première ligne du nœud).
+    /// Extrait la signature : la ligne de la déclaration qui porte le nom et
+    /// ses modificateurs.
+    ///
+    /// C'est la première ligne du nœud, sauf quand des annotations / attributs
+    /// / décorateurs font partie du nœud et le précèdent sur leurs propres
+    /// lignes (Java `@Override\npublic double area()`, C# `[HttpGet]`, Kotlin
+    /// et Scala `@…`, PHP `#[Route]`, TS `@Component()\nclass`) : ils sont
+    /// sautés ([`ANNOTATION_KINDS`]) et la signature va de la première ligne
+    /// qui suit jusqu'à celle du nom (`int\nmain(void)` → `int main(void) {`),
+    /// pour que `dead-code` lise `public` / `private` et non `@Override`.
+    /// `start_line` reste sur l'annotation : elle fait partie du symbole.
     ///
     /// TS/JS : une déclaration exportée est l'enfant `declaration` d'un
     /// `export_statement`, le mot-clé `export` (ou `export default`) est donc
     /// hors du nœud ; on le remet en tête, comme `pub` fait partie d'un
     /// `function_item` Rust, pour que la visibilité se lise dans la signature
     /// (`dead-code` exclut les symboles publics).
-    fn extract_signature(node: &Node, source: &str) -> Option<String> {
-        let source_bytes = source.as_bytes();
-        let text = node.utf8_text(source_bytes).ok()?;
-        let first_line = text.lines().next()?;
+    fn extract_signature(node: &Node, name_node: Option<&Node>, source: &str) -> Option<String> {
+        let (start_byte, start_row) = Self::signature_start(node);
+        let name_row = name_node
+            .map(|n| n.start_position().row)
+            .unwrap_or(start_row)
+            .max(start_row);
+        let text = source.get(start_byte..node.end_byte())?;
+        let first_line = if name_row == start_row {
+            text.lines().next()?.to_string()
+        } else {
+            // Des lignes de modificateurs précèdent celle du nom : on les joint.
+            text.lines()
+                .take(name_row - start_row + 1)
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         let first_line = match Self::export_prefix(node, source) {
             Some(prefix) => format!("{prefix} {}", first_line.trim_start()),
-            None => first_line.to_string(),
+            None => first_line,
         };
         let sig = if first_line.chars().count() > 200 {
             let truncated: String = first_line.chars().take(200).collect();
@@ -591,6 +711,31 @@ impl QuerySymbolExtractor {
             first_line
         };
         Some(sig.trim().to_string())
+    }
+
+    /// `(byte, row)` du début de la signature : le premier enfant du nœud (en
+    /// descendant dans un groupe `modifiers`) qui n'est pas une annotation /
+    /// un attribut, ou le nœud lui-même quand il n'a pas d'autre enfant.
+    fn signature_start(node: &Node) -> (usize, usize) {
+        let position = |n: Node| (n.start_byte(), n.start_position().row);
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if ANNOTATION_KINDS.contains(&child.kind()) {
+                continue;
+            }
+            if child.kind() == "modifiers" {
+                let mut inner = child.walk();
+                if let Some(first) = child
+                    .children(&mut inner)
+                    .find(|c| !ANNOTATION_KINDS.contains(&c.kind()))
+                {
+                    return position(first);
+                }
+                continue;
+            }
+            return position(child);
+        }
+        position(*node)
     }
 
     /// `export` / `export default` quand `node` est la déclaration d'un
@@ -615,10 +760,142 @@ impl QuerySymbolExtractor {
         (!prefix.is_empty()).then_some(prefix)
     }
 
-    /// Extrait les doc comments précédant le nœud (voir [`doc_comment_of`]).
-    fn extract_doc_comment(node: &Node, source: &str) -> Option<String> {
-        doc_comment_of(node, source)
+    /// Extrait la documentation du symbole : la docstring Python (première
+    /// instruction du corps), l'attribut Elixir `@doc` / `@moduledoc`, sinon
+    /// les commentaires précédant le nœud (voir [`doc_comment_of`]).
+    fn extract_doc_comment(node: &Node, source: &str, language: Language) -> Option<String> {
+        let inline = match language {
+            Language::Python => python_docstring(node, source),
+            Language::Elixir => elixir_doc_attribute(node, source),
+            _ => None,
+        };
+        inline.or_else(|| doc_comment_of(node, source))
     }
+}
+
+/// Docstring Python : la première instruction du corps d'un `def` / `class`
+/// quand c'est une chaîne (PEP 257), sans ses guillemets et dédentée.
+fn python_docstring(node: &Node, source: &str) -> Option<String> {
+    if !matches!(node.kind(), "function_definition" | "class_definition") {
+        return None;
+    }
+    let body = node.child_by_field_name("body")?;
+    let first = body.named_child(0)?;
+    if first.kind() != "expression_statement" {
+        return None;
+    }
+    let string = first.named_child(0)?;
+    if string.kind() != "string" || first.named_child_count() != 1 {
+        return None;
+    }
+    let mut cursor = string.walk();
+    let content = string
+        .children(&mut cursor)
+        .find(|c| c.kind() == "string_content")?
+        .utf8_text(source.as_bytes())
+        .ok()?;
+    let doc = dedent_docstring(content);
+    (!doc.is_empty()).then_some(doc)
+}
+
+/// Dédentation PEP 257 : la première ligne est prise telle quelle, les
+/// suivantes perdent leur indentation commune ; lignes vides de tête et de
+/// queue retirées.
+fn dedent_docstring(content: &str) -> String {
+    let mut lines = content.lines();
+    let first = lines.next().unwrap_or("").trim().to_string();
+    let rest: Vec<&str> = lines.collect();
+    let indent = rest
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    if !first.is_empty() {
+        out.push(first);
+    }
+    for line in rest {
+        let line = line.get(indent..).unwrap_or_else(|| line.trim_start());
+        out.push(line.trim_end().to_string());
+    }
+    while out.first().is_some_and(|l| l.is_empty()) {
+        out.remove(0);
+    }
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+/// Elixir : `@doc "…"` (frère précédent d'un `def`, les autres attributs de
+/// module comme `@spec` / `@impl` étant traversés) ou `@moduledoc "…"`
+/// (première expression du `do` block d'un `defmodule`). `@doc false` et les
+/// attributs sans chaîne ne documentent rien.
+fn elixir_doc_attribute(node: &Node, source: &str) -> Option<String> {
+    if node.kind() != "call" {
+        return None;
+    }
+    let target = node
+        .child_by_field_name("target")
+        .and_then(|t| t.utf8_text(source.as_bytes()).ok())?;
+    if matches!(target, "defmodule" | "defprotocol") {
+        let mut cursor = node.walk();
+        let block = node
+            .children(&mut cursor)
+            .find(|c| c.kind() == "do_block")?;
+        let mut walker = block.walk();
+        return block
+            .children(&mut walker)
+            .filter(|c| c.is_named())
+            .take(3)
+            .find_map(|c| module_attribute_string(c, "moduledoc", source));
+    }
+    let mut prev = node.prev_sibling();
+    while let Some(sibling) = prev {
+        if sibling.kind() != "unary_operator" {
+            return None;
+        }
+        if let Some(doc) = module_attribute_string(sibling, "doc", source) {
+            return Some(doc);
+        }
+        prev = sibling.prev_sibling();
+    }
+    None
+}
+
+/// Contenu de la chaîne d'un attribut de module Elixir `@name "…"`
+/// (`unary_operator` dont l'opérande est l'appel `name(string)`).
+fn module_attribute_string(node: Node, name: &str, source: &str) -> Option<String> {
+    if node.kind() != "unary_operator" {
+        return None;
+    }
+    let call = node.child_by_field_name("operand")?;
+    if call.kind() != "call"
+        || call
+            .child_by_field_name("target")
+            .and_then(|t| t.utf8_text(source.as_bytes()).ok())
+            != Some(name)
+    {
+        return None;
+    }
+    let mut cursor = call.walk();
+    let arguments = call
+        .children(&mut cursor)
+        .find(|c| c.kind() == "arguments")?;
+    let string = arguments.named_child(0)?;
+    if string.kind() != "string" {
+        return None;
+    }
+    let mut walker = string.walk();
+    let content = string
+        .children(&mut walker)
+        .filter(|c| c.kind() == "quoted_content")
+        .filter_map(|c| c.utf8_text(source.as_bytes()).ok())
+        .collect::<Vec<_>>()
+        .join("");
+    let doc = dedent_docstring(&content);
+    (!doc.is_empty()).then_some(doc)
 }
 
 /// Nœuds qui enveloppent une déclaration sans être la déclaration : le
@@ -634,6 +911,22 @@ const DECLARATION_WRAPPERS: [&str; 3] = [
 /// Frères situés entre un symbole et son doc comment : attributs Rust
 /// (`/// doc\n#[derive(Debug)]\nstruct S`).
 const DOC_TRANSPARENT_SIBLINGS: [&str; 1] = ["attribute_item"];
+
+/// Annotations / attributs / décorateurs qui font partie du nœud de
+/// déclaration et le précèdent : Java `annotation` / `marker_annotation`
+/// (dans `modifiers`), Kotlin `annotation` (dans `modifiers`), Scala
+/// `annotation`, C# et PHP `attribute_list`, TS/JS `decorator`, C/C++
+/// `attribute_declaration` (`[[nodiscard]]`) et `attribute_specifier`
+/// (`__attribute__((…))`). Sautés par la signature.
+const ANNOTATION_KINDS: [&str; 7] = [
+    "annotation",
+    "marker_annotation",
+    "attribute_list",
+    "decorator",
+    "attribute_declaration",
+    "attribute_specifier",
+    "ms_declspec_modifier",
+];
 
 /// Extrait les doc comments précédant le nœud.
 ///
@@ -719,6 +1012,10 @@ struct RawSymbol<'a> {
     name: String,
     kind: SymbolKind,
     node: Node<'a>,
+    /// Nœud `@name` de la query (absent pour un import nommé d'après son texte).
+    name_node: Option<Node<'a>>,
+    /// Portée d'un nom qualifié (C++ `ns::C::add` → `ns::C`), ajoutée au parent.
+    qualifier: Option<String>,
 }
 
 #[cfg(test)]
@@ -1866,9 +2163,10 @@ end
 
     #[test]
     fn test_query_html() {
-        // Sémantique top-level only : seuls les enfants directs de `document`
-        // sont capturés. Pour ce snippet, `<html>` est top-level mais les
-        // <script>/<style> imbriqués dans <head> ne le sont pas.
+        // Enfants directs de `document` (`<html>`), `<script>` / `<style>` et
+        // éléments porteurs d'un `id` (nommés par l'id) à toute profondeur ;
+        // les autres éléments imbriqués (`<div>Hello</div>`) ne sont pas
+        // capturés (#154).
         let source = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -1877,20 +2175,28 @@ end
 </head>
 <body>
     <div>Hello</div>
+    <section id="about"><p>text</p></section>
 </body>
 </html>"#;
         let symbols = extract_via_query(Language::Html, source);
 
-        // Seulement <html> est enfant direct de document → 1 symbole.
+        let names: Vec<(&str, SymbolKind)> =
+            symbols.iter().map(|s| (s.name.as_str(), s.kind)).collect();
         assert_eq!(
-            symbols.len(),
-            1,
-            "expected only top-level <html>, got: {:?}",
-            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+            names,
+            vec![
+                ("html", SymbolKind::Variable),
+                ("script", SymbolKind::Module),
+                ("style", SymbolKind::Module),
+                ("about", SymbolKind::Variable),
+            ]
         );
-        let html = &symbols[0];
-        assert_eq!(html.name, "html");
-        assert_eq!(html.kind, SymbolKind::Variable);
+        let about = symbols.iter().find(|s| s.name == "about").unwrap();
+        assert_eq!(about.start_line, 9);
+        assert_eq!(
+            about.signature.as_deref(),
+            Some(r#"<section id="about"><p>text</p></section>"#)
+        );
     }
 
     #[test]
@@ -2391,10 +2697,13 @@ edition = "2024"
         let src = include_str!("../tests/fixtures/html/sample.html");
         let r = parity_check(Language::Html, src);
         r.print("html");
-        // HTML : query top-level only → quelques symboles seulement (pas tous les divs).
+        // HTML : `<html>`, `<script>` / `<style>` et les éléments avec un `id`
+        // seulement, jamais les divs anonymes.
         assert!(
-            r.query.len() <= 3,
-            "HTML must capture only top-level (≤ 3 symbols), got {}: {:?}",
+            r.query
+                .iter()
+                .all(|s| !matches!(s.name.as_str(), "div" | "p" | "span" | "head" | "body")),
+            "HTML must not capture anonymous elements, got {}: {:?}",
             r.query.len(),
             r.query.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
