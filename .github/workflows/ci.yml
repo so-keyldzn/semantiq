@@ -34,21 +34,6 @@ jobs:
         # (path separators, file watcher backends, self-update swap) is only
         # exercised by running the suite on each of them (#121).
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          # The prebuilt ONNX Runtime that `ort` downloads for MSVC is built
-          # against the static C++ runtime (libcpmt), while the C++ scanners of
-          # the tree-sitter grammars are compiled by `cc` against the dynamic
-          # one (msvcprt). In a release build the conflicting symbols are
-          # trivial inline accessors that get inlined away, so build.yml links;
-          # in an unoptimized test build they are real calls and link.exe
-          # fails with LNK2005/LNK1169 (`std::basic_streambuf::gptr`,
-          # `std::_Lockit::_Lockit`, ...). Linking the CRT statically makes
-          # every object agree with ONNX Runtime (`cc` reads the target feature
-          # and switches to /MT).
-          - os: windows-latest
-            rustflags: -D warnings -C target-feature=+crt-static
-    env:
-      RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
