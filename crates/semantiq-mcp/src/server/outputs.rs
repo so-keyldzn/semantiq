@@ -33,6 +33,20 @@ pub(super) fn validate_input(value: &str, label: &str) -> Result<String, String>
     Ok(value.to_string())
 }
 
+/// Error for a `file_path` that defines no symbol of that name, naming the
+/// files that do (the values the argument accepts).
+pub(super) fn no_definition_in_file(engine: &RetrievalEngine, symbol: &str, path: &str) -> String {
+    let files = engine.definition_files(symbol).unwrap_or_default();
+    if files.is_empty() {
+        format!("No definition of '{symbol}' in {path}: the index defines no symbol of that name")
+    } else {
+        format!(
+            "No definition of '{symbol}' in {path}. Defined in: {}",
+            files.join(", ")
+        )
+    }
+}
+
 /// Validate a project-relative file path, rejecting traversal attempts.
 fn validate_file_path(value: &str) -> Result<String, String> {
     let path = validate_input(value, "File path")?;
@@ -316,6 +330,11 @@ pub fn impact_output(
             error!("Impact analysis failed: {}", e);
             "Impact analysis failed: an internal error occurred".to_string()
         })?;
+    if let Some(path) = &file_path
+        && analysis.definitions.is_empty()
+    {
+        return Err(no_definition_in_file(engine, &symbol, path));
+    }
 
     // Group sites by file, closest impact first.
     let mut files: Vec<ImpactedFile> = Vec::new();

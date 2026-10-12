@@ -20,6 +20,20 @@ pub(super) struct DefLocation {
     pub parent: Option<String>,
 }
 
+impl RetrievalEngine {
+    /// Files defining `name` (imports left out), sorted, each listed once:
+    /// what `file_path` may be set to in `analyze_impact` / `call_graph`.
+    pub fn definition_files(&self, name: &str) -> Result<Vec<String>> {
+        let mut files: Vec<String> = Resolver::new(self)
+            .definitions(name)?
+            .iter()
+            .map(|d| d.file_path.clone())
+            .collect();
+        files.dedup();
+        Ok(files)
+    }
+}
+
 /// Per-call caches so each name / file is looked up once.
 pub(super) struct Resolver<'a> {
     engine: &'a RetrievalEngine,

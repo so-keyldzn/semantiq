@@ -1,7 +1,7 @@
 //! Output builders of the structural tools (call graph, type hierarchy, dead
 //! code), shared by the MCP server and the CLI like those in `outputs.rs`.
 
-use super::outputs::validate_input;
+use super::outputs::{no_definition_in_file, validate_input};
 use super::{
     CallEdgeOut, CallsOutput, CallsParams, DeadCodeExcludedOut, DeadCodeOutput, DeadCodeParams,
     DeadSymbolOut, HierarchyOutput, HierarchyParams, ImpactDefinitionOut, TypeRelationOut,
@@ -84,6 +84,11 @@ pub fn calls_output(engine: &RetrievalEngine, params: CallsParams) -> Result<Cal
             error!("Call graph failed: {}", e);
             "Call graph failed: an internal error occurred".to_string()
         })?;
+    if let Some(path) = &file_path
+        && graph.definitions.is_empty()
+    {
+        return Err(no_definition_in_file(engine, &symbol, path));
+    }
 
     Ok(CallsOutput {
         symbol: graph.symbol,

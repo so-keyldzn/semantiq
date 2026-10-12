@@ -247,6 +247,90 @@ fn test_callers_across_files_confidence() {
 }
 
 #[test]
+fn test_call_graph_restricted_to_a_file_without_definition_is_empty() {
+    // #136: every homonym's edges were listed as name_only.
+    let (engine, _root) = index_project(&[
+        (
+            "util.rs",
+            "pub fn shared_name() {}\nfn a() { shared_name(); }\n",
+        ),
+        (
+            "other.rs",
+            "pub fn shared_name() {}\nfn b() { shared_name(); }\n",
+        ),
+    ]);
+    let graph = engine
+        .call_graph("shared_name", Some("nope.rs"), CallDirection::Both, 2, 100)
+        .unwrap();
+    assert!(graph.definitions.is_empty());
+    assert!(graph.callers.is_empty(), "{:?}", graph.callers);
+    assert!(graph.callees.is_empty());
+    assert!(!graph.truncated);
+}
+
+#[test]
+fn test_impact_enclosing_symbol_is_the_function_not_a_local_binding() {
+    // #91: `const value = load()` was the enclosing symbol, and the local
+    // `value` of `other` a depth-2 site.
+    let (engine, _root) = index_project(&[(
+        "a.ts",
+        "export function load(): number { return 1; }\n\
+         export function useLoad(): number {\n  const value = load();\n  return value;\n}\n\
+         export function other(): number {\n  const value = 3;\n  return value;\n}\n\
+         export function entry(): number { return useLoad(); }\n",
+    )]);
+    let analysis = engine.analyze_impact("load", None, 3, 100).unwrap();
+    let sites: Vec<(usize, &str, usize, Option<&str>)> = analysis
+        .sites
+        .iter()
+        .map(|s| {
+            (
+                s.depth,
+                s.target.as_str(),
+                s.line,
+                s.enclosing.as_ref().map(|e| e.name.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sites,
+        vec![
+            (1, "load", 3, Some("useLoad")),
+            (2, "useLoad", 10, Some("entry")),
+        ]
+    );
+}
+
+#[test]
+fn test_impact_enclosing_symbol_falls_back_to_a_top_level_binding() {
+    let (engine, _root) = index_project(&[(
+        "a.ts",
+        "export function load(): number { return 1; }\nexport const cached = load();\n\
+         export function read(): number { return cached; }\n",
+    )]);
+    let analysis = engine.analyze_impact("load", None, 3, 100).unwrap();
+    let sites: Vec<(usize, &str, usize, Option<&str>)> = analysis
+        .sites
+        .iter()
+        .map(|s| {
+            (
+                s.depth,
+                s.target.as_str(),
+                s.line,
+                s.enclosing.as_ref().map(|e| e.name.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sites,
+        vec![
+            (1, "load", 2, Some("cached")),
+            (2, "cached", 3, Some("read"))
+        ]
+    );
+}
+
+#[test]
 fn test_call_graph_unknown_symbol() {
     let (engine, _root) = index_project(&[("lib.rs", MUTUAL)]);
     let graph = engine
