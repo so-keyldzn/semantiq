@@ -7,6 +7,16 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
+# Read-only token: the artifacts go through upload-artifact, not the
+# repository (#116).
+permissions:
+  contents: read
+
+# A new push on the same branch/PR cancels the previous five builds (#124).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -45,21 +55,30 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Pinned to a commit: the previous `--git` install built and ran
+      # upstream HEAD on every push (#116). Bump the rev deliberately.
       - name: Install cross
         if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --locked --git https://github.com/cross-rs/cross --rev 74e99b2223de06166f8cdcc1af7f1308ec52baf4
 
+      # `--locked`: the build fails if Cargo.lock is not the one CI tested (#119).
       - name: Build with cross
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+        run: cross build --release --locked --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
 
       - name: Build with cargo
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

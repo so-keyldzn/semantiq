@@ -91,9 +91,11 @@ mod tests {
 
     #[test]
     fn test_resolve_project_root_absolute() {
-        // Use a path that actually exists for canonicalize
-        let path = Path::new("/tmp");
-        let result = resolve_project_root(path).unwrap();
+        // An absolute path that exists on every platform (`/tmp` does not on
+        // Windows, #121); canonicalize needs it to exist.
+        let path = env::temp_dir();
+        assert!(path.is_absolute());
+        let result = resolve_project_root(&path).unwrap();
         // canonicalize resolves symlinks, so just check it's absolute
         assert!(result.is_absolute());
     }

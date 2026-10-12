@@ -772,10 +772,25 @@ async fn test_timed_out_handler_keeps_its_slot_until_the_blocking_work_ends() {
     );
 
     // Once the orphaned work is done, the slot is free: the next request is
-    // admitted (and times out in turn, it is the same slow handler).
+    // admitted (and times out in turn, it is the same slow handler). The slot
+    // is released when the handler task runs again after its blocking thread
+    // ends, which a `sleep(work)` on a loaded runner (macOS CI) does not
+    // reliably land after: poll until the shed stops, with a deadline.
     tokio::time::sleep(work).await;
-    let admitted = app.oneshot(get("/blocking")).await.unwrap();
-    assert_eq!(admitted.status(), StatusCode::GATEWAY_TIMEOUT);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let admitted = loop {
+        let response = app.clone().oneshot(get("/blocking")).await.unwrap();
+        if response.status() != StatusCode::SERVICE_UNAVAILABLE || Instant::now() > deadline {
+            break response;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        admitted.status(),
+        StatusCode::GATEWAY_TIMEOUT,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]

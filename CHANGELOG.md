@@ -86,6 +86,19 @@ shape. Phase 1 only: embeddings are kept.
 - The chunks / chunks_vec integrity canary runs once at `serve` startup
   instead of on every CLI command, each of which joined both tables in full
   when building its engine (#164).
+- CI runs the test suite on Ubuntu, macOS and Windows (#121), plus a
+  `--no-default-features` job that lints and tests the stub-embeddings
+  configuration shipped for macOS Intel (#108); every `cargo` invocation in
+  CI, Build, Release and the Dockerfile passes `--locked` (#119).
+- Workflows cancel the previous run of the same branch, cache cargo in Build
+  and Release, install prebuilt `cargo-audit` / `cargo-deny`, and
+  `cargo audit --deny warnings` turns the three unmaintained ignores into a
+  real gate (#124).
+- The Release page shows the `## [<version>]` section of this file above the
+  generated PR list; tagging a version without a section fails `check-version`
+  (#120).
+- Cargo workspace: `rust-version = "1.88"` (let-chains), `strip = true` for
+  release builds, `publish = false` on the library crates (#125).
 
 ### Security
 - Symlinks inside the project are no longer followed by the indexer, the
@@ -110,6 +123,13 @@ shape. Phase 1 only: embeddings are kept.
   [...])` (an argv) instead of a shell command line built by string
   interpolation: a quote or `$(...)` in the install path is no longer
   interpreted (#114).
+- Release archives carry a GitHub build provenance attestation
+  (`gh attestation verify <archive> --repo so-keyldzn/semantiq`) and the npm
+  package is published with `--provenance`; the `.sha256` sidecar is
+  documented as a corruption check, not an authenticity one (#111).
+- Workflows run with a read-only token; only the release job can write to
+  the repository and only the release and npm jobs get an OIDC token. `cross`
+  and `rust-toolchain` are pinned to commits like every other action (#116).
 
 ### Fixed
 - A directory rename, move or removal is applied by `serve`'s watcher: the
@@ -368,6 +388,14 @@ shape. Phase 1 only: embeddings are kept.
   `expected`; `scoring.score` raises on it too; the README documents every
   `run.py` option, and `test_bench.py` covers the validation and the scoring
   (#127).
+
+### Added
+- Tests for the surfaces that had none: the `semantiq update` flow against a
+  local release server (`SEMANTIQ_UPDATE_BASE_URL`, a test hook that redirects
+  the release lookup and downloads), `calibrate`, `init-cursor`,
+  `index --embeddings-only`, `serve` on stdio (stdout holds JSON-RPC only),
+  the Streamable HTTP `/mcp` endpoint, and the v3 → current schema migration
+  chain through `IndexStore::open` (#122).
 
 ## [0.12.0] - 2026-10-11
 

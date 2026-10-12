@@ -1,0 +1,6 @@
+# Every tracked text file is LF in the index. Keep it LF in the working tree
+# on every platform too: the Agent Skill (`skills/`), the legacy CLAUDE.md
+# block, the tree-sitter queries and the parser fixtures are embedded with
+# `include_str!`, so a Windows checkout with core.autocrlf would bake CRLF
+# into the binary and into the files `semantiq init` writes (#121).
+* text=auto eol=lf

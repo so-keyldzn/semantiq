@@ -170,7 +170,7 @@ fn read_release_body(reader: impl std::io::Read) -> Result<String> {
 
 /// Extract the released version (without the leading `v`) from the JSON of
 /// `GET /repos/<owner>/<repo>/releases/latest`.
-fn parse_release_tag(body: &str) -> Result<String> {
+pub(crate) fn parse_release_tag(body: &str) -> Result<String> {
     let release: GitHubRelease =
         serde_json::from_str(body).context("failed to parse the GitHub release response")?;
     let version = release.tag_name.trim_start_matches('v');
