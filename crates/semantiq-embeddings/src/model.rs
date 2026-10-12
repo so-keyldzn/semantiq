@@ -5,11 +5,71 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "onnx")]
 use std::fs;
 #[cfg(feature = "onnx")]
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(feature = "onnx")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(feature = "onnx")]
+use std::time::Duration;
 #[cfg(feature = "onnx")]
 use tracing::{info, warn};
+
+/// Environment variable naming the directory that holds (or receives) the
+/// model files, instead of `dirs::data_dir()/semantiq/models`.
+pub const MODELS_DIR_ENV_VAR: &str = "SEMANTIQ_MODELS_DIR";
+
+/// Why the embedding model could not be made available, classified so that
+/// the message shown to MCP and HTTP clients (`Display`) never carries a
+/// local path, a URL or a digest; the detail is in `source()` and is meant
+/// for the server log only (`{:#}` prints the whole chain).
+#[derive(Debug, thiserror::Error)]
+pub enum ModelLoadError {
+    /// Neither `SEMANTIQ_MODELS_DIR` nor a platform data directory is
+    /// available (sandboxed launch without `HOME` / `XDG_DATA_HOME`). The
+    /// current directory is never used: it would be the indexed project.
+    #[error(
+        "no directory for the embedding model files: set {MODELS_DIR_ENV_VAR} (HOME or \
+         XDG_DATA_HOME is unset)"
+    )]
+    NoModelsDir,
+    /// The HTTP download failed or timed out.
+    #[error("the embedding model download failed")]
+    Download(#[source] anyhow::Error),
+    /// The downloaded bytes do not match the pinned SHA-256 digest.
+    #[error("the downloaded embedding model did not match its pinned digest")]
+    DigestMismatch(#[source] anyhow::Error),
+    /// The model files could not be written to the models directory.
+    #[error("the embedding model files could not be written to the models directory")]
+    Write(#[source] anyhow::Error),
+    /// The files are there but the ONNX session or the tokenizer failed to load.
+    #[error("the embedding model files could not be loaded")]
+    Load(#[source] anyhow::Error),
+}
+
+/// Short reason for a failed `create_embedding_model`, safe to return to a
+/// client: the classification of a [`ModelLoadError`], or a generic phrase
+/// for any other error. The detail stays in the error chain, for the log.
+pub fn public_load_reason(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<ModelLoadError>() {
+        Some(classified) => classified.to_string(),
+        None => "the embedding model could not be loaded".to_string(),
+    }
+}
+
+/// Directory of the model files: `env` (`SEMANTIQ_MODELS_DIR`, blank =
+/// unset) else `<data_dir>/semantiq/models`. Never the current directory
+/// (#115): with neither, the error says what to set.
+fn resolve_models_dir(
+    env: Option<&str>,
+    data_dir: Option<PathBuf>,
+) -> std::result::Result<PathBuf, ModelLoadError> {
+    if let Some(dir) = env.map(str::trim).filter(|dir| !dir.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
+    data_dir
+        .map(|dir| dir.join("semantiq").join("models"))
+        .ok_or(ModelLoadError::NoModelsDir)
+}
 
 /// Prefix CodeRankEmbed expects in front of search queries. Documents (code
 /// chunks) are embedded without any prefix.
@@ -58,10 +118,12 @@ impl Default for EmbeddingConfig {
                     .unwrap_or(4)
             });
 
+        // Empty paths when no models directory is available: nothing
+        // exists there, so `create_embedding_model` falls back to the stub
+        // and `ensure_models_downloaded` reports `NoModelsDir`.
         #[cfg(feature = "onnx")]
-        let (model_path, tokenizer_path) = {
-            let models_dir = get_models_dir();
-            (
+        let (model_path, tokenizer_path) = match models_dir() {
+            Ok(models_dir) => (
                 models_dir
                     .join(MODEL_FILENAME)
                     .to_string_lossy()
@@ -70,7 +132,8 @@ impl Default for EmbeddingConfig {
                     .join(TOKENIZER_FILENAME)
                     .to_string_lossy()
                     .to_string(),
-            )
+            ),
+            Err(_) => (String::new(), String::new()),
         };
         #[cfg(not(feature = "onnx"))]
         let (model_path, tokenizer_path) = (
@@ -90,12 +153,13 @@ impl Default for EmbeddingConfig {
     }
 }
 
+/// Directory holding the model files: `SEMANTIQ_MODELS_DIR`, else the
+/// platform data directory (`~/Library/Application Support/semantiq/models`,
+/// `~/.local/share/semantiq/models`, `%APPDATA%\semantiq\models`).
 #[cfg(feature = "onnx")]
-fn get_models_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("semantiq")
-        .join("models")
+pub fn models_dir() -> std::result::Result<PathBuf, ModelLoadError> {
+    let env = std::env::var(MODELS_DIR_ENV_VAR).ok();
+    resolve_models_dir(env.as_deref(), dirs::data_dir())
 }
 
 // nomic-ai/CodeRankEmbed, community INT8 ONNX export. Both URLs are pinned to
@@ -114,12 +178,30 @@ const TOKENIZER_SHA256: &str = "91f1def9b9391fdabe028cd3f3fcc4efd34e5d1f08c3bf2d
 #[cfg(feature = "onnx")]
 const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-/// Compute SHA-256 hash of a byte slice
+/// Network timeouts of the model download (#97). ureq's defaults are all
+/// `None`: a stalled connection (captive portal, proxy) blocked forever.
+/// The body budget is generous because the model is large; a slow link is
+/// still served, a dead one gives up.
 #[cfg(feature = "onnx")]
-fn compute_sha256(data: &[u8]) -> String {
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(feature = "onnx")]
+const DOWNLOAD_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(feature = "onnx")]
+const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// SHA-256 of a file on disk, streamed.
+#[cfg(feature = "onnx")]
+fn file_sha256(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Whether `path` exists and matches `expected_sha256`.
+#[cfg(feature = "onnx")]
+fn file_matches(path: &Path, expected_sha256: &str) -> bool {
+    file_sha256(path).is_ok_and(|actual| actual == expected_sha256)
 }
 
 /// Download a file, verify it against `expected_sha256`, then atomically move
@@ -128,46 +210,88 @@ fn compute_sha256(data: &[u8]) -> String {
 fn download_file(url: &str, path: &Path, expected_sha256: &str) -> Result<()> {
     info!("Downloading {} to {:?}", url, path);
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .http_status_as_error(true)
+            .timeout_connect(Some(DOWNLOAD_CONNECT_TIMEOUT))
+            .timeout_recv_response(Some(DOWNLOAD_RESPONSE_TIMEOUT))
+            .timeout_recv_body(Some(DOWNLOAD_BODY_TIMEOUT))
             .build(),
     );
 
-    let response = agent.get(url).call()?;
-    // The default body limit (10MB) is too small for the model.
-    let bytes = response
-        .into_body()
-        .with_config()
-        .limit(MAX_DOWNLOAD_BYTES)
-        .read_to_vec()?;
+    let response = agent
+        .get(url)
+        .call()
+        .map_err(|e| ModelLoadError::Download(anyhow::Error::new(e).context(url.to_string())))?;
+    // The default body limit (10MB) is too small for the model; the body is
+    // streamed to disk, never held in memory.
+    let mut body = response.into_body();
+    let mut reader = body.with_config().limit(MAX_DOWNLOAD_BYTES).reader();
+    install_verified(&mut reader, path, expected_sha256, url)
+}
 
-    let checksum = compute_sha256(&bytes);
+/// Stream `source` into a uniquely named temporary file next to `path`,
+/// hashing as it goes, and move it into place once the digest matches.
+///
+/// The name is unique per call (#98): two processes downloading the same
+/// model at once (two MCP servers, `serve` + `index`) no longer truncate
+/// each other's `.part`. When the final move fails because the other one
+/// already installed a valid file, that file is accepted.
+#[cfg(feature = "onnx")]
+fn install_verified(
+    source: &mut dyn Read,
+    path: &Path,
+    expected_sha256: &str,
+    origin: &str,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ModelLoadError::Write(anyhow::anyhow!("{path:?} has no parent")))?;
+    let write_err = |e: std::io::Error| ModelLoadError::Write(anyhow::Error::new(e));
+    fs::create_dir_all(parent).map_err(write_err)?;
+
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".semantiq-download-")
+        .suffix(".part")
+        .tempfile_in(parent)
+        .map_err(write_err)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut len: u64 = 0;
+    loop {
+        let n = source
+            .read(&mut buf)
+            .map_err(|e| ModelLoadError::Download(anyhow::Error::new(e).context(origin.to_string())))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        tmp.write_all(&buf[..n]).map_err(write_err)?;
+        len += n as u64;
+    }
+    tmp.as_file().sync_all().map_err(write_err)?;
+
+    let checksum = format!("{:x}", hasher.finalize());
     if checksum != expected_sha256 {
-        anyhow::bail!(
-            "SHA-256 mismatch for {}: expected {}, got {}",
-            url,
-            expected_sha256,
-            checksum
-        );
+        // `tmp` is deleted on drop: nothing lands at `path`.
+        return Err(ModelLoadError::DigestMismatch(anyhow::anyhow!(
+            "SHA-256 mismatch for {origin}: expected {expected_sha256}, got {checksum}"
+        ))
+        .into());
     }
 
-    let tmp_path = path.with_extension("part");
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
+    if let Err(e) = tmp.persist(path) {
+        if file_matches(path, expected_sha256) {
+            info!("{:?} was installed by another process meanwhile", path);
+            return Ok(());
+        }
+        return Err(write_err(e.error).into());
     }
-    fs::rename(&tmp_path, path)?;
 
     info!(
         "Downloaded {:?} ({} bytes, sha256 verified: {}...)",
         path,
-        bytes.len(),
+        len,
         &checksum[..16]
     );
     Ok(())
@@ -177,7 +301,7 @@ fn download_file(url: &str, path: &Path, expected_sha256: &str) -> Result<()> {
 #[cfg(feature = "onnx")]
 fn ensure_file_downloaded(url: &str, path: &Path, expected_sha256: &str, name: &str) -> Result<()> {
     if path.exists() {
-        let actual = compute_sha256(&fs::read(path)?);
+        let actual = file_sha256(path).map_err(|e| ModelLoadError::Load(e.into()))?;
         if actual == expected_sha256 {
             info!("{} checksum verified", name);
             return Ok(());
@@ -188,7 +312,7 @@ fn ensure_file_downloaded(url: &str, path: &Path, expected_sha256: &str, name: &
             &expected_sha256[..16],
             &actual[..16]
         );
-        fs::remove_file(path)?;
+        fs::remove_file(path).map_err(|e| ModelLoadError::Write(e.into()))?;
     } else {
         info!("{} not found, downloading...", name);
     }
@@ -215,17 +339,25 @@ fn remove_legacy_model_files(models_dir: &Path) {
     }
 }
 
+/// Make sure both model files are present and verified in [`models_dir`],
+/// downloading them if needed, and return the config pointing at them.
+/// Errors are [`ModelLoadError`]s (see [`public_load_reason`]).
 #[cfg(feature = "onnx")]
 pub fn ensure_models_downloaded() -> Result<EmbeddingConfig> {
-    remove_legacy_model_files(&get_models_dir());
+    let models_dir = models_dir()?;
+    remove_legacy_model_files(&models_dir);
     let config = EmbeddingConfig::default();
-    let model_path = Path::new(&config.model_path);
-    let tokenizer_path = Path::new(&config.tokenizer_path);
+    let model_path = models_dir.join(MODEL_FILENAME);
+    let tokenizer_path = models_dir.join(TOKENIZER_FILENAME);
 
-    ensure_file_downloaded(MODEL_URL, model_path, MODEL_SHA256, "Model")?;
-    ensure_file_downloaded(TOKENIZER_URL, tokenizer_path, TOKENIZER_SHA256, "Tokenizer")?;
+    ensure_file_downloaded(MODEL_URL, &model_path, MODEL_SHA256, "Model")?;
+    ensure_file_downloaded(TOKENIZER_URL, &tokenizer_path, TOKENIZER_SHA256, "Tokenizer")?;
 
-    Ok(config)
+    Ok(EmbeddingConfig {
+        model_path: model_path.to_string_lossy().to_string(),
+        tokenizer_path: tokenizer_path.to_string_lossy().to_string(),
+        ..config
+    })
 }
 
 /// Reduce one sequence's token embeddings (`[seq_len, hidden]`, row-major) to a
@@ -618,7 +750,8 @@ pub fn create_embedding_model(
 
         if Path::new(&config.model_path).exists() {
             info!("Using ONNX embedding model from {:?}", config.model_path);
-            return Ok(Box::new(onnx::OnnxEmbeddingModel::load(config)?));
+            let model = onnx::OnnxEmbeddingModel::load(config).map_err(ModelLoadError::Load)?;
+            return Ok(Box::new(model));
         } else {
             info!(
                 "ONNX model not found at {:?}, using stub",
@@ -707,6 +840,69 @@ mod tests {
         assert!(config.model_path.ends_with("coderankembed-int8.onnx"));
     }
 
+    /// #115: the models directory is `SEMANTIQ_MODELS_DIR`, else the data
+    /// directory, never the current directory (the indexed project).
+    #[test]
+    fn test_models_dir_never_falls_back_to_cwd() {
+        let data = Some(PathBuf::from("/data"));
+        assert_eq!(
+            resolve_models_dir(None, data.clone()).unwrap(),
+            PathBuf::from("/data/semantiq/models")
+        );
+        assert_eq!(
+            resolve_models_dir(Some(" /models "), data.clone()).unwrap(),
+            PathBuf::from("/models")
+        );
+        assert_eq!(
+            resolve_models_dir(Some("  "), data).unwrap(),
+            PathBuf::from("/data/semantiq/models"),
+            "a blank variable is unset"
+        );
+        let err = resolve_models_dir(None, None).unwrap_err();
+        assert!(matches!(err, ModelLoadError::NoModelsDir));
+        assert!(err.to_string().contains(MODELS_DIR_ENV_VAR), "{err}");
+        assert_eq!(
+            resolve_models_dir(Some("/explicit"), None).unwrap(),
+            PathBuf::from("/explicit")
+        );
+    }
+
+    /// #100: the reason handed to clients is the classification only; the
+    /// path, URL and digests stay in the error chain (logged, not returned).
+    #[test]
+    fn test_public_load_reason_hides_paths_and_urls() {
+        let detail = "/Users/someone/Library/Application Support/semantiq/models/x.onnx";
+        let load: anyhow::Error = ModelLoadError::Load(anyhow::anyhow!("{detail}: bad")).into();
+        let reason = public_load_reason(&load);
+        assert_eq!(reason, "the embedding model files could not be loaded");
+        assert!(!reason.contains("/Users"), "{reason}");
+        // The detail is still there for the log.
+        assert!(format!("{load:#}").contains(detail), "{load:#}");
+
+        let download: anyhow::Error = ModelLoadError::Download(anyhow::anyhow!(
+            "https://huggingface.co/x/model.onnx: timed out"
+        ))
+        .into();
+        let reason = public_load_reason(&download);
+        assert!(reason.contains("download failed"), "{reason}");
+        assert!(!reason.contains("https://"), "{reason}");
+
+        let digest: anyhow::Error = ModelLoadError::DigestMismatch(anyhow::anyhow!(
+            "expected 4eae31d0, got deadbeef"
+        ))
+        .into();
+        let reason = public_load_reason(&digest);
+        assert!(reason.contains("digest"), "{reason}");
+        assert!(!reason.contains("deadbeef"), "{reason}");
+
+        // An unclassified error gets the generic phrase.
+        let other = anyhow::anyhow!("/tmp/secret: permission denied");
+        assert_eq!(
+            public_load_reason(&other),
+            "the embedding model could not be loaded"
+        );
+    }
+
     #[test]
     fn test_cls_pooling_takes_first_token_and_normalizes() {
         // 3 tokens x 4 dims; the last token is padding.
@@ -744,6 +940,77 @@ mod tests {
 
         fn cosine(a: &[f32], b: &[f32]) -> f32 {
             a.iter().zip(b).map(|(x, y)| x * y).sum()
+        }
+
+        fn sha256_hex(data: &[u8]) -> String {
+            let mut hasher = Sha256::new();
+            hasher.update(data);
+            format!("{:x}", hasher.finalize())
+        }
+
+        /// #98: concurrent installs of the same file use distinct temporary
+        /// names, so neither truncates the other and both end with a valid
+        /// file in place and no `.part` left behind.
+        #[test]
+        fn test_concurrent_installs_do_not_truncate_each_other() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("models").join("model.onnx");
+            let bytes: Vec<u8> = (0..2_000_000u32).map(|i| (i % 251) as u8).collect();
+            let digest = sha256_hex(&bytes);
+
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..4)
+                    .map(|_| {
+                        let (path, bytes, digest) = (&path, &bytes, &digest);
+                        scope.spawn(move || {
+                            let mut source: &[u8] = bytes;
+                            install_verified(&mut source, path, digest, "test")
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    worker.join().unwrap().unwrap();
+                }
+            });
+
+            assert!(file_matches(&path, &digest));
+            let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+                .filter(|name| name != "model.onnx")
+                .collect();
+            assert!(leftovers.is_empty(), "{leftovers:?}");
+        }
+
+        /// A digest mismatch installs nothing and leaves no temporary file.
+        #[test]
+        fn test_digest_mismatch_installs_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("model.onnx");
+            let mut source: &[u8] = b"not the model";
+            let err = install_verified(&mut source, &path, &"0".repeat(64), "test").unwrap_err();
+            assert!(
+                matches!(
+                    err.downcast_ref::<ModelLoadError>(),
+                    Some(ModelLoadError::DigestMismatch(_))
+                ),
+                "{err:#}"
+            );
+            assert!(!path.exists());
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
+
+        /// An installed file that no longer matches is replaced.
+        #[test]
+        fn test_install_replaces_a_corrupt_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("model.onnx");
+            fs::write(&path, b"corrupt").unwrap();
+            let bytes = b"the real model".to_vec();
+            let digest = sha256_hex(&bytes);
+            let mut source: &[u8] = &bytes;
+            install_verified(&mut source, &path, &digest, "test").unwrap();
+            assert_eq!(fs::read(&path).unwrap(), bytes);
         }
 
         /// Runs against the locally cached CodeRankEmbed model; skipped when
