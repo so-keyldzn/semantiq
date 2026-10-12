@@ -480,12 +480,20 @@ fn test_text_search_skips_symlinks_and_credential_files() {
     std::fs::write(root.join("secrets.env"), "NEEDLE_TOKEN=needle_secret\n").unwrap();
     symlink(outside.join("private.js"), root.join("linked.js")).unwrap();
     symlink("app.js", root.join("alias.js")).unwrap();
+    // Text search answers from the index, so what the indexer's walker
+    // leaves out (symlinks, credential files) is never text-searched.
     let store = Arc::new(IndexStore::open_in_memory().unwrap());
+    semantiq_index::AutoIndexer::without_watcher(store.clone(), root.clone())
+        .unwrap()
+        .initial_index()
+        .unwrap();
     let engine = RetrievalEngine::new(store, root.to_str().unwrap());
 
     let results = engine.search("needle", 10, None).unwrap().results;
-    let files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
-    assert_eq!(files, ["app.js"], "{files:?}");
+    let mut files: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    files.sort();
+    files.dedup();
+    assert_eq!(files, ["app.js"], "{results:?}");
 
     let options = SearchOptions::new().with_file_types(vec!["env".to_string()]);
     let results = engine.search("needle", 10, Some(options)).unwrap().results;
