@@ -92,7 +92,7 @@ impl IndexStore {
 
         let (kind_clause, kind_params): (String, Vec<String>) = match kinds {
             None => ("s.kind != 'import'".to_string(), Vec::new()),
-            Some(kinds) if kinds.is_empty() => ("0".to_string(), Vec::new()),
+            Some([]) => ("0".to_string(), Vec::new()),
             Some(kinds) => {
                 let placeholders = vec!["?"; kinds.len()].join(",");
                 (
