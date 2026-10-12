@@ -126,7 +126,9 @@ fn find_file(
     if matches!(language, Language::JavaScript | Language::TypeScript) {
         // Explicit JS extensions may refer to TS source files.
         let replacements: &[&str] = match normalized.extension().and_then(|e| e.to_str()) {
-            Some("js") | Some("mjs") => &["ts", "tsx"],
+            Some("js") => &["ts", "tsx"],
+            Some("mjs") => &["mts", "ts", "tsx"],
+            Some("cjs") => &["cts", "ts", "tsx"],
             Some("jsx") => &["tsx", "ts"],
             _ => &[],
         };
@@ -407,8 +409,8 @@ fn resolve_js_import(source_dir: &Path, import_path: &str) -> Option<Vec<PathBuf
 
 fn extensions_for_language(language: Language) -> &'static [&'static str] {
     match language {
-        Language::TypeScript => &["ts", "tsx", "js", "jsx"],
-        Language::JavaScript => &["js", "jsx", "ts", "tsx"],
+        Language::TypeScript => &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"],
+        Language::JavaScript => &["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"],
         Language::Python => &["py", "pyi"],
         Language::Rust => &["rs"],
         Language::Go => &["go"],
@@ -465,6 +467,21 @@ mod tests {
         let resolved =
             resolve_local_import("src/app.ts", "./foo.mjs", Language::TypeScript, dir.path());
         assert_eq!(resolved.as_deref(), Some("src/foo.ts"));
+    }
+
+    // #151 : `.mts` / `.cts` sources, and `./x.mjs` → `x.mts`, `./x.cjs` → `x.cts`.
+    #[test]
+    fn test_resolve_explicit_mjs_to_mts() {
+        let dir = setup_project(&["src/app.mts", "src/foo.mts", "src/bar.cts"]);
+        let resolved =
+            resolve_local_import("src/app.mts", "./foo.mjs", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.mts"));
+        let resolved =
+            resolve_local_import("src/app.mts", "./bar.cjs", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/bar.cts"));
+        let resolved =
+            resolve_local_import("src/app.mts", "./foo", Language::TypeScript, dir.path());
+        assert_eq!(resolved.as_deref(), Some("src/foo.mts"));
     }
 
     #[test]

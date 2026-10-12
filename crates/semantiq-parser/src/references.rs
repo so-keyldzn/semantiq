@@ -216,6 +216,13 @@ mod flag {
     /// TypeScript `enum_body` : chaque membre non assigné est un champ `name`
     /// répété, que `child_by_field_id` ne voit qu'une fois (#149).
     pub const ENUM_BODY: u64 = 1 << 34;
+    /// C++ `qualified_identifier` : la feuille de `int ns::C::add(int)` est
+    /// le nom défini quand le chemin est le `declarator` d'un
+    /// `function_declarator` (#79).
+    pub const QUALIFIED_IDENTIFIER: u64 = 1 << 35;
+    /// JS `field_definition` : son champ `property` est le nom déclaré
+    /// (`class { handler = () => {} }`, #146).
+    pub const FIELD_DEFINITION: u64 = 1 << 36;
 }
 
 /// Drapeaux d'un nom de kind ; `attribute` est le kind d'attribut du langage.
@@ -287,6 +294,13 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
                     | "method_signature"
                     | "property_signature"
                     | "abstract_method_signature"
+            )
+            // C `#define MAX 10` / `#define SQ(x)` and `enum { RED }`
+            // (#148), Go interface methods (`method_elem`) and `type A = B`
+            // (`type_alias`) (#145): declared names too.
+            || matches!(
+                kind,
+                "preproc_def" | "preproc_function_def" | "enumerator" | "method_elem" | "type_alias"
             ),
         flag::DECLARES,
     );
@@ -326,6 +340,8 @@ fn kind_flags(kind: &str, attribute: Option<&str>) -> u64 {
     set(kind == "enum_entry", flag::ENUM_ENTRY);
     set(kind == "enum_body", flag::ENUM_BODY);
     set(kind == "qualified_name", flag::QUALIFIED_NAME);
+    set(kind == "qualified_identifier", flag::QUALIFIED_IDENTIFIER);
+    set(kind == "field_definition", flag::FIELD_DEFINITION);
     set(
         matches!(
             kind,
@@ -825,8 +841,26 @@ impl<'t> Leaf<'_, 't> {
         if k.has(parent, flag::FUNCTION_DEFINITION) && k.has(node, flag::WORD) {
             return true;
         }
+        // C++ : `int C::add(int)` → function_declarator(declarator:
+        // qualified_identifier(scope, name: identifier)), éventuellement
+        // imbriqué (`ns::C::add`) ; la feuille `add` est le nom défini (#79).
+        if k.has(parent, flag::QUALIFIED_IDENTIFIER) && k.is_field(parent, node, k.name) {
+            let mut depth = 1;
+            while let Some(p) = self.up(depth) {
+                if !k.has(p, flag::QUALIFIED_IDENTIFIER) {
+                    let outer = self.up(depth - 1).expect("depth - 1 is an ancestor");
+                    return k.has(p, flag::FUNCTION_DECLARATOR)
+                        && k.is_field(p, outer, k.declarator);
+                }
+                depth += 1;
+            }
+            return false;
+        }
 
         (k.has(parent, flag::DECLARES) && k.is_field(parent, node, k.name))
+            // JS `class { handler = () => {} }`: `field_definition` names its
+            // field `property` (#146).
+            || (k.has(parent, flag::FIELD_DEFINITION) && k.is_field(parent, node, k.property))
             // Kotlin `enum_entry` has no `name` field: the entry's name is its
             // first named child.
             || (k.has(parent, flag::ENUM_ENTRY) && parent.named_child(0) == Some(node))

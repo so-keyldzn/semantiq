@@ -57,6 +57,7 @@ mod bug_probes {
         symbols: Vec<Symbol>,
         refs: Vec<Reference>,
         calls: Vec<(String, String, usize)>,
+        relations: Vec<(String, String, &'static str)>,
         imports: Vec<(String, Option<String>, ImportKind)>,
     }
 
@@ -67,10 +68,16 @@ mod bug_probes {
         let tree = support.parse_path(lang, path, source).unwrap();
         let symbols = SymbolExtractor::extract(&tree, source, lang).unwrap();
         let refs = ReferenceExtractor::extract(&tree, source, lang);
-        let calls = StructureExtractor::extract(&tree, source, lang, &symbols, &refs)
+        let structure = StructureExtractor::extract(&tree, source, lang, &symbols, &refs);
+        let calls = structure
             .calls
             .into_iter()
             .map(|e| (e.caller, e.callee, e.line))
+            .collect();
+        let relations = structure
+            .relations
+            .into_iter()
+            .map(|r| (r.type_name, r.super_name, r.kind.as_str()))
             .collect();
         let imports = ImportExtractor::extract(&tree, source, lang)
             .unwrap()
@@ -82,6 +89,7 @@ mod bug_probes {
             symbols,
             refs,
             calls,
+            relations,
             imports,
         }
     }
@@ -1400,5 +1408,493 @@ public:
                 ("App.Services.Svc".to_string(), ImportKind::Local),
             ]
         );
+    }
+
+    // ---- parser-symbols (#140 #145 #146 #148 #150 #154 #79 #144 #151) ----
+
+    fn sym<'a>(symbols: &'a [Symbol], name: &str) -> &'a Symbol {
+        symbols
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no symbol {name}: {symbols:?}"))
+    }
+
+    // B36 (#140): an annotated Java / C# / Kotlin / Scala / PHP member (and a
+    // decorated TS class) gets the line that carries its name and modifiers
+    // as signature, not the annotation; the span still starts on the
+    // annotation.
+    #[test]
+    fn b36_annotated_member_signature_is_the_name_line() {
+        let java = extract(
+            Language::Java,
+            "class C {\n    @Override\n    public double area() { return 1.0; }\n\n    @GetMapping(\"/x\")\n    @Transactional\n    public List<Point> list() { return null; }\n}\n",
+        );
+        let area = sym(&java, "area");
+        assert_eq!(
+            area.signature.as_deref(),
+            Some("public double area() { return 1.0; }")
+        );
+        assert_eq!((area.start_line, area.end_line), (2, 3));
+        assert_eq!(
+            sym(&java, "list").signature.as_deref(),
+            Some("public List<Point> list() { return null; }")
+        );
+        let cs = extract(
+            Language::CSharp,
+            "class C {\n    [HttpGet]\n    public string Get() { return \"\"; }\n}\n",
+        );
+        assert_eq!(
+            sym(&cs, "Get").signature.as_deref(),
+            Some("public string Get() { return \"\"; }")
+        );
+        let kt = extract(
+            Language::Kotlin,
+            "class A {\n    @Suppress(\"x\")\n    private fun hidden() {}\n}\n",
+        );
+        assert_eq!(
+            sym(&kt, "hidden").signature.as_deref(),
+            Some("private fun hidden() {}")
+        );
+        let scala = extract(
+            Language::Scala,
+            "class A {\n  @deprecated\n  private def old(): Int = 1\n}\n",
+        );
+        assert_eq!(
+            sym(&scala, "old").signature.as_deref(),
+            Some("private def old(): Int = 1")
+        );
+        let php = extract(
+            Language::Php,
+            "<?php\nclass Ctrl {\n    #[Route('/x')]\n    public function index() {}\n}\n",
+        );
+        assert_eq!(
+            sym(&php, "index").signature.as_deref(),
+            Some("public function index() {}")
+        );
+        let ts = extract(Language::TypeScript, "@Component()\nclass Service {}\n");
+        assert_eq!(
+            sym(&ts, "Service").signature.as_deref(),
+            Some("class Service {}")
+        );
+        // A return type on its own line (GNU C style) joins the name line.
+        let c = extract(Language::C, "static int\nmain(void) { return 0; }\n");
+        assert_eq!(
+            sym(&c, "main").signature.as_deref(),
+            Some("static int main(void) { return 0; }")
+        );
+    }
+
+    // B37 (#145): Go interface methods and `type X = Y` are symbols (and
+    // definitions), methods carry their receiver type as parent, a grouped
+    // import yields one short-named symbol per spec.
+    #[test]
+    fn b37_go_interface_methods_aliases_receivers_imports() {
+        let source = "package main\n\nimport (\n\t\"fmt\"\n\t\"myapp/internal/store\"\n\ts \"strings\"\n)\n\ntype Shape interface {\n\tArea() float64\n}\n\ntype Circle struct{ r float64 }\n\ntype Alias = Circle\n\nfunc (c *Circle) Area() float64 { return c.r }\n";
+        let e = extract_file("main.go", source);
+        assert!(!e.has_error);
+        let imports: Vec<(&str, usize)> = e
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Import)
+            .map(|s| (s.name.as_str(), s.start_line))
+            .collect();
+        assert_eq!(imports, vec![("fmt", 4), ("store", 5), ("s", 6)]);
+        let methods: Vec<(&str, usize, Option<&str>)> = e
+            .symbols
+            .iter()
+            .filter(|s| s.name == "Area")
+            .map(|s| (s.name.as_str(), s.start_line, s.parent.as_deref()))
+            .collect();
+        assert_eq!(
+            methods,
+            vec![("Area", 10, Some("Shape")), ("Area", 17, Some("Circle"))]
+        );
+        assert!(
+            e.symbols
+                .iter()
+                .all(|s| s.name != "Area" || s.kind == SymbolKind::Method)
+        );
+        let alias = sym(&e.symbols, "Alias");
+        assert_eq!((alias.kind, alias.start_line), (SymbolKind::Type, 15));
+        assert_eq!(
+            kinds_of(&e.refs, "Area"),
+            vec![
+                (10, ReferenceKind::Definition),
+                (17, ReferenceKind::Definition)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "Alias"),
+            vec![(15, ReferenceKind::Definition)]
+        );
+    }
+
+    // B38 (#146): JS/TS class fields holding a function and `#private`
+    // methods are method symbols; the calls in their body are attributed to
+    // them, not to the class.
+    #[test]
+    fn b38_js_ts_function_fields_and_private_methods() {
+        let js = "class A {\n  #count = 0;\n  #inc() { this.#count++; }\n  static #make() {}\n  run() { this.#inc(); A.#make(); }\n  onClick = (e) => { this.run(); };\n  static handler = function () {};\n  plain = 1;\n}\n";
+        let e = extract_file("a.js", js);
+        let methods: Vec<(&str, usize)> = e
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .map(|s| (s.name.as_str(), s.start_line))
+            .collect();
+        assert_eq!(
+            methods,
+            vec![
+                ("#inc", 3),
+                ("#make", 4),
+                ("run", 5),
+                ("onClick", 6),
+                ("handler", 7)
+            ]
+        );
+        assert!(e.symbols.iter().all(|s| s.name != "plain"));
+        assert!(
+            e.symbols
+                .iter()
+                .all(|s| s.parent.is_none() || s.parent.as_deref() == Some("A"))
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "onClick"),
+            vec![(6, ReferenceKind::Definition)]
+        );
+        assert!(
+            e.calls
+                .contains(&("onClick".to_string(), "run".to_string(), 6))
+        );
+        assert!(
+            e.calls
+                .contains(&("run".to_string(), "#inc".to_string(), 5))
+        );
+        assert!(!e.calls.iter().any(|(caller, _, _)| caller == "A"));
+
+        let ts = "class A {\n  #inc() {}\n  private onClick = (e: Event): void => { this.run(); };\n  static handler = function () {};\n  run() {}\n}\n";
+        let e = extract_file("a.ts", ts);
+        let methods: Vec<(&str, usize)> = e
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .map(|s| (s.name.as_str(), s.start_line))
+            .collect();
+        assert_eq!(
+            methods,
+            vec![("#inc", 2), ("onClick", 3), ("handler", 4), ("run", 5)]
+        );
+        assert_eq!(
+            sym(&e.symbols, "onClick").signature.as_deref(),
+            Some("private onClick = (e: Event): void => { this.run(); }")
+        );
+        assert!(
+            e.calls
+                .contains(&("onClick".to_string(), "run".to_string(), 3))
+        );
+    }
+
+    // B39 (#148): C `#define` macros and function-pointer typedefs are
+    // symbols; macro names and enumerators are definitions, not usages.
+    #[test]
+    fn b39_c_macros_function_pointer_typedefs_enumerators() {
+        let source = "#define MAX_BUF 10\n#define SQUARE(x) ((x) * (x))\ntypedef enum { RED, GREEN } color_t;\ntypedef int (*callback_t)(int);\nenum State { IDLE, BUSY };\nint main(void) { return SQUARE(MAX_BUF) + RED; }\n";
+        let e = extract_file("a.c", source);
+        assert!(!e.has_error);
+        let max = sym(&e.symbols, "MAX_BUF");
+        assert_eq!((max.kind, max.start_line), (SymbolKind::Constant, 1));
+        let square = sym(&e.symbols, "SQUARE");
+        assert_eq!((square.kind, square.start_line), (SymbolKind::Function, 2));
+        assert_eq!(
+            square.signature.as_deref(),
+            Some("#define SQUARE(x) ((x) * (x))")
+        );
+        let cb = sym(&e.symbols, "callback_t");
+        assert_eq!((cb.kind, cb.start_line), (SymbolKind::Type, 4));
+        assert_eq!(
+            kinds_of(&e.refs, "MAX_BUF"),
+            vec![
+                (1, ReferenceKind::Definition),
+                (6, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "SQUARE"),
+            vec![(2, ReferenceKind::Definition), (6, ReferenceKind::Call)]
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "RED"),
+            vec![
+                (3, ReferenceKind::Definition),
+                (6, ReferenceKind::Reference)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "IDLE"),
+            vec![(5, ReferenceKind::Definition)]
+        );
+        // Same patterns in the C++ query (headers are parsed with it).
+        let h = extract_file("a.h", source);
+        assert_eq!(sym(&h.symbols, "MAX_BUF").kind, SymbolKind::Constant);
+        assert_eq!(sym(&h.symbols, "callback_t").kind, SymbolKind::Type);
+    }
+
+    // B40 (#150): Python docstrings and Elixir `@doc` / `@moduledoc` are the
+    // symbol's documentation.
+    #[test]
+    fn b40_python_docstrings_and_elixir_doc_attributes() {
+        let py = extract(
+            Language::Python,
+            concat!(
+                "def f():\n    \"\"\"Doc of f.\"\"\"\n    return 1\n\n",
+                "class C:\n    \"\"\"Doc of C.\n\n    More:\n        indented\n    \"\"\"\n",
+                "    def m(self):\n        '''Doc of m.'''\n\n",
+                "    def n(self):\n        x = 'not a docstring'\n",
+            ),
+        );
+        assert_eq!(sym(&py, "f").doc_comment.as_deref(), Some("Doc of f."));
+        assert_eq!(
+            sym(&py, "C").doc_comment.as_deref(),
+            Some("Doc of C.\n\nMore:\n    indented")
+        );
+        assert_eq!(sym(&py, "m").doc_comment.as_deref(), Some("Doc of m."));
+        assert_eq!(sym(&py, "n").doc_comment, None);
+
+        let ex = extract(
+            Language::Elixir,
+            concat!(
+                "defmodule Geo do\n  @moduledoc \"Geometry helpers\"\n\n",
+                "  @doc \"area of a shape\"\n  def area(%{r: r}), do: r\n\n",
+                "  @doc \"\"\"\n  Multi-line doc.\n  \"\"\"\n  @spec name(any) :: String.t()\n  def name(_), do: \"x\"\n\n",
+                "  @doc false\n  def hidden, do: 1\n\n  def undocumented, do: 1\nend\n",
+            ),
+        );
+        assert_eq!(
+            sym(&ex, "Geo").doc_comment.as_deref(),
+            Some("Geometry helpers")
+        );
+        assert_eq!(
+            sym(&ex, "area").doc_comment.as_deref(),
+            Some("area of a shape")
+        );
+        assert_eq!(
+            sym(&ex, "name").doc_comment.as_deref(),
+            Some("Multi-line doc.")
+        );
+        assert_eq!(sym(&ex, "hidden").doc_comment, None);
+        assert_eq!(sym(&ex, "undocumented").doc_comment, None);
+    }
+
+    // B41 (#154): HTML `<script>` / `<style>` and elements with an `id` are
+    // symbols at any depth; anonymous elements are not.
+    #[test]
+    fn b41_html_nested_ids_scripts_styles() {
+        let source = "<html>\n<head><style>body {}</style></head>\n<body>\n  <div id=\"main\" class=\"c\">\n    <p>text</p>\n    <section id=\"about\"><h2>About</h2></section>\n  </div>\n  <script>var x = 1;</script>\n</body>\n</html>\n";
+        let symbols = extract(Language::Html, source);
+        let found: Vec<(&str, SymbolKind, usize)> = symbols
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.start_line))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("html", SymbolKind::Variable, 1),
+                ("style", SymbolKind::Module, 2),
+                ("main", SymbolKind::Variable, 4),
+                ("about", SymbolKind::Variable, 6),
+                ("script", SymbolKind::Module, 8),
+            ]
+        );
+        assert_eq!(
+            sym(&symbols, "main").signature.as_deref(),
+            Some(r#"<div id="main" class="c">"#)
+        );
+    }
+
+    // B42 (#79): a C++ method defined out of its class is indexed under its
+    // bare name with the qualifier as parent (joined to the enclosing
+    // namespace); its definition line is a definition, not a usage; the
+    // in-class declaration is a method symbol too.
+    #[test]
+    fn b42_cpp_out_of_class_method_bare_name() {
+        let source = "namespace ns {\nclass C { int add(int); ~C(); };\nint C::add(int x) { return helper(x); }\nC::~C() {}\n}\nint ns::C::sub(int x) { return x; }\nint main() { ns::C c; return c.add(1); }\n";
+        let e = extract_file("c.cpp", source);
+        assert!(!e.has_error);
+        let methods: Vec<(&str, usize, Option<&str>)> = e
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .map(|s| (s.name.as_str(), s.start_line, s.parent.as_deref()))
+            .collect();
+        assert_eq!(
+            methods,
+            vec![
+                ("add", 2, Some("ns::C")),
+                ("~C", 2, Some("ns::C")),
+                ("add", 3, Some("ns::C")),
+                ("~C", 4, Some("ns::C")),
+                ("sub", 6, Some("ns::C")),
+            ]
+        );
+        assert!(e.symbols.iter().all(|s| !s.name.contains("::")));
+        assert_eq!(
+            kinds_of(&e.refs, "add"),
+            vec![
+                (2, ReferenceKind::Definition),
+                (3, ReferenceKind::Definition),
+                (7, ReferenceKind::Call)
+            ]
+        );
+        assert_eq!(
+            kinds_of(&e.refs, "sub"),
+            vec![(6, ReferenceKind::Definition)]
+        );
+        assert!(
+            e.calls
+                .contains(&("add".to_string(), "helper".to_string(), 3))
+        );
+    }
+
+    // B43 (#144): a `.h` header is parsed with the C++ grammar: classes,
+    // namespaces, templates and member declarations are symbols, keywords are
+    // not references; `.c` keeps the C grammar.
+    #[test]
+    fn b43_h_header_parsed_as_cpp() {
+        let header = "namespace geo {\nclass Shape {\n public:\n  virtual double area() const = 0;\n  void describe();\n private:\n  int id_;\n};\ntemplate <typename T>\nstruct Box : public Shape {\n  double area() const override { return 0; }\n};\n}\n";
+        let e = extract_file("inc/shape.h", header);
+        assert!(!e.has_error);
+        let found: Vec<(&str, SymbolKind, Option<&str>)> = e
+            .symbols
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.parent.as_deref()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("geo", SymbolKind::Module, None),
+                ("Shape", SymbolKind::Class, Some("geo")),
+                ("area", SymbolKind::Method, Some("geo::Shape")),
+                ("describe", SymbolKind::Method, Some("geo::Shape")),
+                ("Box", SymbolKind::Struct, Some("geo")),
+                ("area", SymbolKind::Method, Some("geo::Box")),
+            ]
+        );
+        for keyword in [
+            "class",
+            "namespace",
+            "public",
+            "virtual",
+            "template",
+            "override",
+        ] {
+            assert!(
+                e.refs.iter().all(|r| r.name != keyword),
+                "{keyword} is a reference"
+            );
+        }
+        assert_eq!(
+            Language::from_path(Path::new("inc/shape.h")),
+            Some(Language::C)
+        );
+        // A C header still works, and a `.c` file is parsed with the C grammar.
+        let c = extract_file("inc/util.h", "#include <stdio.h>\nint add(int a, int b);\n");
+        assert!(!c.has_error);
+        assert_eq!(c.imports.len(), 1);
+        let c = extract_file("src/util.c", "int add(int a, int b) { return a + b; }\n");
+        assert!(!c.has_error);
+        assert_eq!(sym(&c.symbols, "add").kind, SymbolKind::Function);
+    }
+
+    // B44 (#151): `.mts` / `.cts` files are TypeScript.
+    #[test]
+    fn b44_mts_cts_are_typescript() {
+        assert_eq!(
+            Language::from_path(Path::new("src/a.mts")),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("src/a.cts")),
+            Some(Language::TypeScript)
+        );
+        let e = extract_file(
+            "src/a.mts",
+            "import { x } from './foo.mjs';\nexport const run = (): number => x;\n",
+        );
+        assert!(!e.has_error);
+        assert_eq!(sym(&e.symbols, "run").kind, SymbolKind::Function);
+        assert_eq!(e.imports.len(), 1);
+    }
+
+    // B45 (PR #171 review): a Python docstring is taken whole between its
+    // delimiters, escape sequences included.
+    #[test]
+    fn b45_python_docstring_with_escapes_is_complete() {
+        let source = "def f():\n    \"\"\"Open C:\\\\temp for details.\n\n    Second \\t line.\n    \"\"\"\n    pass\n";
+        let symbols = extract(Language::Python, source);
+        assert_eq!(
+            sym(&symbols, "f").doc_comment.as_deref(),
+            Some("Open C:\\\\temp for details.\n\nSecond \\t line.")
+        );
+    }
+
+    // B46 (PR #171 review): the `id` of an element is captured whatever the
+    // attribute's case, whether the value is quoted or bare, and on
+    // self-closing tags.
+    #[test]
+    fn b46_html_id_forms() {
+        let source = "<html>\n<body>\n  <div id=main>\n    <input id=\"search\" />\n    <p ID=\"up\">x</p>\n    <a id='q' href=\"#\">y</a>\n    <span data-id=\"no\" idx=\"no\">z</span>\n  </div>\n</body>\n</html>\n";
+        let symbols = extract(Language::Html, source);
+        let found: Vec<(&str, usize)> = symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable && s.name != "html")
+            .map(|s| (s.name.as_str(), s.start_line))
+            .collect();
+        assert_eq!(found, vec![("main", 3), ("search", 4), ("up", 5), ("q", 6)]);
+    }
+
+    // B47 (PR #171 review): the type relations of a `.h` header come from the
+    // C++ branch, as the grammar that parsed it.
+    #[test]
+    fn b47_h_header_type_relations_use_cpp() {
+        let header = "class Shape {\n public:\n  virtual ~Shape();\n};\nstruct Box : public Shape {};\nclass Ball : Shape, private Round {};\n";
+        let e = extract_file("inc/shape.h", header);
+        assert!(!e.has_error);
+        assert_eq!(
+            e.relations,
+            vec![
+                ("Box".to_string(), "Shape".to_string(), "extends"),
+                ("Ball".to_string(), "Round".to_string(), "extends"),
+                ("Ball".to_string(), "Shape".to_string(), "extends"),
+            ]
+        );
+        assert!(extract_file("inc/shape.hpp", header).relations == e.relations);
+    }
+
+    // B48 (PR #171 review): constructors declared or defined in the class
+    // body are method symbols of the class, not free functions.
+    #[test]
+    fn b48_cpp_in_class_constructors() {
+        let source = "class C {\npublic:\n  C();\n  explicit C(int x);\n  C(const C&) = default;\n  C(C&&) { init(); }\n  ~C();\n  static C make();\n};\nC::C() {}\n";
+        let e = extract_file("c.cpp", source);
+        assert!(!e.has_error);
+        let found: Vec<(&str, SymbolKind, usize, Option<&str>)> = e
+            .symbols
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.start_line, s.parent.as_deref()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("C", SymbolKind::Class, 1, None),
+                ("C", SymbolKind::Method, 3, Some("C")),
+                ("C", SymbolKind::Method, 4, Some("C")),
+                ("C", SymbolKind::Method, 5, Some("C")),
+                ("C", SymbolKind::Method, 6, Some("C")),
+                ("~C", SymbolKind::Method, 7, Some("C")),
+                ("make", SymbolKind::Method, 8, Some("C")),
+                ("C", SymbolKind::Method, 10, Some("C")),
+            ]
+        );
+        assert!(e.calls.contains(&("C".to_string(), "init".to_string(), 6)));
     }
 }

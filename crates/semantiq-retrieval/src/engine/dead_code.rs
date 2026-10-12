@@ -268,8 +268,13 @@ impl RetrievalEngine {
         Ok(Verdict::Dead(confidence, reasons))
     }
 
-    /// Attribute / decorator lines directly above `line` (`#[...]`, `@...`,
-    /// C# `[...]`), skipping doc comments in between.
+    /// Attribute / decorator lines of the symbol starting at `line`: the
+    /// lines directly above it (Rust `#[...]`, Python / TS decorators, which
+    /// are siblings of the definition), skipping doc comments in between, and
+    /// the leading lines of the symbol itself (Java / Kotlin / Scala `@...`,
+    /// C# `[...]`, PHP `#[...]`: the annotation is part of the declaration
+    /// node, so the symbol starts on it and its signature is the line that
+    /// carries the name).
     fn attributes_above(
         &self,
         files: &mut HashMap<String, Option<Vec<String>>>,
@@ -282,24 +287,36 @@ impl RetrievalEngine {
             .or_insert_with(|| self.read_project_file(path))
             .as_deref()
             .unwrap_or(&[]);
+        let is_attribute = |text: &str| {
+            text.starts_with("#[")
+                || text.starts_with('@')
+                || (language == "csharp" && text.starts_with('['))
+        };
+        let is_comment = |text: &str| {
+            ["///", "//", "/*", "*", "#!"]
+                .iter()
+                .any(|p| text.starts_with(p))
+                || (language == "python" && text.starts_with('#') && !text.starts_with("#["))
+        };
         let mut attributes = Vec::new();
         let end = line.saturating_sub(1).min(lines.len());
         for text in lines[..end].iter().rev().take(MAX_ATTRIBUTE_LINES) {
             let text = text.trim();
-            let is_attribute = text.starts_with("#[")
-                || text.starts_with('@')
-                || (language == "csharp" && text.starts_with('['));
-            let is_comment = ["///", "//", "/*", "*", "#!"]
-                .iter()
-                .any(|p| text.starts_with(p))
-                || (language == "python" && text.starts_with('#') && !text.starts_with("#["));
-            if is_attribute {
+            if is_attribute(text) {
                 attributes.push(text.to_string());
-            } else if !is_comment {
+            } else if !is_comment(text) {
                 break;
             }
         }
         attributes.reverse();
+        for text in lines[end..].iter().take(MAX_ATTRIBUTE_LINES) {
+            let text = text.trim();
+            if is_attribute(text) {
+                attributes.push(text.to_string());
+            } else if !is_comment(text) {
+                break;
+            }
+        }
         attributes
     }
 

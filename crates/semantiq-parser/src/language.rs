@@ -30,7 +30,7 @@ impl Language {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_lowercase().as_str() {
             "rs" => Some(Language::Rust),
-            "ts" | "tsx" => Some(Language::TypeScript),
+            "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "py" | "pyi" => Some(Language::Python),
             "go" => Some(Language::Go),
@@ -59,13 +59,34 @@ impl Language {
     }
 
     /// The tree-sitter grammar for a file of this language: one per language,
-    /// except `.tsx`, whose JSX needs the TSX grammar.
+    /// except `.tsx`, whose JSX needs the TSX grammar, and `.h` headers, parsed
+    /// with the C++ grammar (a superset of C) because a C++ project declares
+    /// its classes, namespaces and templates in `.h` files, which the C
+    /// grammar turns into errors and keyword "references". The file keeps
+    /// `Language::C` for its statistics and search filters.
     pub fn grammar_for_path(self, path: &Path) -> Grammar {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if self == Language::TypeScript && ext.eq_ignore_ascii_case("tsx") {
             Grammar::Tsx
+        } else if self == Language::C && ext.eq_ignore_ascii_case("h") {
+            Grammar::Language(Language::Cpp)
         } else {
             Grammar::Language(self)
+        }
+    }
+
+    /// The grammar that produced `tree` for a file of this language: the
+    /// alternatives of [`Language::grammar_for_path`] are told apart from the
+    /// tree itself, so the extractors need no path.
+    pub fn grammar_of(self, tree: &tree_sitter::Tree) -> Grammar {
+        let alternative = match self {
+            Language::TypeScript => Some(Grammar::Tsx),
+            Language::C => Some(Grammar::Language(Language::Cpp)),
+            _ => None,
+        };
+        match alternative {
+            Some(grammar) if grammar.parsed(tree) => grammar,
+            _ => Grammar::Language(self),
         }
     }
 
@@ -96,7 +117,7 @@ impl Language {
     pub fn file_extensions(&self) -> &'static [&'static str] {
         match self {
             Language::Rust => &["rs"],
-            Language::TypeScript => &["ts", "tsx"],
+            Language::TypeScript => &["ts", "tsx", "mts", "cts"],
             Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
             Language::Python => &["py", "pyi"],
             Language::Go => &["go"],
@@ -139,6 +160,16 @@ impl Grammar {
     /// Whether `tree` was produced by this grammar.
     pub fn parsed(self, tree: &tree_sitter::Tree) -> bool {
         *tree.language() == self.tree_sitter_language()
+    }
+
+    /// The language whose node kinds this grammar produces: the extractors
+    /// that branch on the language (type relations) use it for a `.h` header
+    /// parsed as C++ instead of the file's `Language::C` label.
+    pub fn language(self) -> Language {
+        match self {
+            Grammar::Tsx => Language::TypeScript,
+            Grammar::Language(lang) => lang,
+        }
     }
 }
 
@@ -280,6 +311,8 @@ mod tests {
         // TypeScript
         assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
         assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("mts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("cts"), Some(Language::TypeScript));
 
         // JavaScript
         assert_eq!(Language::from_extension("js"), Some(Language::JavaScript));
@@ -348,7 +381,10 @@ mod tests {
     #[test]
     fn test_language_file_extensions() {
         assert_eq!(Language::Rust.file_extensions(), &["rs"]);
-        assert_eq!(Language::TypeScript.file_extensions(), &["ts", "tsx"]);
+        assert_eq!(
+            Language::TypeScript.file_extensions(),
+            &["ts", "tsx", "mts", "cts"]
+        );
         assert_eq!(
             Language::JavaScript.file_extensions(),
             &["js", "jsx", "mjs", "cjs"]
@@ -463,6 +499,46 @@ mod tests {
         assert_eq!(
             Language::JavaScript.grammar_for_path(Path::new("app/App.jsx")),
             Grammar::Language(Language::JavaScript)
+        );
+        // `.h` headers hold C++ classes as often as C prototypes: the C++
+        // grammar parses both, the C grammar only the latter.
+        assert_eq!(
+            Language::C.grammar_for_path(Path::new("inc/shape.h")),
+            Grammar::Language(Language::Cpp)
+        );
+        assert_eq!(
+            Language::C.grammar_for_path(Path::new("src/shape.c")),
+            Grammar::Language(Language::C)
+        );
+    }
+
+    #[test]
+    fn test_grammar_of_tree() {
+        let mut support = LanguageSupport::new().unwrap();
+        let header = support
+            .parse_path(Language::C, Path::new("inc/a.h"), "class A {};")
+            .unwrap();
+        assert_eq!(
+            Language::C.grammar_of(&header),
+            Grammar::Language(Language::Cpp)
+        );
+        let unit = support
+            .parse_path(Language::C, Path::new("src/a.c"), "int a;")
+            .unwrap();
+        assert_eq!(
+            Language::C.grammar_of(&unit),
+            Grammar::Language(Language::C)
+        );
+        let tsx = support
+            .parse_path(Language::TypeScript, Path::new("App.tsx"), "const a = 1;")
+            .unwrap();
+        assert_eq!(Language::TypeScript.grammar_of(&tsx), Grammar::Tsx);
+        let ts = support
+            .parse_path(Language::TypeScript, Path::new("a.mts"), "const a = 1;")
+            .unwrap();
+        assert_eq!(
+            Language::TypeScript.grammar_of(&ts),
+            Grammar::Language(Language::TypeScript)
         );
     }
 

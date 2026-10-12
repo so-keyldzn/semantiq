@@ -193,3 +193,47 @@ async fn test_dead_code_no_result() {
             .is_err()
     );
 }
+
+// #140: a Java member's visibility is read from the line that carries its
+// name, not from the annotation above it, and the annotations at the top of
+// the symbol's span count as its attributes (`@Override` → trait member,
+// `@Test` → test, any other → low confidence).
+#[tokio::test]
+async fn test_dead_code_reads_annotated_java_members() {
+    let (server, temp) = create_test_server();
+    let content = "public class Ctrl {\n    @Override\n    public String toString() { return \"\"; }\n\n    @Test\n    void checksSomething() {}\n\n    @GetMapping(\"/x\")\n    public String list() { return \"\"; }\n\n    @Deprecated\n    private int helper() { return 0; }\n\n    private int plain() { return 0; }\n}\n";
+    std::fs::create_dir_all(temp.path().join("src")).unwrap();
+    std::fs::write(temp.path().join("src/Ctrl.java"), content).unwrap();
+    index_test_file(&server.store, "src/Ctrl.java", content, "java");
+
+    let output = server
+        .dead_code(DeadCodeParams {
+            include_public: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let reported: Vec<(&str, &str)> = output
+        .symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.confidence.as_str()))
+        .collect();
+    assert_eq!(
+        reported,
+        vec![
+            ("plain", "high"),
+            ("Ctrl", "low"),
+            ("list", "low"),
+            ("helper", "low")
+        ],
+        "{output:?}"
+    );
+    assert_eq!(output.excluded.trait_members, 1, "{output:?}");
+    assert_eq!(output.excluded.tests, 1, "{output:?}");
+
+    let output = server.dead_code(DeadCodeParams::default()).await.unwrap();
+    let names: Vec<_> = output.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["plain", "helper"], "{output:?}");
+    // The public class and the public annotated method.
+    assert_eq!(output.excluded.public, 2, "{output:?}");
+}
