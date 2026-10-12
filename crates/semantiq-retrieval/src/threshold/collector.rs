@@ -162,10 +162,20 @@ impl DistanceCollector {
     }
 
     /// Initialize the collector with existing observation count from database.
+    ///
+    /// After bootstrap, the recalibration counter restarts from where the
+    /// stored count sits inside its `recalibrate_every` window, so "every N
+    /// stored observations" holds across restarts (short sessions that each
+    /// store fewer than N still trigger one when the total crosses a
+    /// multiple of N).
     pub fn with_existing_count(mut self, count: usize) -> Self {
         self.total_observations = AtomicUsize::new(count);
         if count >= self.config.bootstrap_threshold {
             self.in_bootstrap = AtomicBool::new(false);
+            if self.config.recalibrate_every > 0 {
+                self.stored_since_calibration =
+                    AtomicUsize::new(count % self.config.recalibrate_every);
+            }
             info!(
                 count = count,
                 threshold = self.config.bootstrap_threshold,
@@ -538,7 +548,7 @@ mod tests {
             recalibrate_every: 3,
             ..Default::default()
         })
-        .with_existing_count(10);
+        .with_existing_count(12);
         assert!(!collector.is_bootstrap());
         collector.reconcile(2, 2);
         assert!(!collector.should_calibrate());
@@ -547,6 +557,32 @@ mod tests {
         assert!(!collector.should_calibrate());
         collector.reconcile(5, 0);
         assert!(!collector.should_calibrate(), "duplicates do not count");
+    }
+
+    /// The recalibration window follows the stored count across restarts:
+    /// sessions storing fewer than `recalibrate_every` each still trigger
+    /// one when the total crosses a multiple of it.
+    #[test]
+    fn test_recalibration_window_survives_a_restart() {
+        let config = CollectorConfig {
+            bootstrap_threshold: 500,
+            enable_bootstrap: true,
+            recalibrate_every: 100,
+            ..Default::default()
+        };
+        // Previous sessions left 550 rows: 50 into the current window.
+        let collector = DistanceCollector::with_config(config.clone()).with_existing_count(550);
+        collector.reconcile(49, 49);
+        assert!(!collector.should_calibrate());
+        collector.reconcile(1, 1);
+        assert!(collector.should_calibrate(), "600 crosses the window");
+
+        // Exactly on a boundary: a full window is needed again.
+        let collector = DistanceCollector::with_config(config).with_existing_count(600);
+        collector.reconcile(99, 99);
+        assert!(!collector.should_calibrate());
+        collector.reconcile(1, 1);
+        assert!(collector.should_calibrate());
     }
 
     #[test]
