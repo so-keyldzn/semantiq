@@ -12,6 +12,7 @@ mod observations;
 mod references;
 mod structure;
 mod symbols;
+mod text;
 
 use crate::schema::{init_schema, migrate_schema};
 use anyhow::{Context, Result, anyhow};
@@ -28,6 +29,7 @@ pub use calibrations::{CalibrationData, CalibrationRecord};
 pub use chunks::{ChunkHit, EmbeddingCounts, PendingChunk};
 pub use dependencies::DependencyInsert;
 pub use graph::{GraphFile, GraphRefCount, MAX_NAME_DEFINERS, RepoGraphData};
+pub use text::{ChunkTextHit, ExtensionFilter};
 
 /// Global initializer for sqlite-vec extension.
 ///
