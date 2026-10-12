@@ -13,7 +13,7 @@ use semantiq_index::exclusions::is_file_too_large;
 use semantiq_index::paths::to_relative_string;
 use semantiq_index::{
     AutoIndexer, EmbeddingProgress, IndexStore, WalkFailures, embed_pending, project_walker,
-    should_exclude_path,
+    read_error_is_final, should_exclude_path,
 };
 use semantiq_mcp::server::{
     CallsParams, DeadCodeParams, DepsParams, ExplainParams, FindRefsParams, HierarchyParams,
@@ -489,8 +489,19 @@ fn index_is_stale(store: &IndexStore, root: &Path) -> Result<bool> {
             }
             continue;
         }
-        let Ok(content) = fs::read_to_string(path) else {
-            continue;
+        // A file that vanished or is not UTF-8 any more loses its row in the
+        // indexer's walk: an existing row makes the index stale. Any other
+        // read error keeps the row there, so it does not here either.
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if read_error_is_final(&e) => {
+                if store.get_file_by_path(&rel_path)?.is_some() {
+                    tracing::debug!("Index stale: {} is no longer readable", rel_path);
+                    return Ok(true);
+                }
+                continue;
+            }
+            Err(_) => continue,
         };
         if store.needs_reindex(&rel_path, &content).unwrap_or(true) {
             tracing::debug!("Index stale: {} changed", rel_path);

@@ -228,6 +228,63 @@ fn queries_refresh_changed_files_unless_disabled() {
     assert!(!stderr(&output).contains("refreshed index"));
 }
 
+/// A file that is not UTF-8 any more loses its rows on the query refresh,
+/// as it does in `semantiq index` (#107).
+#[test]
+fn queries_refresh_a_file_that_became_non_utf8() {
+    let project = indexed_project();
+    let dir = project.path();
+    let before = query_json(dir, &["refs", "helper", "--no-refresh"]);
+    assert_eq!(before["definitions"][0]["file_path"], "src/util.rs");
+
+    fs::write(
+        dir.join("src/util.rs"),
+        b"pub fn helper(x: u32) -> u32 {\n    x\n}\n\xff\xfe\n",
+    )
+    .unwrap();
+    let output = semantiq(dir, &["refs", "helper", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("refreshed index"),
+        "{}",
+        stderr(&output)
+    );
+    let after: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(
+        after["definitions"].as_array().unwrap().is_empty(),
+        "{after}"
+    );
+
+    // Up to date: no second refresh.
+    let output = semantiq(dir, &["refs", "helper"]);
+    assert!(!stderr(&output).contains("refreshed index"));
+}
+
+/// A file is not a project root (#137): `index`, `serve` and `init` refuse
+/// it instead of creating `<file>/.semantiq.db` or indexing it alone.
+#[test]
+fn a_file_is_not_a_project_root() {
+    let project = indexed_project();
+    let dir = project.path();
+    let db = dir.join("elsewhere.db");
+    for args in [
+        vec!["index", "src/lib.rs"],
+        vec!["index", "src/lib.rs", "--database", db.to_str().unwrap()],
+        vec!["serve", "--project", "src/lib.rs"],
+        vec!["init", "src/lib.rs"],
+    ] {
+        let output = semantiq(dir, &args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(
+            stderr(&output).contains("is not a directory"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+    assert!(!db.exists());
+    assert!(!dir.join("src/lib.rs/.semantiq.db").exists());
+}
+
 /// A project with a trait, an implementor and an unused private function.
 fn structural_project() -> TempDir {
     let dir = indexed_project();

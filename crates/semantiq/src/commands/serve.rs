@@ -6,7 +6,7 @@ use semantiq_mcp::{SemantiqServer, disable_update_check};
 use std::path::PathBuf;
 use tracing::info;
 
-use super::common::{resolve_db_path, warn_if_semantic_search_unavailable};
+use super::common::{ensure_directory, resolve_db_path, warn_if_semantic_search_unavailable};
 
 pub(crate) async fn serve(
     project: Option<PathBuf>,
@@ -25,6 +25,7 @@ pub(crate) async fn serve(
         Some(p) => p,
         None => std::env::current_dir().context("Failed to get current directory")?,
     };
+    ensure_directory(&project_root)?;
 
     let db_path = resolve_db_path(database, &project_root);
     warn_if_semantic_search_unavailable();
